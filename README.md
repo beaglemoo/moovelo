@@ -46,11 +46,14 @@ needed:
 
 ![Shared route](docs/screenshots/share.jpg)
 
-The route library (desktop and mobile):
+The route library, and the planner and library on a phone:
 
 ![Library](docs/screenshots/library.jpg)
 
+<p>
+<img src="docs/screenshots/mobile-planner.jpg" alt="Planner on mobile" width="320">
 <img src="docs/screenshots/mobile-library.jpg" alt="Library on mobile" width="320">
+</p>
 
 ## Quickstart (development)
 
