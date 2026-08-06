@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request
 
+from app.api.deps import UserDep
 from app.config import settings
 from app.schemas import RouteRequest, RouteResponse
 from app.services.valhalla import ValhallaClient
@@ -18,6 +19,6 @@ async def config() -> dict[str, str | None]:
 
 
 @router.post("/route")
-async def plan_route(request: Request, body: RouteRequest) -> RouteResponse:
+async def plan_route(request: Request, body: RouteRequest, _user: UserDep) -> RouteResponse:
     client: ValhallaClient = request.app.state.valhalla
     return await client.route(body)

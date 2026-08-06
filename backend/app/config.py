@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     # Optional self-hosted CyclOSM tile URL template ({z}/{x}/{y} placeholders).
     # Empty means the public CyclOSM servers are used.
     tile_url_cyclosm: str = ""
+    database_url: str = "postgresql+asyncpg://bikegps:bikegps@postgres:5432/bikegps"
+    signups_enabled: bool = False
+    cookie_secure: bool = False
+    session_ttl_days: int = 30
 
 
 settings = Settings()
