@@ -142,25 +142,22 @@ For a fully self-hosted setup, run your own CyclOSM tile server and set
 
 Saved routes can be pushed straight to your Wahoo account so they appear
 on your ELEMNT after its next WiFi sync - as a FIT course with
-turn-by-turn cues.
+turn-by-turn cues. Your instance never needs to be exposed to the
+internet for this to work.
 
-1. Register a developer app at https://developers.wahooligan.com:
-   Sandbox environment, confidential app (not PKCE), redirect URI
-   `<APP_URL>/api/wahoo/callback`. Sandbox apps are approved instantly
-   and work fully with your own Wahoo account; production approval only
-   matters if other people use your instance.
-2. Put the client ID and secret in `.env` (`WAHOO_CLIENT_ID`,
-   `WAHOO_CLIENT_SECRET`) and restart.
-3. In the app: Library -> Connect Wahoo -> authorize. Then use "Send to
-   Wahoo" on any saved route (library rows or the planner toolbar).
+The short version: register a (free, instantly-approved) sandbox app at
+https://developers.wahooligan.com with redirect URI
+`<APP_URL>/api/wahoo/callback`, put the client ID and secret in `.env`,
+restart, and hit "Connect Wahoo" in the library.
 
-Pushes are queued in the background with a visible status per route.
-Re-pushing an edited route updates the same course on Wahoo's side (the
-route UUID is used as the external id).
+The full walkthrough - registration form gotchas, how the queue and
+statuses work, and troubleshooting - is in
+[docs/wahoo-sync.md](docs/wahoo-sync.md).
 
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) - components, data flow, and design decisions
+- [docs/wahoo-sync.md](docs/wahoo-sync.md) - full Wahoo setup walkthrough and troubleshooting
 - [docs/data.md](docs/data.md) - OSM extracts, elevation data, refreshing routing data
 - [docs/self-hosted-tiles.md](docs/self-hosted-tiles.md) - running your own CyclOSM tile server
 - [deploy/](deploy/) - production reverse-proxy notes and Caddy snippet
