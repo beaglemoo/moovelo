@@ -42,6 +42,7 @@ async def status(db: DbDep) -> dict[str, Any]:
     return {
         "setup_required": await auth_service.user_count(db) == 0,
         "signups_enabled": settings.signups_enabled,
+        "password_login": settings.password_login_active,
         "oidc": (
             {"enabled": True, "name": settings.oidc_provider_name}
             if settings.oidc_enabled
@@ -52,6 +53,8 @@ async def status(db: DbDep) -> dict[str, Any]:
 
 @router.post("/register")
 async def register(body: Credentials, response: Response, db: DbDep) -> UserOut:
+    if not settings.password_login_active:
+        raise HTTPException(status_code=403, detail="Password login is disabled - use SSO")
     first_user = await auth_service.user_count(db) == 0
     if not first_user and not settings.signups_enabled:
         raise HTTPException(status_code=403, detail="Signups are disabled")
@@ -66,6 +69,8 @@ async def register(body: Credentials, response: Response, db: DbDep) -> UserOut:
 
 @router.post("/login")
 async def login(body: Credentials, response: Response, db: DbDep) -> UserOut:
+    if not settings.password_login_active:
+        raise HTTPException(status_code=403, detail="Password login is disabled - use SSO")
     user = await auth_service.get_user_by_email(db, body.email)
     if user is None or not auth_service.verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")

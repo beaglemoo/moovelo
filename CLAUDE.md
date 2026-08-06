@@ -77,7 +77,10 @@ yet.)
   false) gates further registrations. Optional generic OIDC SSO
   (OIDC_ISSUER/CLIENT_ID/CLIENT_SECRET env; works with Pocket ID
   and peers) matching accounts by email; auto-provisioning follows
-  SIGNUPS_ENABLED.
+  SIGNUPS_ENABLED. PASSWORD_AUTH_ENABLED=false gives SSO-only login
+  (only honored when OIDC is configured). A minimal admin page
+  (users/stats/config, added at user request as an exception to the
+  no-admin-panels rule) lives at /admin for admin accounts.
 
 ## Wahoo Cloud API integration
 

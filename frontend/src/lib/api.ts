@@ -38,7 +38,29 @@ export interface AppConfig {
 export interface AuthStatus {
 	setup_required: boolean;
 	signups_enabled: boolean;
+	password_login: boolean;
 	oidc: { enabled: boolean; name: string | null };
+}
+
+export interface AdminUser {
+	id: string;
+	email: string;
+	is_admin: boolean;
+	created_at: string;
+	route_count: number;
+	wahoo_connected: boolean;
+}
+
+export interface AdminOverview {
+	users: AdminUser[];
+	stats: { user_count: number; route_count: number };
+	config: {
+		signups_enabled: boolean;
+		password_login: boolean;
+		oidc_enabled: boolean;
+		oidc_provider: string | null;
+		wahoo_configured: boolean;
+	};
 }
 
 export interface UserInfo {
@@ -139,6 +161,11 @@ export const routes = {
 	remove: (id: string) => request<void>(`/api/routes/${id}`, { method: 'DELETE' }),
 	gpxUrl: (id: string) => `/api/routes/${id}/export.gpx`,
 	fitUrl: (id: string) => `/api/routes/${id}/export.fit`
+};
+
+export const admin = {
+	overview: () => request<AdminOverview>('/api/admin/overview'),
+	deleteUser: (id: string) => request<void>(`/api/admin/users/${id}`, { method: 'DELETE' })
 };
 
 export const wahoo = {

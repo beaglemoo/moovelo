@@ -14,7 +14,10 @@
 		if (s.setup_required) mode = 'register';
 	});
 
+	const passwordLogin = $derived.by(() => status?.password_login ?? true);
+
 	const title = $derived.by(() => {
+		if (!passwordLogin) return 'Log in';
 		if (status?.setup_required) return 'Create the admin account';
 		return mode === 'register' ? 'Create an account' : 'Log in';
 	});
@@ -39,31 +42,35 @@
 	<form class="card" onsubmit={submit}>
 		<h1>Komoot-lite</h1>
 		<h2>{title}</h2>
-		{#if status?.setup_required}
-			<p class="hint">First run: this account becomes the administrator.</p>
+		{#if passwordLogin}
+			{#if status?.setup_required}
+				<p class="hint">First run: this account becomes the administrator.</p>
+			{/if}
+			<label>
+				Email
+				<input type="email" bind:value={email} required autocomplete="email" />
+			</label>
+			<label>
+				Password
+				<input
+					type="password"
+					bind:value={password}
+					required
+					minlength="8"
+					autocomplete={mode === 'register' ? 'new-password' : 'current-password'}
+				/>
+			</label>
+			{#if error}
+				<p class="error">{error}</p>
+			{/if}
+			<button type="submit" disabled={busy}>
+				{mode === 'register' ? 'Create account' : 'Log in'}
+			</button>
 		{/if}
-		<label>
-			Email
-			<input type="email" bind:value={email} required autocomplete="email" />
-		</label>
-		<label>
-			Password
-			<input
-				type="password"
-				bind:value={password}
-				required
-				minlength="8"
-				autocomplete={mode === 'register' ? 'new-password' : 'current-password'}
-			/>
-		</label>
-		{#if error}
-			<p class="error">{error}</p>
-		{/if}
-		<button type="submit" disabled={busy}>
-			{mode === 'register' ? 'Create account' : 'Log in'}
-		</button>
 		{#if status?.oidc.enabled}
-			<div class="divider">or</div>
+			{#if passwordLogin}
+				<div class="divider">or</div>
+			{/if}
 			<a class="sso" href="/api/auth/oidc/login">Continue with {status.oidc.name}</a>
 		{/if}
 		{#if status && !status.setup_required && status.signups_enabled}
