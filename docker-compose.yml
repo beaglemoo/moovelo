@@ -1,6 +1,21 @@
 name: komoot-lite
 
 services:
+  postgres:
+    image: ghcr.io/baosystems/postgis:16-3.5
+    environment:
+      POSTGRES_DB: bikegps
+      POSTGRES_USER: bikegps
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bikegps}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bikegps -d bikegps"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   valhalla:
     image: ghcr.io/valhalla/valhalla-scripted:3.8.3
     environment:
@@ -29,12 +44,20 @@ services:
       VALHALLA_URL: http://valhalla:8002
       CORS_ORIGINS: http://localhost:5173
       TILE_URL_CYCLOSM: ${TILE_URL_CYCLOSM:-}
+      DATABASE_URL: postgresql+asyncpg://bikegps:${POSTGRES_PASSWORD:-bikegps}@postgres:5432/bikegps
+      SIGNUPS_ENABLED: ${SIGNUPS_ENABLED:-false}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
     volumes:
       - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
     ports:
       - "127.0.0.1:17777:17777"
     depends_on:
-      - valhalla
+      valhalla:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend-dev:
@@ -62,12 +85,19 @@ services:
     environment:
       VALHALLA_URL: http://valhalla:8002
       TILE_URL_CYCLOSM: ${TILE_URL_CYCLOSM:-}
+      DATABASE_URL: postgresql+asyncpg://bikegps:${POSTGRES_PASSWORD:-bikegps}@postgres:5432/bikegps
+      SIGNUPS_ENABLED: ${SIGNUPS_ENABLED:-false}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
     ports:
       - "${APP_PORT:-17777}:17777"
     depends_on:
-      - valhalla
+      valhalla:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   valhalla_tiles:
   frontend_node_modules:
+  pgdata:
