@@ -68,7 +68,9 @@ def snapshot() -> RouteResponse:
 
 
 @pytest.fixture
-async def client(snapshot: RouteResponse) -> AsyncIterator[AsyncClient]:
+async def client(
+    snapshot: RouteResponse, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[AsyncClient]:
     """App client backed by a throwaway Postgres database (skips if absent)."""
     admin_engine = create_async_engine(ADMIN_URL, isolation_level="AUTOCOMMIT")
     dbname = f"bikegps_test_{uuid.uuid4().hex[:8]}"
@@ -90,6 +92,9 @@ async def client(snapshot: RouteResponse) -> AsyncIterator[AsyncClient]:
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
+    # The Wahoo queue worker opens its own sessions outside the request
+    # dependency; point it at the same throwaway database.
+    monkeypatch.setattr("app.services.wahoo_queue.session_factory", factory)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as http:
         yield http

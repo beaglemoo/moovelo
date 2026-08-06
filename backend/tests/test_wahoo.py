@@ -195,3 +195,14 @@ async def test_connect_and_push_flow(
 
     again = await client.post(f"/api/wahoo/push/{route_id}")
     assert again.status_code == 409
+
+    # Drive the real worker against the DB row: the queued -> pushing commit
+    # expires server-onupdate columns, which push_route must survive.
+    respx.post(f"{WAHOO}/v1/routes").respond(json={"id": 4242})
+    from app.services.wahoo_queue import WahooQueue
+
+    await WahooQueue()._push_one(uuid.UUID(route_id))
+
+    detail = (await client.get(f"/api/routes/{route_id}")).json()
+    assert detail["wahoo"]["status"] == "synced"
+    assert detail["wahoo"]["route_id"] == "4242"

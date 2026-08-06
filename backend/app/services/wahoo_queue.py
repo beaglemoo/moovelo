@@ -84,6 +84,9 @@ class WahooQueue:
 
             route.wahoo_status = "pushing"
             await db.commit()
+            # The commit expires server-onupdate columns (updated_at); reload
+            # so push_route can read them outside the async session machinery.
+            await db.refresh(route)
 
             try:
                 wahoo_id = await wahoo.push_route(route, account)
