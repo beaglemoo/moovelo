@@ -1,22 +1,75 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { routes, type RouteSummary } from '$lib/api';
+	import { routes, wahoo, type RouteSummary, type WahooStatus } from '$lib/api';
+	import { onDestroy } from 'svelte';
 
 	let items: RouteSummary[] = $state([]);
 	let loaded = $state(false);
 	let renamingId: string | null = $state(null);
 	let renameValue = $state('');
 	let error: string | null = $state(null);
+	let wahooStatus: WahooStatus | null = $state(null);
+	let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 	async function refresh() {
 		try {
 			items = await routes.list();
 			loaded = true;
+			schedulePoll();
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load routes';
 		}
 	}
 	refresh();
+	wahoo.status().then((s) => (wahooStatus = s));
+
+	// Keep refreshing while any push is in flight.
+	function schedulePoll() {
+		if (pollTimer) clearTimeout(pollTimer);
+		if (items.some((r) => r.wahoo.status === 'queued' || r.wahoo.status === 'pushing')) {
+			pollTimer = setTimeout(refresh, 3000);
+		}
+	}
+	onDestroy(() => {
+		if (pollTimer) clearTimeout(pollTimer);
+	});
+
+	async function sendToWahoo(item: RouteSummary) {
+		try {
+			const updated = await wahoo.push(item.id);
+			items = items.map((r) => (r.id === updated.id ? updated : r));
+			schedulePoll();
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Push failed';
+		}
+	}
+
+	async function disconnectWahoo() {
+		if (!confirm('Disconnect your Wahoo account?')) return;
+		await wahoo.disconnect();
+		wahooStatus = await wahoo.status();
+	}
+
+	function badge(item: RouteSummary): { label: string; cls: string; title: string } {
+		switch (item.wahoo.status) {
+			case 'queued':
+				return { label: 'queued', cls: 'pending', title: 'Waiting to push' };
+			case 'pushing':
+				return { label: 'pushing', cls: 'pending', title: 'Uploading to Wahoo' };
+			case 'synced':
+				return {
+					label: 'synced',
+					cls: 'ok',
+					title: item.wahoo.pushed_at
+						? `Pushed ${new Date(item.wahoo.pushed_at).toLocaleString()}`
+						: 'Pushed'
+				};
+			case 'error':
+				return { label: 'error', cls: 'bad', title: item.wahoo.error ?? 'Push failed' };
+			default:
+				return { label: '', cls: '', title: '' };
+		}
+	}
 
 	function km(m: number): string {
 		return `${(m / 1000).toFixed(1)} km`;
@@ -51,7 +104,19 @@
 </script>
 
 <div class="page">
-	<h1>Library</h1>
+	<div class="header">
+		<h1>Library</h1>
+		{#if wahooStatus?.configured}
+			{#if wahooStatus.connected}
+				<span class="wahoo-connected">
+					Wahoo: {wahooStatus.athlete?.name ?? 'connected'}
+					<button type="button" onclick={disconnectWahoo}>Disconnect</button>
+				</span>
+			{:else}
+				<a class="wahoo-connect" href={wahoo.connectUrl}>Connect Wahoo</a>
+			{/if}
+		{/if}
+	</div>
 	{#if error}
 		<p class="error">{error}</p>
 	{:else if loaded && items.length === 0}
@@ -98,6 +163,19 @@
 						<td class="actions">
 							<a href={routes.gpxUrl(item.id)} download>GPX</a>
 							<a href={routes.fitUrl(item.id)} download>FIT</a>
+							{#if wahooStatus?.connected}
+								<button
+									type="button"
+									onclick={() => sendToWahoo(item)}
+									disabled={item.wahoo.status === 'queued' || item.wahoo.status === 'pushing'}
+								>
+									Send to Wahoo
+								</button>
+							{/if}
+							{#if badge(item).label}
+								{@const b = badge(item)}
+								<span class="badge {b.cls}" title={b.title}>{b.label}</span>
+							{/if}
 							<button type="button" onclick={() => startRename(item)}>Rename</button>
 							<button type="button" class="danger" onclick={() => remove(item)}>Delete</button>
 						</td>
@@ -117,6 +195,55 @@
 	h1 {
 		font-size: 1.3rem;
 		color: #073642;
+	}
+	.header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+	.wahoo-connect {
+		border: 1px solid #268bd2;
+		color: #268bd2;
+		border-radius: 8px;
+		padding: 0.4rem 0.8rem;
+		font-size: 0.9rem;
+		text-decoration: none;
+	}
+	.wahoo-connected {
+		font-size: 0.85rem;
+		color: #586e75;
+		display: flex;
+		gap: 0.6rem;
+		align-items: center;
+	}
+	.wahoo-connected button {
+		background: none;
+		border: none;
+		padding: 0;
+		font: inherit;
+		font-size: 0.85rem;
+		color: #dc322f;
+		cursor: pointer;
+	}
+	.badge {
+		font-size: 0.75rem;
+		border-radius: 10px;
+		padding: 0.1rem 0.5rem;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+	}
+	.badge.pending {
+		background: #b5890033;
+		color: #b58900;
+	}
+	.badge.ok {
+		background: #85990033;
+		color: #859900;
+	}
+	.badge.bad {
+		background: #dc322f33;
+		color: #dc322f;
 	}
 	table {
 		width: 100%;

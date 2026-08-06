@@ -4,8 +4,10 @@
 		fetchConfig,
 		planRoute,
 		routes,
+		wahoo,
 		type Preset,
 		type RouteResponse,
+		type WahooStatus,
 		type Waypoint
 	} from '$lib/api';
 	import { cumulativeDistances, pointAtDistance } from '$lib/geo';
@@ -29,10 +31,46 @@
 	let saveDialogOpen = $state(false);
 	let saveNameInput = $state('');
 	let saving = $state(false);
+	let wahooStatus: WahooStatus | null = $state(null);
+	let wahooPush: 'idle' | 'working' | 'synced' | 'error' = $state('idle');
+	let wahooPushError: string | null = $state(null);
 
 	let abortController: AbortController | null = null;
 
 	fetchConfig().then((c) => (config = c));
+	wahoo.status().then((s) => (wahooStatus = s));
+
+	async function sendToWahoo() {
+		if (!savedId) return;
+		wahooPush = 'working';
+		wahooPushError = null;
+		try {
+			await wahoo.push(savedId);
+			await pollWahoo(savedId);
+		} catch (err) {
+			wahooPush = 'error';
+			wahooPushError = err instanceof Error ? err.message : 'Push failed';
+		}
+	}
+
+	async function pollWahoo(id: string) {
+		for (let i = 0; i < 40; i++) {
+			await new Promise((resolve) => setTimeout(resolve, 3000));
+			if (savedId !== id) return;
+			const saved = await routes.get(id);
+			if (saved.wahoo.status === 'synced') {
+				wahooPush = 'synced';
+				return;
+			}
+			if (saved.wahoo.status === 'error') {
+				wahooPush = 'error';
+				wahooPushError = saved.wahoo.error;
+				return;
+			}
+		}
+		wahooPush = 'error';
+		wahooPushError = 'Push is taking unusually long - check the library later';
+	}
 
 	// Open a saved route when arriving via /?route=<id>.
 	const routeParam = page.url.searchParams.get('route');
@@ -246,6 +284,23 @@
 			{#if savedName}
 				<span class="route-name">{savedName}{dirty ? ' *' : ''}</span>
 			{/if}
+			{#if wahooStatus?.connected && savedId}
+				<button
+					type="button"
+					class="wahoo"
+					onclick={sendToWahoo}
+					disabled={wahooPush === 'working'}
+					title={wahooPush === 'error' ? (wahooPushError ?? '') : 'Push to your Wahoo account'}
+				>
+					{wahooPush === 'working'
+						? 'Sending…'
+						: wahooPush === 'synced'
+							? 'Sent to Wahoo ✓'
+							: wahooPush === 'error'
+								? 'Wahoo failed - retry'
+								: 'Send to Wahoo'}
+				</button>
+			{/if}
 		</div>
 		{#if saveDialogOpen}
 			<div class="dialog-backdrop">
@@ -320,6 +375,11 @@
 		background: #d33682;
 		color: #fff;
 		border-color: #d33682;
+	}
+	.toolbar > .wahoo {
+		background: #268bd2;
+		color: #fff;
+		border-color: #268bd2;
 	}
 	.route-name {
 		background: #fffffff0;
