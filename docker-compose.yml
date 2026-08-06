@@ -1,0 +1,116 @@
+name: komoot-lite
+
+services:
+  postgres:
+    image: ghcr.io/baosystems/postgis:16-3.5
+    environment:
+      POSTGRES_DB: bikegps
+      POSTGRES_USER: bikegps
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bikegps}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Localhost-only, used by the backend test suite.
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bikegps -d bikegps"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  valhalla:
+    image: ghcr.io/valhalla/valhalla-scripted:3.8.3
+    environment:
+      tile_urls: ${VALHALLA_TILE_URL:-https://download.geofabrik.de/europe/united-kingdom/england-latest.osm.pbf}
+      build_elevation: ${VALHALLA_BUILD_ELEVATION:-True}
+      server_threads: ${VALHALLA_SERVER_THREADS:-}
+      use_tiles_ignore_pbf: "True"
+      serve_tiles: "True"
+    volumes:
+      - valhalla_tiles:/custom_files
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8002/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10m
+    restart: unless-stopped
+
+  backend-dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: dev
+    environment:
+      VALHALLA_URL: http://valhalla:8002
+      CORS_ORIGINS: http://localhost:5173
+      TILE_URL_CYCLOSM: ${TILE_URL_CYCLOSM:-}
+      DATABASE_URL: postgresql+asyncpg://bikegps:${POSTGRES_PASSWORD:-bikegps}@postgres:5432/bikegps
+      SIGNUPS_ENABLED: ${SIGNUPS_ENABLED:-false}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      APP_URL: ${APP_URL:-http://localhost:5173}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_PROVIDER_NAME: ${OIDC_PROVIDER_NAME:-SSO}
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
+    ports:
+      - "127.0.0.1:17777:17777"
+    depends_on:
+      valhalla:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend-dev:
+    profiles: ["dev"]
+    image: node:22-slim
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      BACKEND_URL: http://backend-dev:17777
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - backend-dev
+    restart: unless-stopped
+
+  backend:
+    profiles: ["prod"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: prod
+    environment:
+      VALHALLA_URL: http://valhalla:8002
+      TILE_URL_CYCLOSM: ${TILE_URL_CYCLOSM:-}
+      DATABASE_URL: postgresql+asyncpg://bikegps:${POSTGRES_PASSWORD:-bikegps}@postgres:5432/bikegps
+      SIGNUPS_ENABLED: ${SIGNUPS_ENABLED:-false}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      APP_URL: ${APP_URL:-http://localhost:5173}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_PROVIDER_NAME: ${OIDC_PROVIDER_NAME:-SSO}
+    ports:
+      - "${APP_PORT:-17777}:17777"
+    depends_on:
+      valhalla:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  valhalla_tiles:
+  frontend_node_modules:
+  pgdata:
