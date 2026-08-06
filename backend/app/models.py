@@ -73,6 +73,8 @@ class Route(Base):
     wahoo_error: Mapped[str | None] = mapped_column(String(500), default=None)
     wahoo_route_id: Mapped[str | None] = mapped_column(String(64), default=None)
     wahoo_pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # Public read-only share link token; null = not shared.
+    share_token: Mapped[str | None] = mapped_column(String(64), unique=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

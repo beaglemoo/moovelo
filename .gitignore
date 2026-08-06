@@ -18,7 +18,22 @@ frontend/build/
 frontend/.svelte-kit/
 frontend/vite.config.ts.timestamp-*
 
+# Playwright
+frontend/test-results/
+frontend/playwright-report/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
 # OS / editor
 .DS_Store
 .idea/
 .vscode/
+
+# Claude Code (internal project spec + local settings)
+CLAUDE.md
+.claude/

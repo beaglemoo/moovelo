@@ -104,3 +104,39 @@ async def test_export_endpoints(client: AsyncClient, snapshot: RouteResponse) ->
     fit = await client.get(f"/api/routes/{route_id}/export.fit")
     assert fit.status_code == 200
     assert fit.content[8:12] == b".FIT"
+
+
+async def test_share_link_lifecycle(client: AsyncClient, snapshot: RouteResponse) -> None:
+    await register(client)
+    created = await client.post("/api/routes", json=save_body(snapshot))
+    route_id = created.json()["id"]
+    assert created.json()["share_token"] is None
+
+    shared = (await client.post(f"/api/routes/{route_id}/share")).json()
+    token = shared["share_token"]
+    assert token
+
+    # Public endpoints work without a session and leak no identifiers.
+    await client.post("/api/auth/logout")
+    public = await client.get(f"/api/shared/{token}")
+    assert public.status_code == 200
+    body = public.json()
+    assert body["name"] == "Canal loop"
+    assert "id" not in body and "waypoints" not in body
+
+    gpx = await client.get(f"/api/shared/{token}/export.gpx")
+    assert gpx.status_code == 200
+    assert b"<trkpt" in gpx.content
+
+    # Rotating the token invalidates the old link.
+    await client.post(
+        "/api/auth/login", json={"email": "admin@example.com", "password": "correct-horse-9"}
+    )
+    rotated = (await client.post(f"/api/routes/{route_id}/share")).json()
+    assert rotated["share_token"] != token
+    assert (await client.get(f"/api/shared/{token}")).status_code == 404
+
+    # Revoking kills the link entirely.
+    revoked = (await client.delete(f"/api/routes/{route_id}/share")).json()
+    assert revoked["share_token"] is None
+    assert (await client.get(f"/api/shared/{rotated['share_token']}")).status_code == 404

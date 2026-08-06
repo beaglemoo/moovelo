@@ -2,27 +2,55 @@
 
 Self-hosted bike route planner with direct Wahoo ELEMNT sync. Plan routes in
 the browser on a cycling-oriented map, save them to your library, export
-GPX/FIT, and push them straight to your Wahoo head unit.
-
-Status: Phase 1 complete - route planning in the browser (Valhalla routing,
-MapLibre map, elevation profiles, routing presets). Persistence, GPX/FIT
-export, and Wahoo sync are the next phases.
+GPX/FIT, and push them straight to your Wahoo head unit - with turn-by-turn
+cues.
 
 ## Features
 
 - Click-to-plan routing: click the map to add waypoints, drag any waypoint
   marker to move it, or grab the route line itself and drag it to insert a
-  via point exactly where you drop it (komoot-style).
+  via point exactly where you drop it. Right-click for a
+  context menu (route from here, add waypoint, route to here, remove).
 - Three bicycle presets - road, gravel, quiet - implemented as Valhalla
   costing bundles with genuinely different routing behavior (see
   [Routing presets](#routing-presets)).
 - Elevation profile under the map with total ascent/descent and a hover
   marker synced to the route.
+- Personal route library backed by Postgres/PostGIS: save, rename, reload,
+  and share routes.
+- GPX and FIT export - the FIT files carry Valhalla's turn-by-turn
+  maneuvers as course points, so a Wahoo ELEMNT shows cues on the ride.
+- "Send to Wahoo": push routes to your Wahoo account over the Cloud API;
+  they appear on the ELEMNT after its next WiFi sync. Queued in the
+  background with per-route status; re-pushing updates the same course.
+- Public read-only share links per route - send a route to someone
+  without an account.
+- Simple auth: email + password, first user becomes admin, signups gated
+  by a flag. Optional OIDC single sign-on (Pocket ID, Authelia, Keycloak,
+  ...), including an SSO-only mode, plus a minimal /admin page.
 - CyclOSM cycling basemap with an OSM standard fallback toggle, plus
   optional fully self-hosted tiles (see
   [docs/self-hosted-tiles.md](docs/self-hosted-tiles.md)).
-- Entirely self-hosted: routing (Valhalla), app, and optionally the map
-  tiles run on your own hardware. No accounts, no third-party APIs.
+- Entirely self-hostable: routing (Valhalla), app, database, and
+  optionally the map tiles run on your own hardware. The only external
+  service is Wahoo's cloud, and only if you use it.
+
+## Screenshots
+
+Planning a route in the Peak District (CyclOSM basemap, elevation profile):
+
+![Route planner](docs/screenshots/planner.jpg)
+
+A public share link - read-only map, elevation, GPX download, no account
+needed:
+
+![Shared route](docs/screenshots/share.jpg)
+
+The route library (desktop and mobile):
+
+![Library](docs/screenshots/library.jpg)
+
+<img src="docs/screenshots/mobile-library.jpg" alt="Library on mobile" width="320">
 
 ## Quickstart (development)
 
@@ -49,6 +77,8 @@ first (a single county builds in a couple of minutes - see `.env.example`).
 
 ```sh
 cp .env.example .env   # adjust as needed
+docker compose --profile prod up -d          # pulls ghcr.io/beaglemoo/moovelo (amd64/arm64)
+# ...or build the image yourself from source:
 docker compose --profile prod up -d --build
 ```
 
@@ -69,6 +99,14 @@ All configuration is via environment variables, documented in
 | `VALHALLA_SERVER_THREADS` | all cores | Valhalla build/serve threads |
 | `TILE_URL_CYCLOSM` | unset | Self-hosted CyclOSM tile server template; unset uses the public servers |
 | `APP_PORT` | `17777` | Host port for the prod profile |
+| `POSTGRES_PASSWORD` | `bikegps` | Database password - change for prod |
+| `SIGNUPS_ENABLED` | `false` | Allow registrations beyond the first (admin) user |
+| `COOKIE_SECURE` | `false` | Set `true` when serving over HTTPS |
+| `APP_URL` | unset | External base URL, needed for OIDC and Wahoo callbacks |
+| `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | unset | Enable OIDC SSO (all three required) |
+| `OIDC_PROVIDER_NAME` | `Pocket ID` | Label on the SSO login button |
+| `PASSWORD_AUTH_ENABLED` | `true` | Set `false` for SSO-only login (ignored unless OIDC is configured) |
+| `WAHOO_CLIENT_ID` / `WAHOO_CLIENT_SECRET` | unset | Enable Wahoo sync (see [Wahoo sync](#wahoo-sync)) |
 
 ## Routing presets
 
@@ -149,14 +187,7 @@ npm run build          # production build
 The dev compose profile runs both with hot reload (backend source and
 frontend source are bind-mounted).
 
-## Roadmap
-
-1. Phase 1 (done): Valhalla routing, map UI, presets, elevation profile
-2. Phase 2: Postgres persistence, auth, route library, GPX/FIT export with
-   turn-by-turn course points
-3. Phase 3: Wahoo Cloud API sync ("Send to Wahoo")
-4. Phase 4: multi-arch images, CI, mobile polish, share links
-
 ## License
 
-MIT (LICENSE file lands with the public-release phase).
+[MIT](LICENSE). Contributions welcome - see
+[CONTRIBUTING.md](CONTRIBUTING.md).

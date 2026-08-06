@@ -175,8 +175,14 @@
 		};
 	});
 
+	let longPressFired = false;
+
 	function setupInteractions(m: maplibregl.Map) {
 		m.on('click', (e) => {
+			if (longPressFired) {
+				longPressFired = false;
+				return;
+			}
 			if (menu) {
 				menu = null;
 				return;
@@ -195,6 +201,34 @@
 				waypointIndex: null
 			};
 		});
+
+		// Touch devices get no contextmenu on the canvas; a long-press (600ms
+		// without moving or lifting) opens the same menu.
+		let pressTimer: ReturnType<typeof setTimeout> | null = null;
+		const cancelPress = () => {
+			if (pressTimer) {
+				clearTimeout(pressTimer);
+				pressTimer = null;
+			}
+		};
+		m.on('touchstart', (e) => {
+			cancelPress();
+			if (e.points.length !== 1) return;
+			const { point, lngLat } = e;
+			pressTimer = setTimeout(() => {
+				pressTimer = null;
+				longPressFired = true;
+				menu = {
+					x: point.x,
+					y: point.y,
+					wp: { lat: lngLat.lat, lon: lngLat.lng },
+					waypointIndex: null
+				};
+			}, 600);
+		});
+		m.on('touchmove', cancelPress);
+		m.on('touchend', cancelPress);
+		m.on('touchcancel', cancelPress);
 
 		m.on('movestart', () => (menu = null));
 
@@ -267,7 +301,8 @@
 				const pos = marker.getLngLat();
 				onMoveWaypoint(i, { lat: pos.lat, lon: pos.lng });
 			});
-			marker.getElement().addEventListener('contextmenu', (event) => {
+			const el = marker.getElement();
+			el.addEventListener('contextmenu', (event) => {
 				event.preventDefault();
 				event.stopPropagation();
 				const rect = container.getBoundingClientRect();
@@ -278,6 +313,36 @@
 					waypointIndex: i
 				};
 			});
+			// Long-press on a marker opens its menu on touch devices.
+			let markerTimer: ReturnType<typeof setTimeout> | null = null;
+			const cancelMarkerPress = () => {
+				if (markerTimer) {
+					clearTimeout(markerTimer);
+					markerTimer = null;
+				}
+			};
+			el.addEventListener(
+				'touchstart',
+				(event) => {
+					if (event.touches.length !== 1) return;
+					const touch = event.touches[0];
+					markerTimer = setTimeout(() => {
+						markerTimer = null;
+						longPressFired = true;
+						const rect = container.getBoundingClientRect();
+						menu = {
+							x: touch.clientX - rect.left,
+							y: touch.clientY - rect.top,
+							wp,
+							waypointIndex: i
+						};
+					}, 600);
+				},
+				{ passive: true }
+			);
+			el.addEventListener('touchend', cancelMarkerPress);
+			el.addEventListener('touchmove', cancelMarkerPress);
+			el.addEventListener('touchcancel', cancelMarkerPress);
 			return marker;
 		});
 	});

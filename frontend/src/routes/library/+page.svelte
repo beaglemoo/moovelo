@@ -101,6 +101,27 @@
 		await routes.remove(item.id);
 		await refresh();
 	}
+
+	let copiedId: string | null = $state(null);
+
+	async function share(item: RouteSummary) {
+		try {
+			const updated = item.share_token ? item : await routes.share(item.id);
+			items = items.map((r) => (r.id === updated.id ? { ...r, ...updated } : r));
+			const url = `${location.origin}/s/${updated.share_token}`;
+			await navigator.clipboard.writeText(url);
+			copiedId = item.id;
+			setTimeout(() => (copiedId = null), 2000);
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Share failed';
+		}
+	}
+
+	async function unshare(item: RouteSummary) {
+		if (!confirm('Revoke the share link? Anyone with the old link loses access.')) return;
+		const updated = await routes.revokeShare(item.id);
+		items = items.map((r) => (r.id === updated.id ? { ...r, ...updated } : r));
+	}
 </script>
 
 <div class="page">
@@ -175,6 +196,19 @@
 							{#if badge(item).label}
 								{@const b = badge(item)}
 								<span class="badge {b.cls}" title={b.title}>{b.label}</span>
+							{/if}
+							<button type="button" onclick={() => share(item)}>
+								{copiedId === item.id ? 'Copied!' : item.share_token ? 'Copy link' : 'Share'}
+							</button>
+							{#if item.share_token}
+								<button
+									type="button"
+									class="danger"
+									onclick={() => unshare(item)}
+									title="Revoke share link"
+								>
+									Unshare
+								</button>
 							{/if}
 							<button type="button" onclick={() => startRename(item)}>Rename</button>
 							<button type="button" class="danger" onclick={() => remove(item)}>Delete</button>
@@ -309,5 +343,39 @@
 	}
 	.error {
 		color: #dc322f;
+	}
+	/* Collapse table rows into cards on small screens. */
+	@media (max-width: 640px) {
+		thead {
+			display: none;
+		}
+		table,
+		tbody {
+			display: block;
+		}
+		tr {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: baseline;
+			gap: 0.2rem 0.8rem;
+			border: 1px solid #eee8d5;
+			border-radius: 10px;
+			padding: 0.6rem 0.8rem;
+			margin-bottom: 0.8rem;
+		}
+		td {
+			border: none;
+			padding: 0;
+		}
+		td:first-child {
+			flex-basis: 100%;
+			font-size: 1.05rem;
+		}
+		.actions {
+			flex-basis: 100%;
+			flex-wrap: wrap;
+			padding-top: 0.3rem;
+			gap: 0.5rem 0.8rem;
+		}
 	}
 </style>

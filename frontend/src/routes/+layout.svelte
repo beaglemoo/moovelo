@@ -9,10 +9,10 @@
 	let user: UserInfo | null = $state(null);
 
 	// On every navigation while logged out, try to resolve the session;
-	// bounce to /login when there is none.
+	// bounce to /login when there is none. Shared-route pages are public.
 	$effect(() => {
 		const path = page.url.pathname;
-		if (user !== null) return;
+		if (user !== null || path.startsWith('/s/')) return;
 		auth
 			.me()
 			.then((me) => (user = me))
@@ -107,5 +107,13 @@
 	main {
 		flex: 1;
 		min-height: 0;
+	}
+	@media (max-width: 560px) {
+		.email {
+			display: none;
+		}
+		nav {
+			gap: 0.7rem;
+		}
 	}
 </style>

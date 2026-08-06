@@ -89,6 +89,7 @@ export interface RouteSummary {
 	ascent_m: number;
 	updated_at: string;
 	wahoo: WahooState;
+	share_token: string | null;
 }
 
 export interface SavedRoute extends RouteResponse {
@@ -98,6 +99,13 @@ export interface SavedRoute extends RouteResponse {
 	waypoints: Waypoint[];
 	updated_at: string;
 	wahoo: WahooState;
+	share_token: string | null;
+}
+
+export interface SharedRoute extends RouteResponse {
+	name: string;
+	preset: Preset;
+	updated_at: string;
 }
 
 export class ApiError extends Error {
@@ -160,7 +168,14 @@ export const routes = {
 		request<SavedRoute>(`/api/routes/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 	remove: (id: string) => request<void>(`/api/routes/${id}`, { method: 'DELETE' }),
 	gpxUrl: (id: string) => `/api/routes/${id}/export.gpx`,
-	fitUrl: (id: string) => `/api/routes/${id}/export.fit`
+	fitUrl: (id: string) => `/api/routes/${id}/export.fit`,
+	share: (id: string) => request<SavedRoute>(`/api/routes/${id}/share`, { method: 'POST' }),
+	revokeShare: (id: string) => request<SavedRoute>(`/api/routes/${id}/share`, { method: 'DELETE' })
+};
+
+export const shared = {
+	get: (token: string) => request<SharedRoute>(`/api/shared/${token}`),
+	gpxUrl: (token: string) => `/api/shared/${token}/export.gpx`
 };
 
 export const admin = {

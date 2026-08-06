@@ -89,6 +89,7 @@ services:
 
   backend:
     profiles: ["prod"]
+    image: ghcr.io/beaglemoo/moovelo:latest
     build:
       context: .
       dockerfile: backend/Dockerfile
