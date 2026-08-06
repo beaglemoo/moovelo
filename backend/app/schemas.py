@@ -66,6 +66,7 @@ class RouteSummary(BaseModel):
     ascent_m: float
     updated_at: datetime
     wahoo: WahooState = WahooState()
+    share_token: str | None = None
 
     @classmethod
     def from_route(cls, route: Any) -> "RouteSummary":
@@ -82,6 +83,7 @@ class RouteSummary(BaseModel):
                 route_id=route.wahoo_route_id,
                 pushed_at=route.wahoo_pushed_at,
             ),
+            share_token=route.share_token,
         )
 
 
@@ -92,3 +94,12 @@ class SavedRoute(RouteResponse):
     waypoints: list[Waypoint]
     updated_at: datetime
     wahoo: WahooState = WahooState()
+    share_token: str | None = None
+
+
+class SharedRoute(RouteResponse):
+    """Public view of a shared route - no ids, no owner information."""
+
+    name: str
+    preset: str
+    updated_at: datetime

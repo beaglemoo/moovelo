@@ -101,6 +101,27 @@
 		await routes.remove(item.id);
 		await refresh();
 	}
+
+	let copiedId: string | null = $state(null);
+
+	async function share(item: RouteSummary) {
+		try {
+			const updated = item.share_token ? item : await routes.share(item.id);
+			items = items.map((r) => (r.id === updated.id ? { ...r, ...updated } : r));
+			const url = `${location.origin}/s/${updated.share_token}`;
+			await navigator.clipboard.writeText(url);
+			copiedId = item.id;
+			setTimeout(() => (copiedId = null), 2000);
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Share failed';
+		}
+	}
+
+	async function unshare(item: RouteSummary) {
+		if (!confirm('Revoke the share link? Anyone with the old link loses access.')) return;
+		const updated = await routes.revokeShare(item.id);
+		items = items.map((r) => (r.id === updated.id ? { ...r, ...updated } : r));
+	}
 </script>
 
 <div class="page">
@@ -175,6 +196,19 @@
 							{#if badge(item).label}
 								{@const b = badge(item)}
 								<span class="badge {b.cls}" title={b.title}>{b.label}</span>
+							{/if}
+							<button type="button" onclick={() => share(item)}>
+								{copiedId === item.id ? 'Copied!' : item.share_token ? 'Copy link' : 'Share'}
+							</button>
+							{#if item.share_token}
+								<button
+									type="button"
+									class="danger"
+									onclick={() => unshare(item)}
+									title="Revoke share link"
+								>
+									Unshare
+								</button>
 							{/if}
 							<button type="button" onclick={() => startRename(item)}>Rename</button>
 							<button type="button" class="danger" onclick={() => remove(item)}>Delete</button>
