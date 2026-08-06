@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
@@ -40,7 +40,12 @@ class SPAStaticFiles(StaticFiles):
     """Serve the SPA's index.html for any path that isn't a real file."""
 
     async def get_response(self, path: str, scope: Any) -> Response:
-        response = await super().get_response(path, scope)
+        try:
+            response = await super().get_response(path, scope)
+        except HTTPException as exc:
+            if exc.status_code == 404 and not path.startswith("api"):
+                return await super().get_response("index.html", scope)
+            raise
         if response.status_code == 404 and not path.startswith("api"):
             response = await super().get_response("index.html", scope)
         return response
