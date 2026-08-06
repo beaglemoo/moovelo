@@ -344,4 +344,38 @@
 	.error {
 		color: #dc322f;
 	}
+	/* Collapse table rows into cards on small screens. */
+	@media (max-width: 640px) {
+		thead {
+			display: none;
+		}
+		table,
+		tbody {
+			display: block;
+		}
+		tr {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: baseline;
+			gap: 0.2rem 0.8rem;
+			border: 1px solid #eee8d5;
+			border-radius: 10px;
+			padding: 0.6rem 0.8rem;
+			margin-bottom: 0.8rem;
+		}
+		td {
+			border: none;
+			padding: 0;
+		}
+		td:first-child {
+			flex-basis: 100%;
+			font-size: 1.05rem;
+		}
+		.actions {
+			flex-basis: 100%;
+			flex-wrap: wrap;
+			padding-top: 0.3rem;
+			gap: 0.5rem 0.8rem;
+		}
+	}
 </style>

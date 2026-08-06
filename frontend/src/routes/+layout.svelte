@@ -108,4 +108,12 @@
 		flex: 1;
 		min-height: 0;
 	}
+	@media (max-width: 560px) {
+		.email {
+			display: none;
+		}
+		nav {
+			gap: 0.7rem;
+		}
+	}
 </style>

@@ -357,7 +357,16 @@
 		display: flex;
 		gap: 8px;
 		align-items: center;
+		flex-wrap: wrap;
+		max-width: calc(100% - 20px);
 		z-index: 5;
+	}
+	@media (max-width: 640px) {
+		.toolbar > button,
+		.route-name {
+			padding: 0.4rem 0.6rem;
+			font-size: 0.85rem;
+		}
 	}
 	.toolbar > button {
 		border: 1px solid #ccc;
