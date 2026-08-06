@@ -1,5 +1,13 @@
 <script lang="ts">
-	import { fetchConfig, planRoute, type Preset, type RouteResponse, type Waypoint } from '$lib/api';
+	import { page } from '$app/state';
+	import {
+		fetchConfig,
+		planRoute,
+		routes,
+		type Preset,
+		type RouteResponse,
+		type Waypoint
+	} from '$lib/api';
 	import { cumulativeDistances, pointAtDistance } from '$lib/geo';
 	import { decodePolyline6 } from '$lib/polyline';
 	import ElevationProfile from '$lib/components/ElevationProfile.svelte';
@@ -14,9 +22,34 @@
 	let hoverPoint: [number, number] | null = $state(null);
 	let config: { tile_url_cyclosm: string | null } | null = $state(null);
 
+	let savedId: string | null = $state(null);
+	let savedName: string | null = $state(null);
+	let dirty = $state(false);
+	let saveDialogOpen = $state(false);
+	let saveNameInput = $state('');
+	let saving = $state(false);
+
 	let abortController: AbortController | null = null;
 
 	fetchConfig().then((c) => (config = c));
+
+	// Open a saved route when arriving via /?route=<id>.
+	const routeParam = page.url.searchParams.get('route');
+	if (routeParam) {
+		routes
+			.get(routeParam)
+			.then((saved) => {
+				waypoints = saved.waypoints;
+				preset = saved.preset;
+				route = saved;
+				savedId = saved.id;
+				savedName = saved.name;
+				dirty = false;
+			})
+			.catch(() => {
+				error = 'Could not load that route.';
+			});
+	}
 
 	const decodedLegs = $derived.by(() =>
 		route ? route.legs.map((leg) => decodePolyline6(leg.geometry)) : []
@@ -59,6 +92,7 @@
 		try {
 			route = await planRoute(waypoints, preset, abortController.signal);
 			loading = false;
+			dirty = true;
 		} catch (err) {
 			if (err instanceof DOMException && err.name === 'AbortError') return;
 			loading = false;
@@ -107,6 +141,53 @@
 		waypoints = [];
 		route = null;
 		error = null;
+		savedId = null;
+		savedName = null;
+		dirty = false;
+	}
+
+	function defaultName(): string {
+		return `Ride ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
+	}
+
+	async function save() {
+		if (!route || waypoints.length < 2) return;
+		if (savedId === null) {
+			saveNameInput = savedName ?? defaultName();
+			saveDialogOpen = true;
+			return;
+		}
+		saving = true;
+		try {
+			await routes.update(savedId, { waypoints, preset, snapshot: route });
+			dirty = false;
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Save failed';
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function confirmSave(event: SubmitEvent) {
+		event.preventDefault();
+		if (!route || !saveNameInput.trim()) return;
+		saving = true;
+		try {
+			const saved = await routes.create({
+				name: saveNameInput.trim(),
+				waypoints,
+				preset,
+				snapshot: route
+			});
+			savedId = saved.id;
+			savedName = saved.name;
+			dirty = false;
+			saveDialogOpen = false;
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Save failed';
+		} finally {
+			saving = false;
+		}
 	}
 
 	function changePreset(next: Preset) {
@@ -151,7 +232,33 @@
 			<PresetSelector {preset} onChange={changePreset} />
 			<button type="button" onclick={undo} disabled={waypoints.length === 0}>Undo</button>
 			<button type="button" onclick={clear} disabled={waypoints.length === 0}>Clear</button>
+			<button
+				type="button"
+				class="save"
+				onclick={save}
+				disabled={!route || saving || (savedId !== null && !dirty)}
+			>
+				{savedId === null ? 'Save' : dirty ? 'Save changes' : 'Saved'}
+			</button>
+			{#if savedName}
+				<span class="route-name">{savedName}{dirty ? ' *' : ''}</span>
+			{/if}
 		</div>
+		{#if saveDialogOpen}
+			<div class="dialog-backdrop">
+				<form class="dialog" onsubmit={confirmSave}>
+					<h3>Save route</h3>
+					<!-- svelte-ignore a11y_autofocus -->
+					<input bind:value={saveNameInput} autofocus maxlength="200" placeholder="Route name" />
+					<div class="dialog-buttons">
+						<button type="button" onclick={() => (saveDialogOpen = false)}>Cancel</button>
+						<button type="submit" class="primary" disabled={saving || !saveNameInput.trim()}>
+							Save
+						</button>
+					</div>
+				</form>
+			</div>
+		{/if}
 		{#if waypoints.length < 2}
 			<div class="hint">Click the map to add waypoints. Drag the route to fine-tune it.</div>
 		{/if}
@@ -175,19 +282,10 @@
 </div>
 
 <style>
-	:global(html, body) {
-		margin: 0;
-		height: 100%;
-	}
 	.app {
 		display: flex;
 		flex-direction: column;
-		height: 100vh;
-		height: 100dvh;
-		font-family:
-			system-ui,
-			-apple-system,
-			sans-serif;
+		height: 100%;
 	}
 	.map-area {
 		position: relative;
@@ -214,6 +312,70 @@
 	.toolbar > button:disabled {
 		opacity: 0.5;
 		cursor: default;
+	}
+	.toolbar > .save {
+		background: #d33682;
+		color: #fff;
+		border-color: #d33682;
+	}
+	.route-name {
+		background: #fffffff0;
+		border-radius: 8px;
+		padding: 0.45rem 0.8rem;
+		font-size: 0.9rem;
+		color: #073642;
+		box-shadow: 0 1px 4px #0002;
+	}
+	.dialog-backdrop {
+		position: absolute;
+		inset: 0;
+		background: #0003;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 20;
+	}
+	.dialog {
+		background: #fff;
+		border-radius: 10px;
+		padding: 1.2rem;
+		width: min(320px, 85vw);
+		display: flex;
+		flex-direction: column;
+		gap: 0.8rem;
+		box-shadow: 0 8px 30px #0004;
+	}
+	.dialog h3 {
+		margin: 0;
+		font-size: 1rem;
+		color: #073642;
+	}
+	.dialog input {
+		font: inherit;
+		padding: 0.5rem 0.6rem;
+		border: 1px solid #ccc;
+		border-radius: 6px;
+	}
+	.dialog-buttons {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.6rem;
+	}
+	.dialog-buttons button {
+		border: 1px solid #ccc;
+		background: #fff;
+		border-radius: 6px;
+		padding: 0.4rem 0.9rem;
+		font: inherit;
+		cursor: pointer;
+	}
+	.dialog-buttons .primary {
+		background: #d33682;
+		border-color: #d33682;
+		color: #fff;
+	}
+	.dialog-buttons .primary:disabled {
+		opacity: 0.6;
 	}
 	.hint,
 	.banner {
