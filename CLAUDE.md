@@ -4,6 +4,15 @@ Open-source (MIT), self-hostable route planner for cyclists with
 direct Wahoo ELEMNT sync. Docker Compose only: dev on macOS, prod in
 a Docker-capable LXC/VM behind Caddy.
 
+## Status
+
+- Phase 1 complete: Valhalla routing (presets, drag-to-reroute,
+  right-click context menu), MapLibre/CyclOSM UI with OSM fallback
+  toggle and optional self-hosted tiles, elevation profiles. Deployed
+  dev (Mac) and prod (LXC behind Caddy).
+- Phase 2 in progress: Postgres/PostGIS + auth, route library,
+  GPX/FIT export.
+
 ## MVP scope — build ONLY this
 
 1. Plan a route in the browser (waypoints, drag-to-reroute)
@@ -33,10 +42,14 @@ yet.)
 
 ## Stack
 
-- **Routing: Valhalla** (official Docker image, latest stable).
+- **Routing: Valhalla** (official `valhalla-scripted` image, pinned
+  3.8.3, multi-arch amd64+arm64).
   - First start downloads the configured Geofabrik extract (default
-    england; great-britain documented) plus elevation data, and builds
+    england; whole-UK documented) plus elevation data, and builds
     tiles into a named volume; subsequent starts reuse the tiles.
+  - Geofabrik UK paths live under `europe/united-kingdom/...`; the
+    old `europe/great-britain` tree redirects to the Geofabrik
+    homepage and silently breaks downloads.
   - Bicycle costing exposed to the frontend as three presets —
     `road`, `gravel`, `quiet` — implemented as costing-option
     bundles (bicycle_type, use_roads, use_hills, avoid_bad_surfaces,
@@ -53,9 +66,11 @@ yet.)
   migrations. The backend proxies all Valhalla calls (never exposed
   directly).
 - **Frontend:** SvelteKit + MapLibre GL JS. CyclOSM raster tiles
-  default (attribution required), OSM standard fallback. Static
-  build served by the backend. Elevation profile chart under the map
-  driven by route geometry + elevation.
+  default (attribution required), OSM standard fallback via an in-app
+  basemap toggle. `TILE_URL_CYCLOSM` env points the CyclOSM layer at
+  a self-hosted tile server (docs/self-hosted-tiles.md); unset uses
+  the public servers. Static build served by the backend. Elevation
+  profile chart under the map driven by route geometry + elevation.
 - **Auth:** email + password (argon2), session cookies. First
   registered user becomes admin; SIGNUPS_ENABLED env flag (default
   false) gates further registrations.
