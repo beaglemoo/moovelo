@@ -12,14 +12,18 @@ from starlette.responses import Response
 from app.api.auth import router as auth_router
 from app.api.route import router
 from app.api.routes import router as routes_router
+from app.api.wahoo import router as wahoo_router
 from app.config import settings
 from app.services.valhalla import ValhallaClient
+from app.services.wahoo_queue import queue as wahoo_queue
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.valhalla = ValhallaClient()
+    await wahoo_queue.start()
     yield
+    await wahoo_queue.stop()
     await app.state.valhalla.close()
 
 
@@ -36,6 +40,8 @@ if settings.cors_origins:
 app.include_router(router)
 app.include_router(auth_router)
 app.include_router(routes_router)
+app.include_router(wahoo_router)
+
 
 class SPAStaticFiles(StaticFiles):
     """Serve the SPA's index.html for any path that isn't a real file."""

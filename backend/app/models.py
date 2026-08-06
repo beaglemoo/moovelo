@@ -33,6 +33,22 @@ class Session(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class WahooAccount(Base):
+    __tablename__ = "wahoo_accounts"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    access_token: Mapped[str] = mapped_column(String(500))
+    refresh_token: Mapped[str] = mapped_column(String(500))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    athlete: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Route(Base):
     __tablename__ = "routes"
 
@@ -52,6 +68,11 @@ class Route(Base):
     ascent_m: Mapped[float]
     descent_m: Mapped[float]
     geom: Mapped[Any] = mapped_column(Geometry(geometry_type="LINESTRING", srid=4326))
+    # Wahoo sync state: none | queued | pushing | synced | error
+    wahoo_status: Mapped[str] = mapped_column(String(10), default="none", server_default="none")
+    wahoo_error: Mapped[str | None] = mapped_column(String(500), default=None)
+    wahoo_route_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    wahoo_pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

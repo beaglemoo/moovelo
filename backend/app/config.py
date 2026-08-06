@@ -26,5 +26,13 @@ class Settings(BaseSettings):
     def oidc_enabled(self) -> bool:
         return bool(self.oidc_issuer and self.oidc_client_id and self.oidc_client_secret)
 
+    # Wahoo Cloud API (sandbox or production app credentials).
+    wahoo_client_id: str = ""
+    wahoo_client_secret: str = ""
+
+    @property
+    def wahoo_enabled(self) -> bool:
+        return bool(self.wahoo_client_id and self.wahoo_client_secret)
+
 
 settings = Settings()
