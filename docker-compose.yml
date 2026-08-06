@@ -4,7 +4,7 @@ services:
   valhalla:
     image: ghcr.io/valhalla/valhalla-scripted:3.8.3
     environment:
-      tile_urls: ${VALHALLA_TILE_URL:-https://download.geofabrik.de/europe/great-britain/england-latest.osm.pbf}
+      tile_urls: ${VALHALLA_TILE_URL:-https://download.geofabrik.de/europe/united-kingdom/england-latest.osm.pbf}
       build_elevation: ${VALHALLA_BUILD_ELEVATION:-True}
       server_threads: ${VALHALLA_SERVER_THREADS:-}
       use_tiles_ignore_pbf: "True"
