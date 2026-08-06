@@ -11,6 +11,7 @@
 		routeLine: [number, number][];
 		legStartIndices: number[];
 		hoverPoint: [number, number] | null;
+		cyclosmTileUrl: string | null;
 		onAddWaypoint: (wp: Waypoint) => void;
 		onMoveWaypoint: (index: number, wp: Waypoint) => void;
 		onInsertVia: (position: number, wp: Waypoint) => void;
@@ -21,6 +22,7 @@
 		routeLine,
 		legStartIndices,
 		hoverPoint,
+		cyclosmTileUrl,
 		onAddWaypoint,
 		onMoveWaypoint,
 		onInsertVia
@@ -29,19 +31,22 @@
 	type Basemap = 'cyclosm' | 'osm';
 	const BASEMAP_STORAGE_KEY = 'komoot-lite:basemap';
 
-	// CyclOSM is the default for its cycling detail, but its community-run
+	const PUBLIC_CYCLOSM_TILES = [
+		'https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
+		'https://b.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
+		'https://c.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png'
+	];
+
+	// CyclOSM is the default for its cycling detail. The public community-run
 	// servers render uncached high-zoom tiles on demand (seconds per tile), so
-	// the faster OSM standard style is offered as a fallback.
-	const BASE_STYLE: maplibregl.StyleSpecification = {
+	// a self-hosted CyclOSM tile server can be configured via TILE_URL_CYCLOSM,
+	// and the faster OSM standard style is offered as a fallback either way.
+	const baseStyle = (cyclosmTiles: string[]): maplibregl.StyleSpecification => ({
 		version: 8,
 		sources: {
 			cyclosm: {
 				type: 'raster',
-				tiles: [
-					'https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
-					'https://b.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
-					'https://c.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png'
-				],
+				tiles: cyclosmTiles,
 				tileSize: 256,
 				maxzoom: 20,
 				attribution:
@@ -60,7 +65,7 @@
 			{ id: 'basemap-cyclosm', type: 'raster', source: 'cyclosm' },
 			{ id: 'basemap-osm', type: 'raster', source: 'osm', layout: { visibility: 'none' } }
 		]
-	};
+	});
 
 	function savedBasemap(): Basemap {
 		return localStorage.getItem(BASEMAP_STORAGE_KEY) === 'osm' ? 'osm' : 'cyclosm';
@@ -90,7 +95,7 @@
 		basemap = savedBasemap();
 		map = new maplibregl.Map({
 			container,
-			style: BASE_STYLE,
+			style: baseStyle(cyclosmTileUrl ? [cyclosmTileUrl] : PUBLIC_CYCLOSM_TILES),
 			center: [-1.4, 52.8],
 			zoom: 6.3
 		});
