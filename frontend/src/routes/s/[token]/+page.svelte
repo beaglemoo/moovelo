@@ -8,6 +8,12 @@
 
 	const token = page.params.token ?? '';
 
+	// Stable empty props for the read-only map - fresh inline literals would
+	// retrigger MapView's effects on every render.
+	const noWaypoints: never[] = [];
+	const noLegStarts: never[] = [];
+	const noop = () => {};
+
 	let route: SharedRoute | null = $state(null);
 	let error: string | null = $state(null);
 	let cyclosmTileUrl: string | null = $state(null);
@@ -73,19 +79,19 @@
 	{:else}
 		<div class="map">
 			<MapView
-				waypoints={[]}
+				waypoints={noWaypoints}
 				{routeLine}
-				legStartIndices={[]}
+				legStartIndices={noLegStarts}
 				{hoverPoint}
 				{cyclosmTileUrl}
 				{fitTrigger}
-				onAddWaypoint={() => {}}
-				onMoveWaypoint={() => {}}
-				onInsertVia={() => {}}
-				onRemoveWaypoint={() => {}}
-				onSetStart={() => {}}
-				onSetEnd={() => {}}
-				onClear={() => {}}
+				onAddWaypoint={noop}
+				onMoveWaypoint={noop}
+				onInsertVia={noop}
+				onRemoveWaypoint={noop}
+				onSetStart={noop}
+				onSetEnd={noop}
+				onClear={noop}
 			/>
 		</div>
 		{#if route && route.elevation.length}
@@ -142,6 +148,7 @@
 		white-space: nowrap;
 	}
 	.map {
+		position: relative;
 		flex: 1;
 		min-height: 0;
 	}
