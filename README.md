@@ -60,6 +60,8 @@ first (a single county builds in a couple of minutes - see `.env.example`).
 
 ```sh
 cp .env.example .env   # adjust as needed
+docker compose --profile prod up -d          # pulls ghcr.io/beaglemoo/moovelo (amd64/arm64)
+# ...or build the image yourself from source:
 docker compose --profile prod up -d --build
 ```
 
