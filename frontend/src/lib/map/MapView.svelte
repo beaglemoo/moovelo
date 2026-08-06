@@ -15,6 +15,10 @@
 		onAddWaypoint: (wp: Waypoint) => void;
 		onMoveWaypoint: (index: number, wp: Waypoint) => void;
 		onInsertVia: (position: number, wp: Waypoint) => void;
+		onRemoveWaypoint: (index: number) => void;
+		onSetStart: (wp: Waypoint) => void;
+		onSetEnd: (wp: Waypoint) => void;
+		onClear: () => void;
 	}
 
 	let {
@@ -25,8 +29,21 @@
 		cyclosmTileUrl,
 		onAddWaypoint,
 		onMoveWaypoint,
-		onInsertVia
+		onInsertVia,
+		onRemoveWaypoint,
+		onSetStart,
+		onSetEnd,
+		onClear
 	}: Props = $props();
+
+	interface ContextMenu {
+		x: number;
+		y: number;
+		wp: Waypoint;
+		waypointIndex: number | null;
+	}
+
+	let menu: ContextMenu | null = $state(null);
 
 	type Basemap = 'cyclosm' | 'osm';
 	const BASEMAP_STORAGE_KEY = 'komoot-lite:basemap';
@@ -158,10 +175,26 @@
 
 	function setupInteractions(m: maplibregl.Map) {
 		m.on('click', (e) => {
+			if (menu) {
+				menu = null;
+				return;
+			}
 			// Grabbing the line handles its own interaction; plain map clicks add waypoints.
 			if (m.queryRenderedFeatures(e.point, { layers: ['route-hit'] }).length > 0) return;
 			onAddWaypoint({ lat: e.lngLat.lat, lon: e.lngLat.lng });
 		});
+
+		m.on('contextmenu', (e) => {
+			e.preventDefault();
+			menu = {
+				x: e.point.x,
+				y: e.point.y,
+				wp: { lat: e.lngLat.lat, lon: e.lngLat.lng },
+				waypointIndex: null
+			};
+		});
+
+		m.on('movestart', () => (menu = null));
 
 		m.on('mouseenter', 'route-hit', () => (m.getCanvas().style.cursor = 'grab'));
 		m.on('mouseleave', 'route-hit', () => (m.getCanvas().style.cursor = ''));
@@ -232,9 +265,29 @@
 				const pos = marker.getLngLat();
 				onMoveWaypoint(i, { lat: pos.lat, lon: pos.lng });
 			});
+			marker.getElement().addEventListener('contextmenu', (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				const rect = container.getBoundingClientRect();
+				menu = {
+					x: event.clientX - rect.left,
+					y: event.clientY - rect.top,
+					wp,
+					waypointIndex: i
+				};
+			});
 			return marker;
 		});
 	});
+
+	function menuAction(action: () => void) {
+		menu = null;
+		action();
+	}
+
+	function handleKeydown(event: KeyboardEvent) {
+		if (event.key === 'Escape') menu = null;
+	}
 
 	// Sync route geometry.
 	$effect(() => {
@@ -265,7 +318,36 @@
 	}
 </script>
 
+<svelte:window onkeydown={handleKeydown} />
+
 <div class="map" bind:this={container}></div>
+{#if menu}
+	<div class="context-menu" style="left: {menu.x}px; top: {menu.y}px" role="menu">
+		{#if menu.waypointIndex !== null}
+			{@const idx = menu.waypointIndex}
+			<button type="button" role="menuitem" onclick={() => menuAction(() => onRemoveWaypoint(idx))}>
+				Remove waypoint
+			</button>
+		{:else}
+			{@const wp = menu.wp}
+			<button type="button" role="menuitem" onclick={() => menuAction(() => onSetStart(wp))}>
+				Route from here
+			</button>
+			<button type="button" role="menuitem" onclick={() => menuAction(() => onAddWaypoint(wp))}>
+				Add waypoint
+			</button>
+			<button type="button" role="menuitem" onclick={() => menuAction(() => onSetEnd(wp))}>
+				Route to here
+			</button>
+			{#if waypoints.length > 0}
+				<hr />
+				<button type="button" role="menuitem" onclick={() => menuAction(onClear)}>
+					Clear route
+				</button>
+			{/if}
+		{/if}
+	</div>
+{/if}
 <div class="basemap-switch" role="radiogroup" aria-label="Basemap">
 	<button
 		type="button"
@@ -320,5 +402,35 @@
 	.basemap-switch button.active {
 		background: #268bd2;
 		color: #fff;
+	}
+	.context-menu {
+		position: absolute;
+		min-width: 160px;
+		background: #fff;
+		border: 1px solid #ccc;
+		border-radius: 8px;
+		box-shadow: 0 2px 10px #0003;
+		padding: 4px;
+		z-index: 10;
+		display: flex;
+		flex-direction: column;
+	}
+	.context-menu button {
+		border: none;
+		background: transparent;
+		text-align: left;
+		padding: 0.45rem 0.7rem;
+		font: inherit;
+		font-size: 0.9rem;
+		border-radius: 5px;
+		cursor: pointer;
+	}
+	.context-menu button:hover {
+		background: #f0f0f0;
+	}
+	.context-menu hr {
+		border: none;
+		border-top: 1px solid #e5e5e5;
+		margin: 3px 0;
 	}
 </style>
