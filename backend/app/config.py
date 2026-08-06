@@ -22,9 +22,17 @@ class Settings(BaseSettings):
     oidc_client_secret: str = ""
     oidc_provider_name: str = "SSO"
 
+    # Set false to hide email+password login entirely (SSO-only). Ignored
+    # unless OIDC is configured, so misconfiguration cannot lock everyone out.
+    password_auth_enabled: bool = True
+
     @property
     def oidc_enabled(self) -> bool:
         return bool(self.oidc_issuer and self.oidc_client_id and self.oidc_client_secret)
+
+    @property
+    def password_login_active(self) -> bool:
+        return self.password_auth_enabled or not self.oidc_enabled
 
     # Wahoo Cloud API (sandbox or production app credentials).
     wahoo_client_id: str = ""

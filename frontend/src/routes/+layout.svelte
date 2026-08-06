@@ -36,6 +36,9 @@
 			<span class="brand">Komoot-lite</span>
 			<a href="/" class:active={page.url.pathname === '/'}>Planner</a>
 			<a href="/library" class:active={page.url.pathname === '/library'}>Library</a>
+			{#if user.is_admin}
+				<a href="/admin" class:active={page.url.pathname === '/admin'}>Admin</a>
+			{/if}
 			<span class="spacer"></span>
 			<span class="email">{user.email}</span>
 			<button type="button" onclick={logout}>Log out</button>
