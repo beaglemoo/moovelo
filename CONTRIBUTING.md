@@ -44,6 +44,11 @@ All of the above must pass; CI runs the same commands. If you change the
 GPX/FIT encoders, regenerate the golden files with
 `uv run python -m tests.golden.regen` and eyeball the diff.
 
+There is also a Playwright smoke test (`npm run e2e`) covering
+plan -> save -> export GPX. It runs against the dev compose stack, needs
+built Valhalla tiles, and registers a throwaway account - so it wants a
+fresh database or `SIGNUPS_ENABLED=true`. It is not part of CI.
+
 ## Pull requests
 
 - Branch from `main`, use conventional commit messages
