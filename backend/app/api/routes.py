@@ -190,9 +190,7 @@ shared_router = APIRouter(prefix="/api/shared")
 
 
 async def _shared_route(db: DbDep, token: str) -> Route:
-    route = (
-        await db.execute(select(Route).where(Route.share_token == token))
-    ).scalar_one_or_none()
+    route = (await db.execute(select(Route).where(Route.share_token == token))).scalar_one_or_none()
     if route is None:
         raise HTTPException(status_code=404, detail="Shared route not found")
     return route
