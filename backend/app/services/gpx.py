@@ -30,7 +30,7 @@ def interpolate_elevations(shape: list[Point], profile: list[ElevationPoint]) ->
 
 def build_gpx(name: str, shape: list[Point], profile: list[ElevationPoint]) -> bytes:
     ET.register_namespace("", GPX_NS)
-    gpx = ET.Element(f"{{{GPX_NS}}}gpx", attrib={"version": "1.1", "creator": "komoot-lite"})
+    gpx = ET.Element(f"{{{GPX_NS}}}gpx", attrib={"version": "1.1", "creator": "moovelo"})
     metadata = ET.SubElement(gpx, f"{{{GPX_NS}}}metadata")
     ET.SubElement(metadata, f"{{{GPX_NS}}}name").text = name
     trk = ET.SubElement(gpx, f"{{{GPX_NS}}}trk")

@@ -33,7 +33,7 @@
 <div class="shell">
 	{#if user}
 		<nav>
-			<span class="brand">Komoot-lite</span>
+			<span class="brand">Moovelo</span>
 			<a href="/" class:active={page.url.pathname === '/'}>Planner</a>
 			<a href="/library" class:active={page.url.pathname === '/library'}>Library</a>
 			{#if user.is_admin}
