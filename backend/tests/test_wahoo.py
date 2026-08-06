@@ -67,6 +67,9 @@ async def test_push_creates_route(wahoo_settings: None, snapshot: RouteResponse)
     sent = {k: v[0] for k, v in parse_qs(create.calls[0].request.content.decode()).items()}
     assert sent["route[external_id]"] == str(route.id)
     assert sent["route[name]"] == "Canal loop"
+    assert sent["route[workout_type_family_id]"] == "0"
+    assert float(sent["route[start_lat]"]) == pytest.approx(53.7996)
+    assert float(sent["route[start_lng]"]) == pytest.approx(-1.5491)
     assert sent["route[file]"].startswith("data:application/octet-stream;base64,")
     fit_bytes = base64.b64decode(sent["route[file]"].split(",", 1)[1])
     assert fit_bytes[8:12] == b".FIT"
