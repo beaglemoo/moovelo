@@ -51,6 +51,13 @@ class RoutePatchRequest(BaseModel):
     snapshot: RouteResponse | None = None
 
 
+class WahooState(BaseModel):
+    status: str = "none"
+    error: str | None = None
+    route_id: str | None = None
+    pushed_at: datetime | None = None
+
+
 class RouteSummary(BaseModel):
     id: uuid.UUID
     name: str
@@ -58,6 +65,24 @@ class RouteSummary(BaseModel):
     distance_m: float
     ascent_m: float
     updated_at: datetime
+    wahoo: WahooState = WahooState()
+
+    @classmethod
+    def from_route(cls, route: Any) -> "RouteSummary":
+        return cls(
+            id=route.id,
+            name=route.name,
+            preset=route.preset,
+            distance_m=route.distance_m,
+            ascent_m=route.ascent_m,
+            updated_at=route.updated_at,
+            wahoo=WahooState(
+                status=route.wahoo_status,
+                error=route.wahoo_error,
+                route_id=route.wahoo_route_id,
+                pushed_at=route.wahoo_pushed_at,
+            ),
+        )
 
 
 class SavedRoute(RouteResponse):
@@ -66,3 +91,4 @@ class SavedRoute(RouteResponse):
     preset: str
     waypoints: list[Waypoint]
     updated_at: datetime
+    wahoo: WahooState = WahooState()

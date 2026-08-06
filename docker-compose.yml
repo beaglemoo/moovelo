@@ -1,4 +1,4 @@
-name: komoot-lite
+name: moovelo
 
 services:
   postgres:
@@ -55,6 +55,9 @@ services:
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       OIDC_PROVIDER_NAME: ${OIDC_PROVIDER_NAME:-SSO}
+      WAHOO_CLIENT_ID: ${WAHOO_CLIENT_ID:-}
+      PASSWORD_AUTH_ENABLED: ${PASSWORD_AUTH_ENABLED:-true}
+      WAHOO_CLIENT_SECRET: ${WAHOO_CLIENT_SECRET:-}
     volumes:
       - ./backend/app:/app/app
       - ./backend/alembic:/app/alembic
@@ -101,6 +104,9 @@ services:
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       OIDC_PROVIDER_NAME: ${OIDC_PROVIDER_NAME:-SSO}
+      WAHOO_CLIENT_ID: ${WAHOO_CLIENT_ID:-}
+      PASSWORD_AUTH_ENABLED: ${PASSWORD_AUTH_ENABLED:-true}
+      WAHOO_CLIENT_SECRET: ${WAHOO_CLIENT_SECRET:-}
     ports:
       - "${APP_PORT:-17777}:17777"
     depends_on:

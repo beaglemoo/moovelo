@@ -38,12 +38,47 @@ export interface AppConfig {
 export interface AuthStatus {
 	setup_required: boolean;
 	signups_enabled: boolean;
+	password_login: boolean;
 	oidc: { enabled: boolean; name: string | null };
+}
+
+export interface AdminUser {
+	id: string;
+	email: string;
+	is_admin: boolean;
+	created_at: string;
+	route_count: number;
+	wahoo_connected: boolean;
+}
+
+export interface AdminOverview {
+	users: AdminUser[];
+	stats: { user_count: number; route_count: number };
+	config: {
+		signups_enabled: boolean;
+		password_login: boolean;
+		oidc_enabled: boolean;
+		oidc_provider: string | null;
+		wahoo_configured: boolean;
+	};
 }
 
 export interface UserInfo {
 	email: string;
 	is_admin: boolean;
+}
+
+export interface WahooState {
+	status: 'none' | 'queued' | 'pushing' | 'synced' | 'error';
+	error: string | null;
+	route_id: string | null;
+	pushed_at: string | null;
+}
+
+export interface WahooStatus {
+	configured: boolean;
+	connected: boolean;
+	athlete: { name: string } | null;
 }
 
 export interface RouteSummary {
@@ -53,6 +88,7 @@ export interface RouteSummary {
 	distance_m: number;
 	ascent_m: number;
 	updated_at: string;
+	wahoo: WahooState;
 }
 
 export interface SavedRoute extends RouteResponse {
@@ -61,6 +97,7 @@ export interface SavedRoute extends RouteResponse {
 	preset: Preset;
 	waypoints: Waypoint[];
 	updated_at: string;
+	wahoo: WahooState;
 }
 
 export class ApiError extends Error {
@@ -124,6 +161,19 @@ export const routes = {
 	remove: (id: string) => request<void>(`/api/routes/${id}`, { method: 'DELETE' }),
 	gpxUrl: (id: string) => `/api/routes/${id}/export.gpx`,
 	fitUrl: (id: string) => `/api/routes/${id}/export.fit`
+};
+
+export const admin = {
+	overview: () => request<AdminOverview>('/api/admin/overview'),
+	deleteUser: (id: string) => request<void>(`/api/admin/users/${id}`, { method: 'DELETE' })
+};
+
+export const wahoo = {
+	status: () => request<WahooStatus>('/api/wahoo/status'),
+	disconnect: () => request<{ status: string }>('/api/wahoo/disconnect', { method: 'POST' }),
+	push: (routeId: string) =>
+		request<RouteSummary>(`/api/wahoo/push/${routeId}`, { method: 'POST' }),
+	connectUrl: '/api/wahoo/connect'
 };
 
 export async function fetchConfig(): Promise<AppConfig> {

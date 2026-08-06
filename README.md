@@ -1,4 +1,4 @@
-# Komoot-lite
+# Moovelo
 
 Self-hosted bike route planner with direct Wahoo ELEMNT sync. Plan routes in
 the browser on a cycling-oriented map, save them to your library, export
@@ -96,6 +96,26 @@ which can take seconds per tile in less-visited areas.
 For a fully self-hosted setup, run your own CyclOSM tile server and set
 `TILE_URL_CYCLOSM` - the complete guide is in
 [docs/self-hosted-tiles.md](docs/self-hosted-tiles.md).
+
+## Wahoo sync
+
+Saved routes can be pushed straight to your Wahoo account so they appear
+on your ELEMNT after its next WiFi sync - as a FIT course with
+turn-by-turn cues.
+
+1. Register a developer app at https://developers.wahooligan.com:
+   Sandbox environment, confidential app (not PKCE), redirect URI
+   `<APP_URL>/api/wahoo/callback`. Sandbox apps are approved instantly
+   and work fully with your own Wahoo account; production approval only
+   matters if other people use your instance.
+2. Put the client ID and secret in `.env` (`WAHOO_CLIENT_ID`,
+   `WAHOO_CLIENT_SECRET`) and restart.
+3. In the app: Library -> Connect Wahoo -> authorize. Then use "Send to
+   Wahoo" on any saved route (library rows or the planner toolbar).
+
+Pushes are queued in the background with a visible status per route.
+Re-pushing an edited route updates the same course on Wahoo's side (the
+route UUID is used as the external id).
 
 ## Documentation
 

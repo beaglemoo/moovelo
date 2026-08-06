@@ -48,7 +48,7 @@
 	let menu: ContextMenu | null = $state(null);
 
 	type Basemap = 'cyclosm' | 'osm';
-	const BASEMAP_STORAGE_KEY = 'komoot-lite:basemap';
+	const BASEMAP_STORAGE_KEY = 'moovelo:basemap';
 
 	const PUBLIC_CYCLOSM_TILES = [
 		'https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
