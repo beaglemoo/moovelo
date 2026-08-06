@@ -146,6 +146,7 @@ backend/app/
     ├── valhalla.py          # httpx client, error mapping, elevation, ascent calc
     ├── auth.py, oidc.py     # password hashing, sessions, OIDC client
     ├── gpx.py, fit.py       # exporters (FIT embeds maneuvers as course points)
+    ├── importer.py          # GPX/TCX/FIT parsing for uploaded files
     └── wahoo.py, wahoo_queue.py  # Wahoo client + background push worker
 ```
 
