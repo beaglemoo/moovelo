@@ -108,5 +108,6 @@ async def push(route_id: uuid.UUID, db: DbDep, user: UserDep) -> RouteSummary:
     route.wahoo_status = "queued"
     route.wahoo_error = None
     await db.commit()
+    await db.refresh(route)
     queue.enqueue(route.id)
     return RouteSummary.from_route(route)
