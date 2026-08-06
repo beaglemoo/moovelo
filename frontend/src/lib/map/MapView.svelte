@@ -26,7 +26,13 @@
 		onInsertVia
 	}: Props = $props();
 
-	const CYCLOSM_STYLE: maplibregl.StyleSpecification = {
+	type Basemap = 'cyclosm' | 'osm';
+	const BASEMAP_STORAGE_KEY = 'komoot-lite:basemap';
+
+	// CyclOSM is the default for its cycling detail, but its community-run
+	// servers render uncached high-zoom tiles on demand (seconds per tile), so
+	// the faster OSM standard style is offered as a fallback.
+	const BASE_STYLE: maplibregl.StyleSpecification = {
 		version: 8,
 		sources: {
 			cyclosm: {
@@ -40,10 +46,27 @@
 				maxzoom: 20,
 				attribution:
 					'<a href="https://www.cyclosm.org">CyclOSM</a> | © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+			},
+			osm: {
+				type: 'raster',
+				tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+				tileSize: 256,
+				maxzoom: 19,
+				attribution:
+					'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 			}
 		},
-		layers: [{ id: 'cyclosm', type: 'raster', source: 'cyclosm' }]
+		layers: [
+			{ id: 'basemap-cyclosm', type: 'raster', source: 'cyclosm' },
+			{ id: 'basemap-osm', type: 'raster', source: 'osm', layout: { visibility: 'none' } }
+		]
 	};
+
+	function savedBasemap(): Basemap {
+		return localStorage.getItem(BASEMAP_STORAGE_KEY) === 'osm' ? 'osm' : 'cyclosm';
+	}
+
+	let basemap: Basemap = $state('cyclosm');
 
 	let container: HTMLDivElement;
 	let map: maplibregl.Map | undefined;
@@ -64,9 +87,10 @@
 	}
 
 	onMount(() => {
+		basemap = savedBasemap();
 		map = new maplibregl.Map({
 			container,
-			style: CYCLOSM_STYLE,
+			style: BASE_STYLE,
 			center: [-1.4, 52.8],
 			zoom: 6.3
 		});
@@ -218,13 +242,78 @@
 		if (!map || !mapReady) return;
 		setSourceData(map, 'hover-point', pointGeoJSON(hoverPoint));
 	});
+
+	// Sync basemap layer visibility.
+	$effect(() => {
+		if (!map || !mapReady) return;
+		map.setLayoutProperty(
+			'basemap-cyclosm',
+			'visibility',
+			basemap === 'cyclosm' ? 'visible' : 'none'
+		);
+		map.setLayoutProperty('basemap-osm', 'visibility', basemap === 'osm' ? 'visible' : 'none');
+	});
+
+	function switchBasemap(next: Basemap) {
+		basemap = next;
+		localStorage.setItem(BASEMAP_STORAGE_KEY, next);
+	}
 </script>
 
 <div class="map" bind:this={container}></div>
+<div class="basemap-switch" role="radiogroup" aria-label="Basemap">
+	<button
+		type="button"
+		role="radio"
+		aria-checked={basemap === 'cyclosm'}
+		class:active={basemap === 'cyclosm'}
+		title="Cycling map (can be slow to render new areas)"
+		onclick={() => switchBasemap('cyclosm')}
+	>
+		CyclOSM
+	</button>
+	<button
+		type="button"
+		role="radio"
+		aria-checked={basemap === 'osm'}
+		class:active={basemap === 'osm'}
+		title="OpenStreetMap standard (faster)"
+		onclick={() => switchBasemap('osm')}
+	>
+		OSM
+	</button>
+</div>
 
 <style>
 	.map {
 		width: 100%;
 		height: 100%;
+	}
+	.basemap-switch {
+		position: absolute;
+		bottom: 28px;
+		left: 10px;
+		display: flex;
+		border-radius: 8px;
+		overflow: hidden;
+		border: 1px solid #ccc;
+		background: #fff;
+		box-shadow: 0 1px 4px #0002;
+		z-index: 5;
+	}
+	.basemap-switch button {
+		border: none;
+		background: transparent;
+		padding: 0.3rem 0.6rem;
+		font: inherit;
+		font-size: 0.8rem;
+		cursor: pointer;
+	}
+	.basemap-switch button + button {
+		border-left: 1px solid #ddd;
+	}
+	.basemap-switch button.active {
+		background: #268bd2;
+		color: #fff;
 	}
 </style>
