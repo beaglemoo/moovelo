@@ -14,6 +14,11 @@ export default ts.config(
 	{
 		languageOptions: {
 			globals: { ...globals.browser, ...globals.node }
+		},
+		rules: {
+			// The app is served at the domain root; there is no configurable
+			// base path for resolve() to guard against.
+			'svelte/no-navigation-without-resolve': 'off'
 		}
 	},
 	{
