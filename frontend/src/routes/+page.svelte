@@ -22,6 +22,7 @@
 	let hoverPoint: [number, number] | null = $state(null);
 	let config: { tile_url_cyclosm: string | null } | null = $state(null);
 
+	let fitTrigger = $state(0);
 	let savedId: string | null = $state(null);
 	let savedName: string | null = $state(null);
 	let dirty = $state(false);
@@ -45,6 +46,7 @@
 				savedId = saved.id;
 				savedName = saved.name;
 				dirty = false;
+				fitTrigger += 1;
 			})
 			.catch(() => {
 				error = 'Could not load that route.';
@@ -219,6 +221,7 @@
 				{legStartIndices}
 				{hoverPoint}
 				cyclosmTileUrl={config.tile_url_cyclosm}
+				{fitTrigger}
 				onAddWaypoint={addWaypoint}
 				onMoveWaypoint={moveWaypoint}
 				onInsertVia={insertVia}
