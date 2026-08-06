@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from app.config import settings
 from app.schemas import ElevationPoint, RouteLeg, RouteRequest, RouteResponse
+from app.services.geo import concat_shapes
 from app.services.polyline import decode_polyline6
 from app.services.presets import PRESETS
 
@@ -49,7 +50,7 @@ class ValhallaClient:
         data = await self._post("/route", payload)
         trip = data["trip"]
         legs = [RouteLeg(geometry=leg["shape"], maneuvers=leg["maneuvers"]) for leg in trip["legs"]]
-        shape = _concat_shapes([decode_polyline6(leg.geometry) for leg in legs])
+        shape = concat_shapes([decode_polyline6(leg.geometry) for leg in legs])
         elevation = await self._elevation_profile(shape)
         ascent, descent = _ascent_descent(elevation)
         return RouteResponse(
@@ -78,14 +79,6 @@ class ValhallaClient:
             for dist, elev in data.get("range_height", [])
             if elev is not None
         ]
-
-
-def _concat_shapes(shapes: list[list[tuple[float, float]]]) -> list[tuple[float, float]]:
-    merged: list[tuple[float, float]] = []
-    for shape in shapes:
-        # Legs share their boundary point; drop the duplicate on join.
-        merged.extend(shape[1:] if merged and shape and shape[0] == merged[-1] else shape)
-    return merged
 
 
 def _downsample(points: list[tuple[float, float]], limit: int) -> list[tuple[float, float]]:

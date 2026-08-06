@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.auth import router as auth_router
 from app.api.route import router
+from app.api.routes import router as routes_router
 from app.config import settings
 from app.services.valhalla import ValhallaClient
 
@@ -31,6 +32,7 @@ if settings.cors_origins:
 
 app.include_router(router)
 app.include_router(auth_router)
+app.include_router(routes_router)
 
 static_dir = Path(settings.static_dir)
 if static_dir.is_dir():
