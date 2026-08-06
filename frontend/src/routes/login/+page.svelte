@@ -62,6 +62,10 @@
 		<button type="submit" disabled={busy}>
 			{mode === 'register' ? 'Create account' : 'Log in'}
 		</button>
+		{#if status?.oidc.enabled}
+			<div class="divider">or</div>
+			<a class="sso" href="/api/auth/oidc/login">Continue with {status.oidc.name}</a>
+		{/if}
 		{#if status && !status.setup_required && status.signups_enabled}
 			<button
 				type="button"
@@ -147,5 +151,23 @@
 		margin: 0;
 		color: #dc322f;
 		font-size: 0.85rem;
+	}
+	.divider {
+		text-align: center;
+		color: #93a1a1;
+		font-size: 0.8rem;
+	}
+	.sso {
+		display: block;
+		text-align: center;
+		border: 1px solid #268bd2;
+		color: #268bd2;
+		border-radius: 8px;
+		padding: 0.5rem;
+		font-weight: 600;
+		text-decoration: none;
+	}
+	.sso:hover {
+		background: #268bd212;
 	}
 </style>

@@ -1,14 +1,19 @@
-from typing import Annotated
+import secrets as py_secrets
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Cookie, HTTPException, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
 
 from app.api.deps import DbDep, UserDep
 from app.config import settings
 from app.services import auth as auth_service
+from app.services import oidc
 from app.services.auth import SESSION_COOKIE
 
 router = APIRouter(prefix="/api/auth")
+
+OIDC_STATE_COOKIE = "bikegps_oidc_state"
 
 
 class Credentials(BaseModel):
@@ -33,10 +38,15 @@ def _set_session_cookie(response: Response, token: str) -> None:
 
 
 @router.get("/status")
-async def status(db: DbDep) -> dict[str, bool]:
+async def status(db: DbDep) -> dict[str, Any]:
     return {
         "setup_required": await auth_service.user_count(db) == 0,
         "signups_enabled": settings.signups_enabled,
+        "oidc": (
+            {"enabled": True, "name": settings.oidc_provider_name}
+            if settings.oidc_enabled
+            else {"enabled": False, "name": None}
+        ),
     }
 
 
@@ -81,3 +91,51 @@ async def logout(
 @router.get("/me")
 async def me(user: UserDep) -> UserOut:
     return UserOut(email=user.email, is_admin=user.is_admin)
+
+
+@router.get("/oidc/login")
+async def oidc_login() -> RedirectResponse:
+    if not settings.oidc_enabled:
+        raise HTTPException(status_code=404, detail="OIDC is not configured")
+    state = oidc.new_state()
+    response = RedirectResponse(await oidc.authorize_url(state), status_code=302)
+    response.set_cookie(
+        OIDC_STATE_COOKIE,
+        state,
+        max_age=600,
+        httponly=True,
+        samesite="lax",
+        secure=settings.cookie_secure,
+    )
+    return response
+
+
+@router.get("/oidc/callback")
+async def oidc_callback(
+    code: str,
+    state: str,
+    db: DbDep,
+    bikegps_oidc_state: Annotated[str | None, Cookie(alias=OIDC_STATE_COOKIE)] = None,
+) -> RedirectResponse:
+    if not settings.oidc_enabled:
+        raise HTTPException(status_code=404, detail="OIDC is not configured")
+    if bikegps_oidc_state is None or not py_secrets.compare_digest(state, bikegps_oidc_state):
+        raise HTTPException(status_code=400, detail="OIDC state mismatch")
+
+    email = (await oidc.exchange_code_for_email(code)).strip().lower()
+    user = await auth_service.get_user_by_email(db, email)
+    if user is None:
+        first_user = await auth_service.user_count(db) == 0
+        if not first_user and not settings.signups_enabled:
+            raise HTTPException(status_code=403, detail="No account for this identity")
+        # OIDC-provisioned users get an unusable random password.
+        user = await auth_service.create_user(
+            db, email, py_secrets.token_urlsafe(32), is_admin=first_user
+        )
+    token = await auth_service.create_session(db, user)
+    await db.commit()
+
+    response = RedirectResponse("/", status_code=302)
+    response.delete_cookie(OIDC_STATE_COOKIE)
+    _set_session_cookie(response, token)
+    return response

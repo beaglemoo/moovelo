@@ -19,7 +19,9 @@ def save_body(snapshot: RouteResponse, name: str = "Canal loop") -> dict[str, ob
 
 async def test_first_user_becomes_admin_then_signups_blocked(client: AsyncClient) -> None:
     status = (await client.get("/api/auth/status")).json()
-    assert status == {"setup_required": True, "signups_enabled": False}
+    assert status["setup_required"] is True
+    assert status["signups_enabled"] is False
+    assert status["oidc"]["enabled"] is False
 
     await register(client)
     me = (await client.get("/api/auth/me")).json()
