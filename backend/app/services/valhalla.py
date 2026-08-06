@@ -33,6 +33,8 @@ class ValhallaClient:
             detail = "Routing request failed."
             with contextlib.suppress(ValueError):
                 detail = response.json().get("error", detail)
+            if "no suitable edges" in detail.lower() or "no path could be found" in detail.lower():
+                detail += " - is this area covered by the loaded map extract?"
             raise HTTPException(status_code=422, detail=detail)
         data: dict[str, Any] = response.json()
         return data
