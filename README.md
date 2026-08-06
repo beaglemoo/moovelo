@@ -35,6 +35,23 @@ cues.
   optionally the map tiles run on your own hardware. The only external
   service is Wahoo's cloud, and only if you use it.
 
+## Screenshots
+
+Planning a route in the Peak District (CyclOSM basemap, elevation profile):
+
+![Route planner](docs/screenshots/planner.jpg)
+
+A public share link - read-only map, elevation, GPX download, no account
+needed:
+
+![Shared route](docs/screenshots/share.jpg)
+
+The route library (desktop and mobile):
+
+![Library](docs/screenshots/library.jpg)
+
+<img src="docs/screenshots/mobile-library.jpg" alt="Library on mobile" width="320">
+
 ## Quickstart (development)
 
 Requirements: Docker with Compose v2, roughly 8 GB RAM allocated to Docker,
