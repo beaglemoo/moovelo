@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 # Build context is the repo root (the prod stage bundles the frontend build).
 
-FROM node:22-slim AS frontend-build
+# The frontend build output is platform-independent static files, so build
+# it once on the build host's native platform instead of once per target
+# arch (under emulation, where esbuild's binary is unreliable).
+FROM --platform=$BUILDPLATFORM node:22-slim AS frontend-build
 WORKDIR /fe
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
