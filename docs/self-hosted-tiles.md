@@ -99,9 +99,13 @@ def yt(lat):
     r=math.radians(lat)
     return int((1-math.asinh(math.tan(r))/math.pi)/2*2**z)
 print(max(0,xt(-6.5)), min(2**z-1,xt(2.0)), max(0,yt(56.0)), min(2**z-1,yt(49.8)))")
-  docker exec cyclosm-cyclosm-1 render_list -a -z $z -Z $z -x $x0 -X $x1 -y $y0 -Y $y1 -n 2
+  docker exec cyclosm-cyclosm-1 render_list -m ajt -a -z $z -Z $z -x $x0 -X $x1 -y $y0 -Y $y1 -n 2
 done
 ```
+
+Note the `-m ajt`: this image names its renderd style `ajt`, while
+`render_list` defaults to `default` - without the flag renderd rejects
+every job with "No map for: default" and render_list still exits 0.
 
 Higher zooms (11+) are rendered on demand as you browse; each area only
 ever pays that cost once.
