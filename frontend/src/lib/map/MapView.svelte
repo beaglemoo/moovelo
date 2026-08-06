@@ -12,6 +12,7 @@
 		legStartIndices: number[];
 		hoverPoint: [number, number] | null;
 		cyclosmTileUrl: string | null;
+		fitTrigger: number;
 		onAddWaypoint: (wp: Waypoint) => void;
 		onMoveWaypoint: (index: number, wp: Waypoint) => void;
 		onInsertVia: (position: number, wp: Waypoint) => void;
@@ -27,6 +28,7 @@
 		legStartIndices,
 		hoverPoint,
 		cyclosmTileUrl,
+		fitTrigger,
 		onAddWaypoint,
 		onMoveWaypoint,
 		onInsertVia,
@@ -299,6 +301,23 @@
 	$effect(() => {
 		if (!map || !mapReady) return;
 		setSourceData(map, 'hover-point', pointGeoJSON(hoverPoint));
+	});
+
+	// Fit the viewport to the route when asked (e.g. after loading a saved one).
+	$effect(() => {
+		// Read all reactive dependencies before any early return.
+		const trigger = fitTrigger;
+		const line = routeLine;
+		if (trigger === 0 || !map || !mapReady || line.length < 2) return;
+		const lons = line.map((c) => c[0]);
+		const lats = line.map((c) => c[1]);
+		map.fitBounds(
+			[
+				[Math.min(...lons), Math.min(...lats)],
+				[Math.max(...lons), Math.max(...lats)]
+			],
+			{ padding: 60, animate: false }
+		);
 	});
 
 	// Sync basemap layer visibility.
