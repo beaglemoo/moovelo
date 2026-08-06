@@ -41,8 +41,10 @@
 <div class="wrap">
 	<form class="card" onsubmit={submit}>
 		<h1>Moovelo</h1>
-		<h2>{title}</h2>
-		{#if passwordLogin}
+		{#if status}
+			<h2>{title}</h2>
+		{/if}
+		{#if status && passwordLogin}
 			{#if status?.setup_required}
 				<p class="hint">First run: this account becomes the administrator.</p>
 			{/if}
