@@ -1,0 +1,55 @@
+<script lang="ts">
+	import type { Preset } from '$lib/api';
+
+	interface Props {
+		preset: Preset;
+		onChange: (preset: Preset) => void;
+	}
+
+	let { preset, onChange }: Props = $props();
+
+	const PRESETS: { id: Preset; label: string; hint: string }[] = [
+		{ id: 'road', label: 'Road', hint: 'Fast tarmac, avoids gravel' },
+		{ id: 'gravel', label: 'Gravel', hint: 'Seeks unpaved tracks and towpaths' },
+		{ id: 'quiet', label: 'Quiet', hint: 'Cycleways and calm streets' }
+	];
+</script>
+
+<div class="presets" role="radiogroup" aria-label="Routing preset">
+	{#each PRESETS as p (p.id)}
+		<button
+			type="button"
+			role="radio"
+			aria-checked={preset === p.id}
+			class:active={preset === p.id}
+			title={p.hint}
+			onclick={() => onChange(p.id)}
+		>
+			{p.label}
+		</button>
+	{/each}
+</div>
+
+<style>
+	.presets {
+		display: flex;
+		border-radius: 8px;
+		overflow: hidden;
+		border: 1px solid #ccc;
+		background: #fff;
+	}
+	button {
+		border: none;
+		background: transparent;
+		padding: 0.45rem 0.9rem;
+		font: inherit;
+		cursor: pointer;
+	}
+	button + button {
+		border-left: 1px solid #ddd;
+	}
+	button.active {
+		background: #d33682;
+		color: #fff;
+	}
+</style>
