@@ -15,6 +15,7 @@ from app.schemas import (
     RouteSaveRequest,
     RouteSummary,
     SavedRoute,
+    WahooState,
 )
 from app.services.fit import build_fit
 from app.services.geo import concat_shapes
@@ -66,6 +67,12 @@ def _saved(route: Route) -> SavedRoute:
         ascent_m=route.ascent_m,
         descent_m=route.descent_m,
         updated_at=route.updated_at,
+        wahoo=WahooState(
+            status=route.wahoo_status,
+            error=route.wahoo_error,
+            route_id=route.wahoo_route_id,
+            pushed_at=route.wahoo_pushed_at,
+        ),
     )
 
 
@@ -80,17 +87,7 @@ async def list_routes(db: DbDep, user: UserDep) -> list[RouteSummary]:
         .scalars()
         .all()
     )
-    return [
-        RouteSummary(
-            id=r.id,
-            name=r.name,
-            preset=r.preset,
-            distance_m=r.distance_m,
-            ascent_m=r.ascent_m,
-            updated_at=r.updated_at,
-        )
-        for r in rows
-    ]
+    return [RouteSummary.from_route(r) for r in rows]
 
 
 @router.post("", status_code=201)
