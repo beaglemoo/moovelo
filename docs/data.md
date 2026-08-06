@@ -45,7 +45,7 @@ alone has no effect. Wipe the volume and restart:
 ```sh
 docker compose stop valhalla
 docker compose rm -f valhalla
-docker volume rm <project>_valhalla_tiles     # e.g. komoot-lite_valhalla_tiles
+docker volume rm <project>_valhalla_tiles     # e.g. moovelo_valhalla_tiles
 docker compose --profile dev up -d            # or --profile prod
 ```
 

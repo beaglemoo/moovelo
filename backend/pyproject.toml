@@ -1,7 +1,7 @@
 [project]
-name = "komoot-lite-backend"
+name = "moovelo-backend"
 version = "0.1.0"
-description = "Backend for Komoot-lite, a self-hosted bike route planner"
+description = "Backend for Moovelo, a self-hosted bike route planner"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

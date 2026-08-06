@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await app.state.valhalla.close()
 
 
-app = FastAPI(title="Komoot-lite", lifespan=lifespan)
+app = FastAPI(title="Moovelo", lifespan=lifespan)
 
 if settings.cors_origins:
     app.add_middleware(

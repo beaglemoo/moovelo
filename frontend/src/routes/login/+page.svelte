@@ -40,7 +40,7 @@
 
 <div class="wrap">
 	<form class="card" onsubmit={submit}>
-		<h1>Komoot-lite</h1>
+		<h1>Moovelo</h1>
 		<h2>{title}</h2>
 		{#if passwordLogin}
 			{#if status?.setup_required}

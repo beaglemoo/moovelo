@@ -1,4 +1,4 @@
-# Komoot-lite
+# Moovelo
 
 Self-hosted bike route planner with direct Wahoo ELEMNT sync. Plan routes in
 the browser on a cycling-oriented map, save them to your library, export

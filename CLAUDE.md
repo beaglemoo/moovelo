@@ -1,4 +1,4 @@
-# Komoot-lite — self-hosted bike route planner
+# Moovelo — self-hosted bike route planner
 
 Open-source (MIT), self-hostable route planner for cyclists with
 direct Wahoo ELEMNT sync. Docker Compose only: dev on macOS, prod in
