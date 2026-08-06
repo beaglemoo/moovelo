@@ -81,6 +81,23 @@
 		reroute();
 	}
 
+	function removeWaypoint(index: number) {
+		waypoints.splice(index, 1);
+		reroute();
+	}
+
+	function setStart(wp: Waypoint) {
+		if (waypoints.length === 0) waypoints.push(wp);
+		else waypoints[0] = wp;
+		reroute();
+	}
+
+	function setEnd(wp: Waypoint) {
+		if (waypoints.length < 2) waypoints.push(wp);
+		else waypoints[waypoints.length - 1] = wp;
+		reroute();
+	}
+
 	function undo() {
 		waypoints.pop();
 		reroute();
@@ -124,6 +141,10 @@
 				onAddWaypoint={addWaypoint}
 				onMoveWaypoint={moveWaypoint}
 				onInsertVia={insertVia}
+				onRemoveWaypoint={removeWaypoint}
+				onSetStart={setStart}
+				onSetEnd={setEnd}
+				onClear={clear}
 			/>
 		{/if}
 		<div class="toolbar">
