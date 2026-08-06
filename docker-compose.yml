@@ -1,0 +1,71 @@
+name: komoot-lite
+
+services:
+  valhalla:
+    image: ghcr.io/valhalla/valhalla-scripted:3.8.3
+    environment:
+      tile_urls: ${VALHALLA_TILE_URL:-https://download.geofabrik.de/europe/great-britain/england-latest.osm.pbf}
+      build_elevation: ${VALHALLA_BUILD_ELEVATION:-True}
+      server_threads: ${VALHALLA_SERVER_THREADS:-}
+      use_tiles_ignore_pbf: "True"
+      serve_tiles: "True"
+    volumes:
+      - valhalla_tiles:/custom_files
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8002/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10m
+    restart: unless-stopped
+
+  backend-dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: dev
+    environment:
+      VALHALLA_URL: http://valhalla:8002
+      CORS_ORIGINS: http://localhost:5173
+    volumes:
+      - ./backend/app:/app/app
+    ports:
+      - "127.0.0.1:17777:17777"
+    depends_on:
+      - valhalla
+    restart: unless-stopped
+
+  frontend-dev:
+    profiles: ["dev"]
+    image: node:22-slim
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      BACKEND_URL: http://backend-dev:17777
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - backend-dev
+    restart: unless-stopped
+
+  backend:
+    profiles: ["prod"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: prod
+    environment:
+      VALHALLA_URL: http://valhalla:8002
+    ports:
+      - "${APP_PORT:-17777}:17777"
+    depends_on:
+      - valhalla
+    restart: unless-stopped
+
+volumes:
+  valhalla_tiles:
+  frontend_node_modules:
