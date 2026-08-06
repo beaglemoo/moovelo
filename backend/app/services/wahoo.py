@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from app.config import settings
 from app.models import Route, WahooAccount
 from app.services.fit import build_fit
+from app.services.polyline import decode_polyline6
 
 logger = logging.getLogger(__name__)
 
@@ -102,16 +103,20 @@ async def ensure_fresh(account: WahooAccount) -> None:
         await refresh_tokens(account)
 
 
-def _route_payload(route: Route) -> dict[str, str | float]:
+def _route_payload(route: Route) -> dict[str, str | int | float]:
     fit_bytes = build_fit(
         route.name, route.legs, route.elevation, route.duration_s, route.updated_at
     )
     encoded = base64.b64encode(fit_bytes).decode()
+    start_lat, start_lng = decode_polyline6(route.legs[0]["geometry"])[0]
     return {
         "route[name]": route.name,
         "route[external_id]": str(route.id),
         "route[provider_updated_at]": route.updated_at.isoformat(),
         "route[file]": f"data:application/octet-stream;base64,{encoded}",
+        "route[workout_type_family_id]": 0,  # 0 = Biking
+        "route[start_lat]": start_lat,
+        "route[start_lng]": start_lng,
         "route[distance]": route.distance_m,
         "route[ascent]": route.ascent_m,
         "route[descent]": route.descent_m,
