@@ -14,6 +14,17 @@ class Settings(BaseSettings):
     signups_enabled: bool = False
     cookie_secure: bool = False
     session_ttl_days: int = 30
+    # External base URL of the app, used to build the OIDC redirect URI.
+    app_url: str = "http://localhost:5173"
+    # Optional OIDC single sign-on. All three must be set to enable it.
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_provider_name: str = "SSO"
+
+    @property
+    def oidc_enabled(self) -> bool:
+        return bool(self.oidc_issuer and self.oidc_client_id and self.oidc_client_secret)
 
 
 settings = Settings()

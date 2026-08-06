@@ -38,6 +38,7 @@ export interface AppConfig {
 export interface AuthStatus {
 	setup_required: boolean;
 	signups_enabled: boolean;
+	oidc: { enabled: boolean; name: string | null };
 }
 
 export interface UserInfo {
