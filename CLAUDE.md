@@ -73,7 +73,10 @@ yet.)
   profile chart under the map driven by route geometry + elevation.
 - **Auth:** email + password (argon2), session cookies. First
   registered user becomes admin; SIGNUPS_ENABLED env flag (default
-  false) gates further registrations.
+  false) gates further registrations. Optional generic OIDC SSO
+  (OIDC_ISSUER/CLIENT_ID/CLIENT_SECRET env; works with Pocket ID
+  and peers) matching accounts by email; auto-provisioning follows
+  SIGNUPS_ENABLED.
 
 ## Wahoo Cloud API integration
 
