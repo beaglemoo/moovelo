@@ -1,7 +1,6 @@
 """Wahoo Cloud API client: OAuth2, token refresh, and route pushes."""
 
 import asyncio
-import base64
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -104,16 +103,11 @@ async def ensure_fresh(account: WahooAccount) -> None:
 
 
 def _route_payload(route: Route) -> dict[str, str | int | float]:
-    fit_bytes = build_fit(
-        route.name, route.legs, route.elevation, route.duration_s, route.updated_at
-    )
-    encoded = base64.b64encode(fit_bytes).decode()
     start_lat, start_lng = decode_polyline6(route.legs[0]["geometry"])[0]
     return {
         "route[name]": route.name,
         "route[external_id]": str(route.id),
         "route[provider_updated_at]": route.updated_at.isoformat(),
-        "route[file]": f"data:application/octet-stream;base64,{encoded}",
         "route[workout_type_family_id]": 0,  # 0 = Biking
         "route[start_lat]": start_lat,
         "route[start_lng]": start_lng,
@@ -127,6 +121,13 @@ async def push_route(route: Route, account: WahooAccount) -> str:
     """Create or update the route on Wahoo; returns the Wahoo route id."""
     await ensure_fresh(account)
     payload = _route_payload(route)
+    # Wahoo validates the upload by filename extension and rejects the
+    # base64 data-URI form its docs describe ("bin" not allowed), so the
+    # FIT file goes up as a multipart attachment named route.fit.
+    fit_bytes = build_fit(
+        route.name, route.legs, route.elevation, route.duration_s, route.updated_at
+    )
+    files = {"route[file]": ("route.fit", fit_bytes, "application/octet-stream")}
 
     if route.wahoo_route_id:
         method, url = "PUT", f"{WAHOO_BASE}/v1/routes/{route.wahoo_route_id}"
@@ -140,6 +141,7 @@ async def push_route(route: Route, account: WahooAccount) -> str:
                 method,
                 url,
                 data=payload,
+                files=files,
                 headers={"Authorization": f"Bearer {account.access_token}"},
             )
             if response.status_code in (200, 201):

@@ -1,6 +1,5 @@
 """Wahoo service and endpoint tests with a mocked Wahoo Cloud API."""
 
-import base64
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -62,17 +61,20 @@ async def test_push_creates_route(wahoo_settings: None, snapshot: RouteResponse)
     wahoo_id = await wahoo.push_route(route, make_account())
 
     assert wahoo_id == "4242"
-    from urllib.parse import parse_qs
+    raw = create.calls[0].request.content
 
-    sent = {k: v[0] for k, v in parse_qs(create.calls[0].request.content.decode()).items()}
-    assert sent["route[external_id]"] == str(route.id)
-    assert sent["route[name]"] == "Canal loop"
-    assert sent["route[workout_type_family_id]"] == "0"
-    assert float(sent["route[start_lat]"]) == pytest.approx(53.7996)
-    assert float(sent["route[start_lng]"]) == pytest.approx(-1.5491)
-    assert sent["route[file]"].startswith("data:application/octet-stream;base64,")
-    fit_bytes = base64.b64decode(sent["route[file]"].split(",", 1)[1])
-    assert fit_bytes[8:12] == b".FIT"
+    def field(name: str) -> bytes:
+        return raw.split(f'name="{name}"\r\n\r\n'.encode(), 1)[1].split(b"\r\n", 1)[0]
+
+    assert field("route[external_id]") == str(route.id).encode()
+    assert field("route[name]") == b"Canal loop"
+    assert field("route[workout_type_family_id]") == b"0"
+    assert float(field("route[start_lat]")) == pytest.approx(53.7996)
+    assert float(field("route[start_lng]")) == pytest.approx(-1.5491)
+    # FIT file rides along as a multipart attachment named route.fit.
+    assert b'name="route[file]"; filename="route.fit"' in raw
+    fit_bytes = raw.split(b'filename="route.fit"', 1)[1]
+    assert b".FIT" in fit_bytes[:200]
 
 
 @respx.mock

@@ -87,9 +87,11 @@ yet.)
 - OAuth2 authorization-code flow against api.wahooligan.com.
 - Client ID/secret from env; access + refresh tokens stored per-user
   in Postgres, auto-refreshed.
-- Push = FIT course file (with course points), base64, POST
-  /v1/routes with external_id = our route UUID; updates reuse the
-  external_id.
+- Push = FIT course file (with course points) as a multipart upload
+  named route.fit (Wahoo validates by filename extension and rejects
+  the base64 data-URI form its docs describe), POST /v1/routes with
+  external_id = our route UUID plus required workout_type_family_id
+  and start_lat/start_lng; updates PUT /v1/routes/{id}.
 - Sandbox credentials during development; README documents developer
   app registration and notes production approval is only needed for
   third-party users.
