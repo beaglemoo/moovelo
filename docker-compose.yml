@@ -28,6 +28,7 @@ services:
     environment:
       VALHALLA_URL: http://valhalla:8002
       CORS_ORIGINS: http://localhost:5173
+      TILE_URL_CYCLOSM: ${TILE_URL_CYCLOSM:-}
     volumes:
       - ./backend/app:/app/app
     ports:
@@ -60,6 +61,7 @@ services:
       target: prod
     environment:
       VALHALLA_URL: http://valhalla:8002
+      TILE_URL_CYCLOSM: ${TILE_URL_CYCLOSM:-}
     ports:
       - "${APP_PORT:-17777}:17777"
     depends_on:

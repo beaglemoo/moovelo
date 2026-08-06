@@ -31,6 +31,20 @@ export interface RouteResponse {
 	elevation: ElevationPoint[];
 }
 
+export interface AppConfig {
+	tile_url_cyclosm: string | null;
+}
+
+export async function fetchConfig(): Promise<AppConfig> {
+	try {
+		const response = await fetch('/api/config');
+		if (!response.ok) return { tile_url_cyclosm: null };
+		return await response.json();
+	} catch {
+		return { tile_url_cyclosm: null };
+	}
+}
+
 export async function planRoute(
 	waypoints: Waypoint[],
 	preset: Preset,

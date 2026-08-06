@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { planRoute, type Preset, type RouteResponse, type Waypoint } from '$lib/api';
+	import { fetchConfig, planRoute, type Preset, type RouteResponse, type Waypoint } from '$lib/api';
 	import { cumulativeDistances, pointAtDistance } from '$lib/geo';
 	import { decodePolyline6 } from '$lib/polyline';
 	import ElevationProfile from '$lib/components/ElevationProfile.svelte';
@@ -12,8 +12,11 @@
 	let loading = $state(false);
 	let error: string | null = $state(null);
 	let hoverPoint: [number, number] | null = $state(null);
+	let config: { tile_url_cyclosm: string | null } | null = $state(null);
 
 	let abortController: AbortController | null = null;
+
+	fetchConfig().then((c) => (config = c));
 
 	const decodedLegs = $derived.by(() =>
 		route ? route.legs.map((leg) => decodePolyline6(leg.geometry)) : []
@@ -111,15 +114,18 @@
 
 <div class="app">
 	<div class="map-area">
-		<MapView
-			{waypoints}
-			{routeLine}
-			{legStartIndices}
-			{hoverPoint}
-			onAddWaypoint={addWaypoint}
-			onMoveWaypoint={moveWaypoint}
-			onInsertVia={insertVia}
-		/>
+		{#if config}
+			<MapView
+				{waypoints}
+				{routeLine}
+				{legStartIndices}
+				{hoverPoint}
+				cyclosmTileUrl={config.tile_url_cyclosm}
+				onAddWaypoint={addWaypoint}
+				onMoveWaypoint={moveWaypoint}
+				onInsertVia={insertVia}
+			/>
+		{/if}
 		<div class="toolbar">
 			<PresetSelector {preset} onChange={changePreset} />
 			<button type="button" onclick={undo} disabled={waypoints.length === 0}>Undo</button>
