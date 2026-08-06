@@ -46,6 +46,19 @@ export interface UserInfo {
 	is_admin: boolean;
 }
 
+export interface WahooState {
+	status: 'none' | 'queued' | 'pushing' | 'synced' | 'error';
+	error: string | null;
+	route_id: string | null;
+	pushed_at: string | null;
+}
+
+export interface WahooStatus {
+	configured: boolean;
+	connected: boolean;
+	athlete: { name: string } | null;
+}
+
 export interface RouteSummary {
 	id: string;
 	name: string;
@@ -53,6 +66,7 @@ export interface RouteSummary {
 	distance_m: number;
 	ascent_m: number;
 	updated_at: string;
+	wahoo: WahooState;
 }
 
 export interface SavedRoute extends RouteResponse {
@@ -61,6 +75,7 @@ export interface SavedRoute extends RouteResponse {
 	preset: Preset;
 	waypoints: Waypoint[];
 	updated_at: string;
+	wahoo: WahooState;
 }
 
 export class ApiError extends Error {
@@ -124,6 +139,14 @@ export const routes = {
 	remove: (id: string) => request<void>(`/api/routes/${id}`, { method: 'DELETE' }),
 	gpxUrl: (id: string) => `/api/routes/${id}/export.gpx`,
 	fitUrl: (id: string) => `/api/routes/${id}/export.fit`
+};
+
+export const wahoo = {
+	status: () => request<WahooStatus>('/api/wahoo/status'),
+	disconnect: () => request<{ status: string }>('/api/wahoo/disconnect', { method: 'POST' }),
+	push: (routeId: string) =>
+		request<RouteSummary>(`/api/wahoo/push/${routeId}`, { method: 'POST' }),
+	connectUrl: '/api/wahoo/connect'
 };
 
 export async function fetchConfig(): Promise<AppConfig> {
