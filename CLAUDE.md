@@ -10,8 +10,9 @@ a Docker-capable LXC/VM behind Caddy.
   right-click context menu), MapLibre/CyclOSM UI with OSM fallback
   toggle and optional self-hosted tiles, elevation profiles. Deployed
   dev (Mac) and prod (LXC behind Caddy).
-- Phase 2 in progress: Postgres/PostGIS + auth, route library,
-  GPX/FIT export.
+- Phase 2 complete: Postgres/PostGIS + auth (incl. optional OIDC SSO),
+  route library, GPX/FIT export with course points.
+- Phase 3 in progress: Wahoo Cloud API sync.
 
 ## MVP scope — build ONLY this
 
