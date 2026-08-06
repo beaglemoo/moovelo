@@ -258,12 +258,21 @@
 			});
 		};
 
+		// Waypoint markers sit on the route line and their DOM events bubble to
+		// the canvas container, so a press on a marker also hits route-hit -
+		// without these guards, right-clicking or dragging a marker inserts a
+		// phantom via point at that spot.
+		const onMarker = (e: maplibregl.MapMouseEvent | maplibregl.MapTouchEvent) =>
+			e.originalEvent.target instanceof Element &&
+			e.originalEvent.target.closest('.maplibregl-marker') !== null;
+
 		m.on('mousedown', 'route-hit', (e) => {
+			if (e.originalEvent.button !== 0 || onMarker(e)) return;
 			e.preventDefault();
 			startDrag(e.lngLat, 'mousemove', 'mouseup');
 		});
 		m.on('touchstart', 'route-hit', (e) => {
-			if (e.points.length !== 1) return;
+			if (e.points.length !== 1 || onMarker(e)) return;
 			e.preventDefault();
 			startDrag(e.lngLat, 'touchmove', 'touchend');
 		});
@@ -348,8 +357,11 @@
 	});
 
 	function menuAction(action: () => void) {
-		menu = null;
+		// Run the action before clearing the menu: the menu items capture
+		// template constants derived from `menu`, and nulling it first makes
+		// that read throw instead of running the action.
 		action();
+		menu = null;
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
