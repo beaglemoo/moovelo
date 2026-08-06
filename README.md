@@ -9,7 +9,7 @@ cues.
 
 - Click-to-plan routing: click the map to add waypoints, drag any waypoint
   marker to move it, or grab the route line itself and drag it to insert a
-  via point exactly where you drop it (komoot-style). Right-click for a
+  via point exactly where you drop it. Right-click for a
   context menu (route from here, add waypoint, route to here, remove).
 - Three bicycle presets - road, gravel, quiet - implemented as Valhalla
   costing bundles with genuinely different routing behavior (see
