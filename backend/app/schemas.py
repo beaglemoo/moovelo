@@ -143,6 +143,19 @@ class ElevationPoint(BaseModel):
     elev_m: float
 
 
+class RideTimePoint(BaseModel):
+    """Cumulative elapsed time to a distance along the route, at the
+    rider's effective flat speed adjusted for gradient and surface.
+
+    Computed on read from `services/ride_time.py`; never persisted, and
+    entirely separate from `duration_s`, which is Valhalla's own estimate
+    and drives FIT course-point timing and the Wahoo push payload.
+    """
+
+    dist_m: float
+    time_s: float
+
+
 class RouteLeg(BaseModel):
     # Encoded polyline6 for this leg; maneuvers reference shape indices within it.
     geometry: str
@@ -183,6 +196,10 @@ class RouteResponse(BaseModel):
     # matters for a RouteResponse built by hand (e.g. in a test) rather than
     # for anything actually read back out of the database.
     climbs: list[Climb] = []
+    # Computed on read from elevation + surface + the viewer's rider
+    # settings - never stored, so it is never part of a saved snapshot and
+    # a settings change is reflected immediately on every existing route.
+    ride_time: list[RideTimePoint] = []
 
 
 class RouteSaveRequest(BaseModel):

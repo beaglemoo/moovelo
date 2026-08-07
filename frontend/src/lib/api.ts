@@ -14,6 +14,15 @@ export interface ElevationPoint {
 	elev_m: number;
 }
 
+/** Cumulative elapsed time to a distance along the route, at the rider's
+ * effective flat speed adjusted for gradient and surface. Computed fresh on
+ * every read from the current settings - never stored - and unrelated to
+ * `duration_s`, which is the routing engine's own estimate. */
+export interface RideTimePoint {
+	dist_m: number;
+	time_s: number;
+}
+
 export interface Maneuver {
 	type: number;
 	instruction: string;
@@ -62,6 +71,9 @@ export interface RouteResponse {
 	/** Ordered by start_dist_m. Empty for snapshots stored before climb
 	 * detection shipped, and for routes with no detected climbs. */
 	climbs: Climb[];
+	/** Empty when there is no elevation to walk (e.g. no elevation tiles
+	 * built). Computed on read for the viewer's rider settings. */
+	ride_time: RideTimePoint[];
 }
 
 export interface AppConfig {

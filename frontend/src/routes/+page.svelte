@@ -573,7 +573,16 @@
 		<div class="panel">
 			<div class="stats">
 				<span><strong>{formatDistance(route.distance_m)}</strong></span>
-				<span>{formatDuration(route.duration_s)}</span>
+				<span title={route.ride_time.length ? 'Estimated for your rider profile' : undefined}>
+					{formatDuration(
+						route.ride_time.length
+							? route.ride_time[route.ride_time.length - 1].time_s
+							: route.duration_s
+					)}
+				</span>
+				{#if route.ride_time.length}
+					<a class="ride-time-link" href="/settings">rider profile</a>
+				{/if}
 				<span>↗ {Math.round(route.ascent_m)} m</span>
 				<span>↘ {Math.round(route.descent_m)} m</span>
 			</div>
@@ -785,5 +794,11 @@
 	.stats strong {
 		color: #073642;
 		font-size: 1.05rem;
+	}
+	.ride-time-link {
+		font-size: 0.8rem;
+		color: #268bd2;
+		align-self: center;
+		margin-left: -0.7rem;
 	}
 </style>

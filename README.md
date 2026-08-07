@@ -86,6 +86,13 @@ cues.
   its own smoothing pass over the noisy /height data. Climbs are listed
   beside the chart; hovering one highlights its stretch on both the chart
   and the map. More route intelligence (realistic ride time) is planned.
+- Realistic ride time: the planner's displayed time is a per-rider estimate
+  over gradient and surface, not Valhalla's flat routing duration. Set your
+  weight, flat-road speed and (optionally) FTP at /settings, and every
+  route - including ones already saved - shows a time for you. Computed
+  fresh on every read, so it never needs re-saving when your settings
+  change; the export/Wahoo-sync duration is untouched. More route
+  intelligence (gradient colouring, climb detection) is planned.
 
 ## Screenshots
 
@@ -165,8 +172,9 @@ All configuration is via environment variables, documented in
 
 Rider settings (weight, flat-road speed, optional FTP) are the first thing
 in this project configured in-app rather than by environment variable -
-per-user, at `/settings`. They currently just record the values; the
-ride-time estimate that consumes them is a later release.
+per-user, at `/settings`. They feed the realistic ride-time estimate (see
+[Route intelligence](#route-intelligence)) shown throughout the planner and
+library.
 
 ## Routing presets
 

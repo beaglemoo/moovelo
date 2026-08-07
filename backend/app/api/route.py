@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import DbDep, UserDep
+from app.api.routes import with_ride_time
 from app.config import settings
 from app.models import SearchIndexMeta
 from app.schemas import (
@@ -40,9 +41,12 @@ async def config(db: DbDep) -> AppConfig:
 
 
 @router.post("/route")
-async def plan_route(request: Request, body: RouteRequest, _user: UserDep) -> RouteResponse:
+async def plan_route(
+    request: Request, body: RouteRequest, db: DbDep, user: UserDep
+) -> RouteResponse:
     client: ValhallaClient = request.app.state.valhalla
-    return await client.route(body)
+    snapshot = await client.route(body)
+    return await with_ride_time(snapshot, db, user.id)
 
 
 class RouteSurfaceQuery(BaseModel):
