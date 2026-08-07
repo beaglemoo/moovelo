@@ -1,6 +1,9 @@
 import { routes, type Preset, type SavedRoute } from '$lib/api';
 
 export interface ImportResult {
+	/** Filenames repeat - two apps both export "route.gpx" - so rows need
+	 * an identity of their own to stay matched to the right file. */
+	id: number;
 	filename: string;
 	status: 'waiting' | 'importing' | 'done' | 'failed';
 	route?: SavedRoute;
@@ -24,6 +27,9 @@ function cueCount(route: SavedRoute): number {
 class ImportQueue {
 	results = $state<ImportResult[]>([]);
 	busy = $state(false);
+	/** Bumped when a batch finishes, so views can refresh themselves. */
+	completedBatches = $state(0);
+	#nextId = 1;
 
 	get imported(): SavedRoute[] {
 		return this.results.filter((r) => r.route).map((r) => r.route as SavedRoute);
@@ -45,7 +51,11 @@ class ImportQueue {
 		const start = this.results.length;
 		this.results = [
 			...this.results,
-			...incoming.map((file): ImportResult => ({ filename: file.name, status: 'waiting' }))
+			...incoming.map((file): ImportResult => ({
+				id: this.#nextId++,
+				filename: file.name,
+				status: 'waiting'
+			}))
 		];
 
 		this.busy = true;
@@ -65,6 +75,7 @@ class ImportQueue {
 			}
 		} finally {
 			this.busy = false;
+			this.completedBatches += 1;
 		}
 	}
 
