@@ -5,12 +5,17 @@
 	import { onMount } from 'svelte';
 	import type { PoiResult, Waypoint } from '$lib/api';
 	import { nearestVertexIndex } from '$lib/geo';
+	import { GRADIENT_BANDS, type GradientSegment } from '$lib/gradient';
 	import { colourExpression } from '$lib/pois';
 
 	interface Props {
 		waypoints: Waypoint[];
 		routeLine: [number, number][];
 		legStartIndices: number[];
+		/** Gradient-band segments to colour the route line by. Empty when the
+		 * route has no elevation - the line then falls back to the plain
+		 * colour rather than disappearing. */
+		gradientSegments?: GradientSegment[];
 		hoverPoint: [number, number] | null;
 		cyclosmTileUrl: string | null;
 		fitTrigger: number;
@@ -52,6 +57,7 @@
 		waypoints,
 		routeLine,
 		legStartIndices,
+		gradientSegments = [],
 		hoverPoint,
 		cyclosmTileUrl,
 		fitTrigger,
@@ -138,6 +144,49 @@
 
 	function lineGeoJSON(line: [number, number][]): Feature<LineString> {
 		return { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } };
+	}
+
+	// One feature per gradient segment, carrying its band index. With no
+	// segments (no elevation) the whole line is one feature with no `band`
+	// property, so the match expression below falls through to its default
+	// colour instead of the layer going empty.
+	function gradientGeoJSON(
+		segments: GradientSegment[],
+		line: [number, number][]
+	): FeatureCollection {
+		if (segments.length === 0) {
+			return {
+				type: 'FeatureCollection',
+				features:
+					line.length >= 2
+						? [
+								{
+									type: 'Feature',
+									properties: {},
+									geometry: { type: 'LineString', coordinates: line }
+								}
+							]
+						: []
+			};
+		}
+		return {
+			type: 'FeatureCollection',
+			features: segments.map((segment) => ({
+				type: 'Feature',
+				properties: { band: segment.band },
+				geometry: { type: 'LineString', coordinates: segment.coords }
+			}))
+		};
+	}
+
+	/** A MapLibre `match` expression colouring the route line by gradient
+	 * band, falling back to the plain route colour for the unbanded
+	 * (no-elevation) feature `gradientGeoJSON` emits above. */
+	function gradientColourExpression(): unknown[] {
+		const match: unknown[] = ['match', ['get', 'band']];
+		GRADIENT_BANDS.forEach((band, i) => match.push(i, band.colour));
+		match.push('#d33682');
+		return match;
 	}
 
 	function poiGeoJSON(list: PoiResult[]): FeatureCollection {
@@ -233,14 +282,22 @@
 					}
 				});
 			}
-			map.addSource('route', { type: 'geojson', data: lineGeoJSON([]) });
+			// The visible line is driven by its own gradient-coloured source;
+			// `route` stays a plain LineString because dragging and hit-testing
+			// (route-hit below) don't care about gradient bands.
+			map.addSource('route-gradient', { type: 'geojson', data: gradientGeoJSON([], []) });
 			map.addLayer({
 				id: 'route-line',
 				type: 'line',
-				source: 'route',
+				source: 'route-gradient',
 				layout: { 'line-cap': 'round', 'line-join': 'round' },
-				paint: { 'line-color': '#d33682', 'line-width': 4.5, 'line-opacity': 0.85 }
+				paint: {
+					'line-color': gradientColourExpression() as maplibregl.ExpressionSpecification,
+					'line-width': 4.5,
+					'line-opacity': 0.85
+				}
 			});
+			map.addSource('route', { type: 'geojson', data: lineGeoJSON([]) });
 			// Wide invisible twin of the route line so it is easy to grab.
 			map.addLayer({
 				id: 'route-hit',
@@ -552,6 +609,12 @@
 	$effect(() => {
 		if (!map || !mapReady) return;
 		setSourceData(map, 'route', lineGeoJSON(routeLine));
+	});
+
+	// Sync the gradient-coloured route line.
+	$effect(() => {
+		if (!map || !mapReady) return;
+		setSourceData(map, 'route-gradient', gradientGeoJSON(gradientSegments, routeLine));
 	});
 
 	// Sync the POI layer. Reading hoveredPoiId here as well as `pois` is
