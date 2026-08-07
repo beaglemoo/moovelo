@@ -170,7 +170,13 @@
 			container,
 			style: baseStyle(cyclosmTileUrl ? [cyclosmTileUrl] : PUBLIC_CYCLOSM_TILES),
 			center: [-1.4, 52.8],
-			zoom: 6.3
+			zoom: 6.3,
+			// Right-button drag rotates the map by default, and that gesture
+			// begins on the very press that opens our context menu - so the
+			// menu closed itself roughly one time in six. Right-click is a
+			// menu here, not a rotate. The compass control and two-finger
+			// touch rotation still work.
+			dragRotate: false
 		});
 		map.addControl(new maplibregl.NavigationControl(), 'top-right');
 		map.addControl(
@@ -346,7 +352,16 @@
 		m.on('touchend', cancelPress);
 		m.on('touchcancel', cancelPress);
 
-		m.on('movestart', () => (menu = null));
+		// Close the menu when the rider moves the map under it - but listen
+		// for the gestures, not `movestart`, which also fires when the map is
+		// merely resized. The panel below the map grows as a route is planned
+		// and again when its POIs arrive, and each of those resizes was
+		// closing a context menu the rider had just opened. That is the whole
+		// of the "sometimes the menu vanishes before you can click Remove"
+		// flake: it needed a resize to land in the gap after the right-click.
+		for (const gesture of ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart'] as const) {
+			m.on(gesture, () => (menu = null));
+		}
 
 		m.on('mouseenter', 'route-hit', () => (m.getCanvas().style.cursor = 'grab'));
 		m.on('mouseleave', 'route-hit', () => (m.getCanvas().style.cursor = ''));
