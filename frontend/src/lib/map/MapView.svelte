@@ -530,21 +530,22 @@
 	// gesture events the menu listens for. So the keys are handled here
 	// too, or a menu opened by right-click would sit at stale pixel
 	// coordinates over a map that has moved beneath it.
-	const PAN_KEYS = new Set([
-		'ArrowUp',
-		'ArrowDown',
-		'ArrowLeft',
-		'ArrowRight',
-		'PageUp',
-		'PageDown',
-		'+',
-		'=',
-		'-',
-		'_'
-	]);
+	// Exactly what MapLibre's KeyboardHandler binds - arrows to pan, +/-
+	// to zoom. PageUp and PageDown were in here and move nothing.
+	const PAN_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', '+', '=', '-', '_']);
 
 	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape' || PAN_KEYS.has(event.key)) menu = null;
+		if (event.key === 'Escape') {
+			menu = null;
+			return;
+		}
+		if (!PAN_KEYS.has(event.key)) return;
+		// Only when the keypress is actually going to the map. This listener
+		// is on the window, and MapLibre only pans when its canvas has
+		// focus - so without this check, arrowing down the place-search
+		// suggestions closed the context menu while the map sat still.
+		const target = event.target;
+		if (target instanceof Node && container?.contains(target)) menu = null;
 	}
 
 	// Sync route geometry.
