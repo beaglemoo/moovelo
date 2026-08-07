@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 import respx
 from httpx import AsyncClient
 
@@ -27,6 +28,11 @@ REVERSED_TRIP = {
 }
 
 WAYPOINTS = [{"lat": 53.7996, "lon": -1.5491}, {"lat": 53.785, "lon": -1.575}]
+
+TRACE_ATTRS_RESPONSE = {
+    "units": "kilometers",
+    "edges": [{"length": 1.93, "surface": "paved", "road_class": "residential", "use": "road"}],
+}
 
 
 def save_body(snapshot: RouteResponse, name: str = "Canal loop") -> dict[str, object]:
@@ -309,6 +315,7 @@ async def test_reverse_reroutes_rather_than_flipping_the_line(
     app.state.valhalla = ValhallaClient(base_url="http://valhalla.test")
     route_mock = respx.post("http://valhalla.test/route").respond(json=REVERSED_TRIP)
     respx.post("http://valhalla.test/height").respond(json={"range_height": [[0, 60.0]]})
+    respx.post("http://valhalla.test/trace_attributes").respond(json=TRACE_ATTRS_RESPONSE)
     await register(client)
     created = (await client.post("/api/routes", json=save_body(snapshot))).json()
 
@@ -323,6 +330,8 @@ async def test_reverse_reroutes_rather_than_flipping_the_line(
     ]
     assert reversed_route["name"] == "Canal loop (reversed)"
     assert reversed_route["id"] != created["id"]
+    # A fresh surface breakdown for the new direction, not copied over.
+    assert reversed_route["surface"]["total_m"] == pytest.approx(1930.0)
     # Non-destructive: the original is still there.
     assert len((await client.get("/api/routes")).json()) == 2
 

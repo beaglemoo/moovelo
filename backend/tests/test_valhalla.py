@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -14,6 +15,15 @@ from app.services.valhalla import ValhallaClient, ascent_descent
 BASE = "http://valhalla.test"
 
 SHAPE = [(53.7996, -1.5491), (53.8008, -1.5523), (53.7950, -1.5600)]
+
+FIXTURES = Path(__file__).parent / "fixtures"
+# A real edge_walk response: 133 edges over a 16.949 km route, captured
+# against the dev Valhalla. sum(edge.length) equals the route's exact
+# summary distance, including the boundary edges that carry
+# source_percent_along / target_percent_along.
+TRACE_ATTRS_REAL = json.loads((FIXTURES / "trace_attributes_real.json").read_text())
+# A real edge_walk 400: an unmatched track fails this by design.
+TRACE_ATTRS_FAIL = json.loads((FIXTURES / "trace_attributes_fail.json").read_text())
 
 TRIP_RESPONSE = {
     "trip": {
@@ -261,3 +271,148 @@ async def test_a_failed_final_chunk_still_leaves_an_arrival_cue() -> None:
 
     arrivals = [m for leg in result.legs for m in leg.maneuvers if int(m.get("type", 0)) == 4]
     assert len(arrivals) == 1
+
+
+@respx.mock
+async def test_trace_attributes_success_bucket_sums_are_exact() -> None:
+    mock = respx.post(f"{BASE}/trace_attributes").respond(json=TRACE_ATTRS_REAL)
+
+    client = ValhallaClient(base_url=BASE)
+    result = await client.trace_attributes(SHAPE, "road")
+
+    assert result is not None
+    edges = TRACE_ATTRS_REAL["edges"]
+    expected_surface: dict[str, float] = {}
+    expected_road_class: dict[str, float] = {}
+    expected_use: dict[str, float] = {}
+    expected_cycle_lane = 0.0
+    for edge in edges:
+        length_m = edge["length"] * 1000.0
+        expected_surface[edge["surface"]] = expected_surface.get(edge["surface"], 0.0) + length_m
+        expected_road_class[edge["road_class"]] = (
+            expected_road_class.get(edge["road_class"], 0.0) + length_m
+        )
+        expected_use[edge["use"]] = expected_use.get(edge["use"], 0.0) + length_m
+        if edge["cycle_lane"] != "none":
+            expected_cycle_lane += length_m
+
+    # The 133 real edges sum to exactly the route's 16.949 km summary
+    # distance, boundary edges included.
+    assert result.total_m == pytest.approx(16949.0)
+    assert result.surface_m == pytest.approx(expected_surface)
+    assert result.road_class_m == pytest.approx(expected_road_class)
+    assert result.use_m == pytest.approx(expected_use)
+    assert result.cycle_lane_m == pytest.approx(expected_cycle_lane)
+
+    sent = json.loads(mock.calls[0].request.content)
+    assert sent["shape_match"] == "edge_walk"
+    assert sent["costing"] == "bicycle"
+    assert sent["costing_options"]["bicycle"] == PRESETS["road"]
+    assert sent["filters"]["attributes"] == [
+        "edge.length",
+        "edge.surface",
+        "edge.road_class",
+        "edge.use",
+        "edge.cycle_lane",
+    ]
+
+
+@respx.mock
+async def test_trace_attributes_percent_along_edges_contribute_raw_length() -> None:
+    """source_percent_along and target_percent_along mark the first and last
+    edge of the whole trace, but the real fixture's edge lengths already sum
+    to the route's exact summary distance - Valhalla has accounted for the
+    partial edges - so these keys need no correction here."""
+    edges = TRACE_ATTRS_REAL["edges"]
+    boundary = [edges[0], edges[-1]]
+    assert "source_percent_along" in boundary[0]
+    assert "target_percent_along" in boundary[1]
+    respx.post(f"{BASE}/trace_attributes").respond(json={"units": "kilometers", "edges": boundary})
+
+    client = ValhallaClient(base_url=BASE)
+    result = await client.trace_attributes(SHAPE, "road")
+
+    assert result is not None
+    expected = (boundary[0]["length"] + boundary[1]["length"]) * 1000.0
+    assert result.total_m == pytest.approx(expected)
+
+
+@respx.mock
+async def test_trace_attributes_edge_walk_mismatch_returns_none() -> None:
+    """A real edge_walk 400: an unmatched track fails this by design and must
+    degrade silently rather than block saving the route."""
+    respx.post(f"{BASE}/trace_attributes").respond(status_code=400, json=TRACE_ATTRS_FAIL)
+
+    client = ValhallaClient(base_url=BASE)
+    result = await client.trace_attributes(SHAPE, "road")
+
+    assert result is None
+
+
+@respx.mock
+async def test_trace_attributes_unreachable_engine_returns_none() -> None:
+    """The opposite of trace_route's own unreachable-engine test
+    (test_an_unreachable_engine_still_fails_the_whole_trace): surface is
+    decorative and never touches FIT or export, so there is nothing here
+    worth retrying for."""
+    respx.post(f"{BASE}/trace_attributes").mock(side_effect=httpx.ConnectError("refused"))
+
+    client = ValhallaClient(base_url=BASE)
+    result = await client.trace_attributes(SHAPE, "road")
+
+    assert result is None
+
+
+@respx.mock
+async def test_trace_attributes_chunks_long_shapes_without_overlap() -> None:
+    edge = {
+        "length": 0.1,
+        "surface": "paved",
+        "road_class": "residential",
+        "use": "road",
+        "cycle_lane": "none",
+    }
+    mock = respx.post(f"{BASE}/trace_attributes").respond(
+        json={"units": "kilometers", "edges": [edge]}
+    )
+    long_shape = [(53.7996 + i * 0.0001, -1.5491) for i in range(2500)]
+
+    client = ValhallaClient(base_url=BASE)
+    result = await client.trace_attributes(long_shape, "road")
+
+    assert mock.call_count == 3
+    chunks_sent = [json.loads(call.request.content)["shape"] for call in mock.calls]
+    assert [len(c) for c in chunks_sent] == [1000, 1000, 500]
+    # Opposite of trace_route's chunking test: no point is shared between
+    # consecutive chunks, since only aggregate metres are accumulated here.
+    assert chunks_sent[0][-1] != chunks_sent[1][0]
+    assert sum(len(c) for c in chunks_sent) == len(long_shape)
+    assert result is not None
+    assert result.total_m == pytest.approx(100.0 * 3)
+
+
+@respx.mock
+async def test_trace_attributes_drops_a_trailing_single_point_chunk() -> None:
+    """A shape of exactly N*1000 + 1 points would otherwise end in a one-point
+    chunk, which Valhalla rejects with a 400 - and that one bad chunk would
+    null the surface for the whole route."""
+    edge = {
+        "length": 0.1,
+        "surface": "paved",
+        "road_class": "residential",
+        "use": "road",
+        "cycle_lane": "none",
+    }
+    mock = respx.post(f"{BASE}/trace_attributes").respond(
+        json={"units": "kilometers", "edges": [edge]}
+    )
+    long_shape = [(53.7996 + i * 0.0001, -1.5491) for i in range(2001)]
+
+    client = ValhallaClient(base_url=BASE)
+    result = await client.trace_attributes(long_shape, "road")
+
+    assert mock.call_count == 2
+    chunks_sent = [json.loads(call.request.content)["shape"] for call in mock.calls]
+    assert [len(c) for c in chunks_sent] == [1000, 1000]
+    assert result is not None
+    assert result.total_m == pytest.approx(100.0 * 2)

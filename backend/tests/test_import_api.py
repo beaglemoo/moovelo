@@ -49,6 +49,11 @@ TRACE_RESPONSE = {
 
 HEIGHT_RESPONSE = {"range_height": [[0, 55.0], [900, 63.0], [1930, 48.0]]}
 
+TRACE_ATTRS_RESPONSE = {
+    "units": "kilometers",
+    "edges": [{"length": 1.93, "surface": "paved", "road_class": "residential", "use": "road"}],
+}
+
 
 @pytest.fixture(autouse=True)
 def valhalla_client() -> None:
@@ -69,6 +74,7 @@ async def upload(http: AsyncClient, data: bytes = GPX, filename: str = "ride.gpx
 async def test_import_saves_a_matched_route_with_cues(client: AsyncClient) -> None:
     respx.post(f"{VALHALLA}/trace_route").respond(json=TRACE_RESPONSE)
     respx.post(f"{VALHALLA}/height").respond(json=HEIGHT_RESPONSE)
+    respx.post(f"{VALHALLA}/trace_attributes").respond(json=TRACE_ATTRS_RESPONSE)
     await register(client)
 
     response = await upload(client)
@@ -86,6 +92,7 @@ async def test_import_saves_a_matched_route_with_cues(client: AsyncClient) -> No
     # Only the endpoints - an imported line is not reconstructible from waypoints.
     assert len(route["waypoints"]) == 2
     assert route["waypoints"][0]["lat"] == pytest.approx(53.7996)
+    assert route["surface"]["total_m"] == pytest.approx(1930.0)
 
     listed = (await client.get("/api/routes")).json()
     assert [r["source"] for r in listed] == ["imported"]
@@ -97,6 +104,10 @@ async def test_unmatchable_track_is_kept_without_cues(client: AsyncClient) -> No
         status_code=400, json={"error": "No suitable edges near location"}
     )
     respx.post(f"{VALHALLA}/height").respond(json=HEIGHT_RESPONSE)
+    # An unmatched line fails edge_walk too, by the same design.
+    respx.post(f"{VALHALLA}/trace_attributes").respond(
+        status_code=400, json={"error": "edge_walk algorithm failed to find exact route match"}
+    )
     await register(client)
 
     response = await upload(client)
@@ -109,12 +120,15 @@ async def test_unmatchable_track_is_kept_without_cues(client: AsyncClient) -> No
     # Elevation falls back to the file's own values.
     assert [p["elev_m"] for p in route["elevation"]] == [55.0, 63.0, 48.0]
     assert route["ascent_m"] == pytest.approx(8.0)
+    # Surface degrades to null rather than blocking the import.
+    assert route["surface"] is None
 
 
 @respx.mock
 async def test_name_falls_back_to_the_filename(client: AsyncClient) -> None:
     respx.post(f"{VALHALLA}/trace_route").respond(json=TRACE_RESPONSE)
     respx.post(f"{VALHALLA}/height").respond(json=HEIGHT_RESPONSE)
+    respx.post(f"{VALHALLA}/trace_attributes").respond(json=TRACE_ATTRS_RESPONSE)
     await register(client)
 
     nameless = GPX.replace(b"<metadata><name>Canal towpath</name></metadata>", b"")
@@ -155,6 +169,9 @@ async def test_reverse_works_for_an_unmatched_import(client: AsyncClient) -> Non
         status_code=400, json={"error": "No suitable edges near location"}
     )
     respx.post(f"{VALHALLA}/height").respond(json=HEIGHT_RESPONSE)
+    respx.post(f"{VALHALLA}/trace_attributes").respond(
+        status_code=400, json={"error": "edge_walk algorithm failed to find exact route match"}
+    )
     await register(client)
     imported = (await upload(client)).json()
     assert imported["legs"][0]["maneuvers"] == []
