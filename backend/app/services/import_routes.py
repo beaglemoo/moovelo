@@ -7,6 +7,7 @@ that runs them in order and decides what to do when matching fails.
 from fastapi import HTTPException
 
 from app.schemas import ElevationPoint, Preset, RouteLeg, RouteResponse, Waypoint
+from app.services.climbs import detect_climbs
 from app.services.geo import Point, concat_shapes, cumulative_distances, resample_by_distance
 from app.services.importer import ImportedTrack, elevation_profile, parse_route_file
 from app.services.polyline import decode_polyline6, encode_polyline6
@@ -77,7 +78,12 @@ async def import_route(
         if profile:
             ascent, descent = ascent_descent(profile)
             snapshot = snapshot.model_copy(
-                update={"elevation": profile, "ascent_m": ascent, "descent_m": descent}
+                update={
+                    "elevation": profile,
+                    "ascent_m": ascent,
+                    "descent_m": descent,
+                    "climbs": detect_climbs(profile),
+                }
             )
 
     # Surface is decorative: an unmatched track fails edge_walk by design and

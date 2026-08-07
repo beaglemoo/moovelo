@@ -149,6 +149,23 @@ class RouteLeg(BaseModel):
     maneuvers: list[dict[str, Any]]
 
 
+class Climb(BaseModel):
+    """One climb detected by services/climbs.py, ordered by start_dist_m in
+    whatever list carries them - detect_climbs already returns them in
+    route order, so nothing here re-sorts."""
+
+    start_dist_m: float
+    end_dist_m: float
+    length_m: float
+    gain_m: float
+    avg_grade_pct: float
+    max_grade_pct: float
+    score: float
+    # HC, 1, 2, 3 or 4 - HC steepest/longest. A plain str rather than a
+    # Literal: CATEGORY_THRESHOLDS is the one place that enumerates them.
+    category: str
+
+
 class RouteResponse(BaseModel):
     legs: list[RouteLeg]
     distance_m: float
@@ -160,6 +177,12 @@ class RouteResponse(BaseModel):
     # route whose edge_walk match failed - parsing without a migration of
     # their own.
     surface: SurfaceBreakdown | None = None
+    # Empty default is what keeps snapshots stored before Phase 7's climb
+    # detection parsing without a migration of their own - unlike surface,
+    # the column itself is NOT NULL DEFAULT '[]', so this default only ever
+    # matters for a RouteResponse built by hand (e.g. in a test) rather than
+    # for anything actually read back out of the database.
+    climbs: list[Climb] = []
 
 
 class RouteSaveRequest(BaseModel):

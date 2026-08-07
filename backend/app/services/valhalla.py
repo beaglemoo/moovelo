@@ -16,6 +16,7 @@ from app.schemas import (
     RouteResponse,
     SurfaceBreakdown,
 )
+from app.services.climbs import detect_climbs
 from app.services.geo import (
     Point,
     concat_shapes,
@@ -89,6 +90,7 @@ class ValhallaClient:
             ascent_m=ascent,
             descent_m=descent,
             elevation=elevation,
+            climbs=detect_climbs(elevation),
         )
 
     async def trace_route(self, shape: list[Point], preset: Preset) -> RouteResponse:
@@ -163,6 +165,7 @@ class ValhallaClient:
             ascent_m=ascent,
             descent_m=descent,
             elevation=elevation,
+            climbs=detect_climbs(elevation),
         )
 
     async def _trace_chunk(self, chunk: list[Point], preset: Preset) -> dict[str, Any]:
