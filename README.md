@@ -17,7 +17,9 @@ cues.
 - Elevation profile under the map with total ascent/descent and a hover
   marker synced to the route.
 - Personal route library backed by Postgres/PostGIS: save, rename, reload,
-  and share routes.
+  and share routes, with tags, notes and favourites for organising them.
+  Tags rather than folders - a route can be both "gravel" and "with the
+  kids".
 - GPX and FIT export - the FIT files carry Valhalla's turn-by-turn
   maneuvers as course points, so a Wahoo ELEMNT shows cues on the ride.
 - Import GPX, TCX and FIT files - drop them anywhere in the app or use the
