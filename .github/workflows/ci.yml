@@ -40,6 +40,22 @@ jobs:
       - name: assert no skipped DB tests
         run: "! grep -q 'test postgres not reachable' /tmp/pytest.out"
 
+  indexer:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indexer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest -q
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
