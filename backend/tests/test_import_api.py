@@ -1,5 +1,6 @@
 """Importing a route file through the API."""
 
+import httpx
 import pytest
 import respx
 from httpx import AsyncClient
@@ -130,3 +131,35 @@ async def test_unreadable_file_is_rejected_with_a_usable_message(client: AsyncCl
 
 async def test_import_requires_authentication(client: AsyncClient) -> None:
     assert (await upload(client)).status_code == 401
+
+
+@respx.mock
+async def test_unreachable_routing_engine_is_retryable_not_a_silent_downgrade(
+    client: AsyncClient,
+) -> None:
+    """A 503 means try again later; storing a cueless route would make the
+    loss permanent even though the file would match fine once Valhalla is up."""
+    respx.post(f"{VALHALLA}/trace_route").mock(side_effect=httpx.ConnectError("refused"))
+    await register(client)
+
+    response = await upload(client)
+
+    assert response.status_code == 503
+    assert (await client.get("/api/routes")).json() == []
+
+
+@respx.mock
+async def test_reverse_works_for_an_unmatched_import(client: AsyncClient) -> None:
+    respx.post(f"{VALHALLA}/trace_route").respond(
+        status_code=400, json={"error": "No suitable edges near location"}
+    )
+    respx.post(f"{VALHALLA}/height").respond(json=HEIGHT_RESPONSE)
+    await register(client)
+    imported = (await upload(client)).json()
+    assert imported["legs"][0]["maneuvers"] == []
+
+    # Reverse must fall back the same way import did, rather than 422ing.
+    response = await client.post(f"/api/routes/{imported['id']}/reverse")
+
+    assert response.status_code == 201, response.text
+    assert response.json()["name"].endswith("(reversed)")
