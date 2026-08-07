@@ -152,11 +152,13 @@ class RideTimePoint(BaseModel):
 
     Computed on read from `services/ride_time.py`; never persisted, and
     entirely separate from `duration_s`, which is Valhalla's own estimate
-    and drives FIT course-point timing and the Wahoo push payload.
+    and drives FIT course-point timing and the Wahoo push payload. Also
+    accepted as client input by the weather endpoint (to time wind samples
+    to each point's arrival), hence the non-negative bounds.
     """
 
-    dist_m: float
-    time_s: float
+    dist_m: float = Field(ge=0)
+    time_s: float = Field(ge=0)
 
 
 class RouteLeg(BaseModel):
@@ -284,15 +286,6 @@ class SharedRoute(RouteResponse):
     name: str
     preset: str
     updated_at: datetime
-
-
-class RideTimePoint(BaseModel):
-    """One point of an optional ride-time profile, used to place each
-    weather sample's arrival more accurately than a flat average speed
-    would (e.g. slower on climbs)."""
-
-    dist_m: float = Field(ge=0)
-    time_s: float = Field(ge=0)
 
 
 class WeatherQuery(BaseModel):
