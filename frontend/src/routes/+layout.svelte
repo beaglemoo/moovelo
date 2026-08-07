@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { ApiError, auth, type UserInfo } from '$lib/api';
 	import { importQueue } from '$lib/import.svelte';
+	import { unsaved } from '$lib/unsaved.svelte';
 	import type { Snippet } from 'svelte';
 
 	let { children }: { children: Snippet } = $props();
@@ -34,6 +35,15 @@
 		dropping = false;
 		const files = [...(event.dataTransfer?.files ?? [])];
 		if (files.length === 0) return;
+		// Importing leaves the planner, so unsaved edits would vanish silently.
+		if (
+			unsaved.dirty &&
+			!confirm(
+				'You have unsaved changes to the route you are planning.\n\nImport anyway and lose them?'
+			)
+		) {
+			return;
+		}
 		await goto('/library');
 		await importQueue.add(files);
 	}

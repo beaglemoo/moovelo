@@ -16,6 +16,8 @@
 	import ElevationProfile from '$lib/components/ElevationProfile.svelte';
 	import PresetSelector from '$lib/components/PresetSelector.svelte';
 	import MapView from '$lib/map/MapView.svelte';
+	import { unsaved } from '$lib/unsaved.svelte';
+	import { onDestroy } from 'svelte';
 
 	let waypoints: Waypoint[] = $state([]);
 	let preset: Preset = $state('road');
@@ -72,6 +74,15 @@
 		wahooPush = 'error';
 		wahooPushError = 'Push is taking unusually long - check the library later';
 	}
+
+	// Published so the window-wide file drop in the layout can ask before
+	// navigating away from unsaved work.
+	$effect(() => {
+		unsaved.dirty = dirty && waypoints.length > 0;
+	});
+	onDestroy(() => {
+		unsaved.dirty = false;
+	});
 
 	// An imported route's line is the track that was uploaded; its waypoints
 	// are only the endpoints. Re-routing between them would throw the track
