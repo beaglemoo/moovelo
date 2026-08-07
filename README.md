@@ -76,9 +76,12 @@ cues.
   Valhalla's own per-edge data over the route's exact line. The honest
   answer to "will my road bike cope". Decorative rather than authoritative:
   it never blocks saving, exporting or pushing a route, and degrades
-  quietly when the line cannot be matched back onto the road network. More
-  route intelligence (gradient colouring, climb detection, realistic ride
-  time) is planned.
+  quietly when the line cannot be matched back onto the road network.
+- Gradient colouring: the elevation profile and the map route line are
+  coloured by gradient band (descent, 0-3, 3-6, 6-9, 9-12, 12%+), sharing
+  the same maths so a red stretch on the chart is the same red stretch on
+  the map. A route without elevation data keeps the plain line. More route
+  intelligence (climb detection, realistic ride time) is planned.
 
 ## Screenshots
 
