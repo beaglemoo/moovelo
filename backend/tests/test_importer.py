@@ -4,12 +4,16 @@ from pathlib import Path
 
 import pytest
 
+from app.services.geo import cumulative_distances
 from app.services.importer import (
+    MAX_ELEVATION_SAMPLES,
     MAX_FILE_BYTES,
     RouteImportError,
     detect_format,
+    elevation_profile,
     parse_route_file,
 )
+from app.services.valhalla import ascent_descent
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 
@@ -147,3 +151,49 @@ def test_partial_elevation_is_not_treated_as_elevation() -> None:
 def test_rejects_bad_files_with_a_usable_message(filename: str, data: bytes, message: str) -> None:
     with pytest.raises(RouteImportError, match=message):
         parse_route_file(filename, data)
+
+
+def test_elevation_profile_from_the_files_own_points() -> None:
+    track = parse_route_file("ride.gpx", GPX_TRACK)
+    profile = elevation_profile(track)
+    assert [p.elev_m for p in profile] == [128.0, 131.5, 140.0]
+    assert profile[0].dist_m == 0.0
+    assert profile[-1].dist_m > 0
+    assert ascent_descent(profile) == (pytest.approx(12.0), pytest.approx(0.0))
+
+
+def test_elevation_profile_is_scaled_onto_the_matched_distance() -> None:
+    track = parse_route_file("ride.gpx", GPX_TRACK)
+    raw = elevation_profile(track)
+    # Map matching moves the line onto roads, so the matched route is a
+    # different length and the profile has to stretch to match it.
+    scaled = elevation_profile(track, total_distance_m=raw[-1].dist_m * 2)
+    assert scaled[-1].dist_m == pytest.approx(raw[-1].dist_m * 2)
+    assert [p.elev_m for p in scaled] == [p.elev_m for p in raw]
+
+
+def test_elevation_profile_uses_only_the_points_that_have_elevation() -> None:
+    gpx = b"""<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
+      <trkpt lat="51.7955" lon="-0.6580"><ele>128.0</ele></trkpt>
+      <trkpt lat="51.7961" lon="-0.6572"/>
+      <trkpt lat="51.7970" lon="-0.6559"><ele>140.0</ele></trkpt>
+    </trkseg></trk></gpx>"""
+    profile = elevation_profile(parse_route_file("partial.gpx", gpx))
+    assert [p.elev_m for p in profile] == [128.0, 140.0]
+
+
+def test_elevation_profile_is_empty_without_elevation() -> None:
+    assert elevation_profile(parse_route_file("planned.gpx", GPX_ROUTE_V10)) == []
+
+
+def test_elevation_profile_is_capped() -> None:
+    points = "".join(
+        f'<trkpt lat="{51.79 + i * 0.0001:.6f}" lon="-0.658"><ele>{100 + i % 7}</ele></trkpt>'
+        for i in range(1500)
+    )
+    gpx = f'<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>{points}</trkseg></trk></gpx>'
+    track = parse_route_file("long.gpx", gpx.encode())
+    profile = elevation_profile(track)
+    assert len(profile) == MAX_ELEVATION_SAMPLES
+    assert profile[0].dist_m == 0.0
+    assert profile[-1].dist_m == pytest.approx(cumulative_distances(track.shape)[-1])
