@@ -27,10 +27,23 @@ SIMILARITY_THRESHOLD = 0.25
 TEXT_WEIGHT = 0.55
 IMPORTANCE_WEIGHT = 0.30
 PROXIMITY_WEIGHT = 0.15
-# Distance at which the proximity term halves. Small enough that the next
-# town over still counts as "here", large enough that it does not reduce
-# to a straight nearest-first sort.
-PROXIMITY_HALF_LIFE_M = 20_000.0
+# Distance at which the proximity term halves.
+#
+# Not "how local the search feels", which is how this was first reasoned
+# about and why it was originally set to 20 km. `1/(1 + d/H)` saturates at
+# both ends: far below H every candidate scores near 1, far above it every
+# candidate scores near 0, and in both cases proximity stops separating
+# anything. It discriminates over distances comparable to H - so H should
+# match the distances actually being compared, and "which of England's
+# several Newports did you mean" is a 50-200 km question.
+#
+# Measured over 60 of the most duplicated names from 4 map centres, by the
+# median distance of the top result: 154 km at H=5 km, 109 km at 20 km,
+# 80 km at 80 km, 91 km at 160 km, 110 km at 400 km. A clean U, minimum
+# around 80 km. Raising it to 80 km changed nothing at all across 30
+# unambiguous city queries, so the improvement is not bought by burying
+# obvious answers.
+PROXIMITY_HALF_LIFE_M = 80_000.0
 
 # An exact match beats a prefix match beats a fuzzy one. Deliberately
 # coarse: the point is to separate the tiers, and importance and distance
