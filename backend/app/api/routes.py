@@ -27,11 +27,13 @@ from app.services.fit import build_fit
 from app.services.geo import concat_shapes
 from app.services.gpx import build_gpx
 from app.services.import_routes import import_route, match_or_keep
-from app.services.importer import RouteImportError
+from app.services.importer import MAX_FILE_BYTES, RouteImportError
 from app.services.polyline import decode_polyline6
 from app.services.valhalla import ValhallaClient
 
 router = APIRouter(prefix="/api/routes")
+
+UPLOAD_CHUNK_BYTES = 64 * 1024
 
 
 def _slug(name: str) -> str:
@@ -125,8 +127,13 @@ async def list_routes(
     if q:
         # Notes are searched as well as names - recording "cafe at 12km" is
         # only useful if it can be found again.
-        pattern = f"%{q.strip()}%"
-        query = query.where(or_(Route.name.ilike(pattern), Route.notes.ilike(pattern)))
+        # Escape LIKE wildcards so a route named "50% gravel" is searchable
+        # and a bare "%" does not match everything.
+        escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+        query = query.where(
+            or_(Route.name.ilike(pattern, escape="\\"), Route.notes.ilike(pattern, escape="\\"))
+        )
     if tag:
         query = query.where(Route.tags.contains([tag]))
     if favourite is not None:
@@ -163,7 +170,7 @@ async def import_route_file(
     preset: Annotated[Preset, Form()] = "road",
 ) -> SavedRoute:
     """Import a GPX, TCX or FIT file as a saved route."""
-    data = await file.read()
+    data = await _read_capped(file)
     try:
         imported = await import_route(file.filename or "", data, preset, request.app.state.valhalla)
     except RouteImportError as exc:
@@ -181,6 +188,23 @@ async def import_route_file(
     await db.commit()
     await db.refresh(route)
     return _saved(route)
+
+
+async def _read_capped(file: UploadFile) -> bytes:
+    """Read an upload, giving up once it exceeds the import size limit.
+
+    Reading the whole body first would let a multi-gigabyte upload exhaust
+    memory before the limit was ever consulted.
+    """
+    buffer = bytearray()
+    while chunk := await file.read(UPLOAD_CHUNK_BYTES):
+        buffer.extend(chunk)
+        if len(buffer) > MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB.",
+            )
+    return bytes(buffer)
 
 
 def _clean_tags(tags: list[str]) -> list[str]:
@@ -261,6 +285,7 @@ def _copy_of(route: Route, name: str) -> Route:
         source=route.source,
         tags=list(route.tags),
         notes=route.notes,
+        is_favourite=route.is_favourite,
     )
 
 
