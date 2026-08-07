@@ -199,3 +199,46 @@ def test_resample_by_distance_keeps_both_ends() -> None:
 def test_resample_by_distance_passes_short_tracks_through() -> None:
     points = [(53.7996, -1.5491), (53.7997, -1.5492)]
     assert resample_by_distance(points, 15.0) == points
+
+
+@respx.mock
+async def test_chunk_boundaries_do_not_add_arrival_cues_mid_route() -> None:
+    """Every chunk is a trip, so every chunk ends in a destination maneuver -
+    but only the last one is a real arrival."""
+    respx.post(f"{BASE}/trace_route").respond(json=TRIP_RESPONSE)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+
+    long_track = [(53.7996 + i * 0.001, -1.5491) for i in range(2500)]
+    result = await ValhallaClient(base_url=BASE).trace_route(long_track, "road")
+
+    arrivals = [m for leg in result.legs for m in leg.maneuvers if int(m.get("type", 0)) == 4]
+    assert len(arrivals) == 1
+    assert result.legs[-1].maneuvers[-1]["type"] == 4
+
+
+@respx.mock
+async def test_one_unmatchable_chunk_keeps_the_rest_of_the_ride() -> None:
+    """Chunking exists so a failure costs one chunk, not the whole track."""
+    responses = [
+        httpx.Response(200, json=TRIP_RESPONSE),
+        httpx.Response(400, json={"error": "No suitable edges near location"}),
+        httpx.Response(200, json=TRIP_RESPONSE),
+    ]
+    respx.post(f"{BASE}/trace_route").mock(side_effect=responses)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+
+    long_track = [(53.7996 + i * 0.001, -1.5491) for i in range(2500)]
+    result = await ValhallaClient(base_url=BASE).trace_route(long_track, "road")
+
+    # Three legs: two matched with cues, one kept as a plain line.
+    assert len(result.legs) == 3
+    assert [bool(leg.maneuvers) for leg in result.legs] == [True, False, True]
+
+
+@respx.mock
+async def test_an_unreachable_engine_still_fails_the_whole_trace() -> None:
+    """A 5xx is retryable, so it must not be downgraded to a partial result."""
+    respx.post(f"{BASE}/trace_route").mock(side_effect=httpx.ConnectError("refused"))
+    with pytest.raises(HTTPException) as exc:
+        await ValhallaClient(base_url=BASE).trace_route(SHAPE, "road")
+    assert exc.value.status_code == 503
