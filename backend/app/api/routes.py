@@ -26,12 +26,14 @@ from app.schemas import (
 from app.services.fit import build_fit
 from app.services.geo import concat_shapes
 from app.services.gpx import build_gpx
-from app.services.import_routes import import_route
-from app.services.importer import RouteImportError
+from app.services.import_routes import import_route, match_or_keep
+from app.services.importer import MAX_FILE_BYTES, RouteImportError
 from app.services.polyline import decode_polyline6
 from app.services.valhalla import ValhallaClient
 
 router = APIRouter(prefix="/api/routes")
+
+UPLOAD_CHUNK_BYTES = 64 * 1024
 
 
 def _slug(name: str) -> str:
@@ -125,8 +127,13 @@ async def list_routes(
     if q:
         # Notes are searched as well as names - recording "cafe at 12km" is
         # only useful if it can be found again.
-        pattern = f"%{q.strip()}%"
-        query = query.where(or_(Route.name.ilike(pattern), Route.notes.ilike(pattern)))
+        # Escape LIKE wildcards so a route named "50% gravel" is searchable
+        # and a bare "%" does not match everything.
+        escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+        query = query.where(
+            or_(Route.name.ilike(pattern, escape="\\"), Route.notes.ilike(pattern, escape="\\"))
+        )
     if tag:
         query = query.where(Route.tags.contains([tag]))
     if favourite is not None:
@@ -163,7 +170,7 @@ async def import_route_file(
     preset: Annotated[Preset, Form()] = "road",
 ) -> SavedRoute:
     """Import a GPX, TCX or FIT file as a saved route."""
-    data = await file.read()
+    data = await _read_capped(file)
     try:
         imported = await import_route(file.filename or "", data, preset, request.app.state.valhalla)
     except RouteImportError as exc:
@@ -181,6 +188,23 @@ async def import_route_file(
     await db.commit()
     await db.refresh(route)
     return _saved(route)
+
+
+async def _read_capped(file: UploadFile) -> bytes:
+    """Read an upload, giving up once it exceeds the import size limit.
+
+    Reading the whole body first would let a multi-gigabyte upload exhaust
+    memory before the limit was ever consulted.
+    """
+    buffer = bytearray()
+    while chunk := await file.read(UPLOAD_CHUNK_BYTES):
+        buffer.extend(chunk)
+        if len(buffer) > MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB.",
+            )
+    return bytes(buffer)
 
 
 def _clean_tags(tags: list[str]) -> list[str]:
@@ -261,6 +285,7 @@ def _copy_of(route: Route, name: str) -> Route:
         source=route.source,
         tags=list(route.tags),
         notes=route.notes,
+        is_favourite=route.is_favourite,
     )
 
 
@@ -271,13 +296,7 @@ async def duplicate_route(route_id: uuid.UUID, db: DbDep, user: UserDep) -> Save
     on since the original was planned."""
     route = await get_owned_route(db, user, route_id)
     copy = _copy_of(route, _suffixed(route.name, " (copy)"))
-    copy.legs = route.legs
-    copy.elevation = route.elevation
-    copy.distance_m = route.distance_m
-    copy.duration_s = route.duration_s
-    copy.ascent_m = route.ascent_m
-    copy.descent_m = route.descent_m
-    copy.geom = _geom_wkt(RouteResponse(**_snapshot_fields(route)))
+    _apply_snapshot(copy, RouteResponse(**_snapshot_fields(route)))
     copy.waypoints = route.waypoints
     db.add(copy)
     await db.commit()
@@ -304,7 +323,10 @@ async def reverse_route(
         # itself and match it again in the new direction.
         shape = concat_shapes([decode_polyline6(RouteLeg(**leg).geometry) for leg in route.legs])
         shape.reverse()
-        snapshot = await valhalla.trace_route(shape, cast("Preset", route.preset))
+        # Same fallback as import: a track that could not be matched forwards
+        # will not match backwards either, and losing the ride is worse than
+        # losing its cues.
+        snapshot, _matched = await match_or_keep(shape, cast("Preset", route.preset), valhalla)
         waypoints = [
             {"lat": shape[0][0], "lon": shape[0][1]},
             {"lat": shape[-1][0], "lon": shape[-1][1]},

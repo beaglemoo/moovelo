@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cueCount, importQueue } from '$lib/import.svelte';
+	import { km } from '$lib/format';
 
 	const results = $derived(importQueue.results);
 </script>
@@ -13,7 +14,7 @@
 			{/if}
 		</div>
 		<ul>
-			{#each results as result (result.filename + result.status)}
+			{#each results as result (result.id)}
 				<li class={result.status}>
 					<span class="file">{result.filename}</span>
 					{#if result.status === 'waiting'}
@@ -25,7 +26,7 @@
 					{:else if result.route}
 						{@const cues = cueCount(result.route)}
 						<span class="detail">
-							{(result.route.distance_m / 1000).toFixed(1)} km ·
+							{km(result.route.distance_m)} ·
 							{Math.round(result.route.ascent_m)} m ascent ·
 							{#if cues > 0}
 								{cues} turn cues

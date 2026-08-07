@@ -6,10 +6,10 @@ import respx
 from fastapi import HTTPException
 
 from app.schemas import ElevationPoint, RouteRequest, Waypoint
-from app.services.geo import haversine, resample_by_distance
+from app.services.geo import evenly_sampled, haversine, resample_by_distance
 from app.services.polyline import encode_polyline6
 from app.services.presets import PRESETS
-from app.services.valhalla import ValhallaClient, _downsample, ascent_descent
+from app.services.valhalla import ValhallaClient, ascent_descent
 
 BASE = "http://valhalla.test"
 
@@ -94,9 +94,9 @@ async def test_height_failure_returns_route_without_profile() -> None:
     assert result.ascent_m == 0.0
 
 
-def test_downsample_limits_points() -> None:
+def test_evenly_sampled_limits_points() -> None:
     points = [(float(i), float(i)) for i in range(2000)]
-    sampled = _downsample(points, 500)
+    sampled = evenly_sampled(points, 500)
     assert len(sampled) == 500
     assert sampled[0] == points[0]
     assert sampled[-1] == points[-1]
@@ -199,3 +199,65 @@ def test_resample_by_distance_keeps_both_ends() -> None:
 def test_resample_by_distance_passes_short_tracks_through() -> None:
     points = [(53.7996, -1.5491), (53.7997, -1.5492)]
     assert resample_by_distance(points, 15.0) == points
+
+
+@respx.mock
+async def test_chunk_boundaries_do_not_add_arrival_cues_mid_route() -> None:
+    """Every chunk is a trip, so every chunk ends in a destination maneuver -
+    but only the last one is a real arrival."""
+    respx.post(f"{BASE}/trace_route").respond(json=TRIP_RESPONSE)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+
+    long_track = [(53.7996 + i * 0.001, -1.5491) for i in range(2500)]
+    result = await ValhallaClient(base_url=BASE).trace_route(long_track, "road")
+
+    arrivals = [m for leg in result.legs for m in leg.maneuvers if int(m.get("type", 0)) == 4]
+    assert len(arrivals) == 1
+    assert result.legs[-1].maneuvers[-1]["type"] == 4
+
+
+@respx.mock
+async def test_one_unmatchable_chunk_keeps_the_rest_of_the_ride() -> None:
+    """Chunking exists so a failure costs one chunk, not the whole track."""
+    responses = [
+        httpx.Response(200, json=TRIP_RESPONSE),
+        httpx.Response(400, json={"error": "No suitable edges near location"}),
+        httpx.Response(200, json=TRIP_RESPONSE),
+    ]
+    respx.post(f"{BASE}/trace_route").mock(side_effect=responses)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+
+    long_track = [(53.7996 + i * 0.001, -1.5491) for i in range(2500)]
+    result = await ValhallaClient(base_url=BASE).trace_route(long_track, "road")
+
+    # Three legs: two matched with cues, one kept as a plain line.
+    assert len(result.legs) == 3
+    assert [bool(leg.maneuvers) for leg in result.legs] == [True, False, True]
+
+
+@respx.mock
+async def test_an_unreachable_engine_still_fails_the_whole_trace() -> None:
+    """A 5xx is retryable, so it must not be downgraded to a partial result."""
+    respx.post(f"{BASE}/trace_route").mock(side_effect=httpx.ConnectError("refused"))
+    with pytest.raises(HTTPException) as exc:
+        await ValhallaClient(base_url=BASE).trace_route(SHAPE, "road")
+    assert exc.value.status_code == 503
+
+
+@respx.mock
+async def test_a_failed_final_chunk_still_leaves_an_arrival_cue() -> None:
+    """Destinations are stripped from every chunk but the last that matched,
+    so a route whose final stretch could not be matched still ends properly."""
+    responses = [
+        httpx.Response(200, json=TRIP_RESPONSE),
+        httpx.Response(200, json=TRIP_RESPONSE),
+        httpx.Response(400, json={"error": "No suitable edges near location"}),
+    ]
+    respx.post(f"{BASE}/trace_route").mock(side_effect=responses)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+
+    long_track = [(53.7996 + i * 0.001, -1.5491) for i in range(2500)]
+    result = await ValhallaClient(base_url=BASE).trace_route(long_track, "road")
+
+    arrivals = [m for leg in result.legs for m in leg.maneuvers if int(m.get("type", 0)) == 4]
+    assert len(arrivals) == 1

@@ -117,6 +117,59 @@ def _roundabout_name(enter: dict[str, Any], exit_maneuver: dict[str, Any] | None
     return f"{exit_label} onto {streets[0]}" if streets else exit_label
 
 
+def _leg_offsets(shapes: list[list[Point]]) -> list[int]:
+    """Index in the merged shape where each leg starts.
+
+    Mirrors how build_fit concatenates the legs: a boundary vertex is only
+    dropped when the two endpoints are identical, which independently matched
+    trace chunks are not guaranteed to be.
+    """
+    offsets: list[int] = []
+    length = 0
+    previous_end: Point | None = None
+    for shape in shapes:
+        shares_vertex = previous_end is not None and bool(shape) and shape[0] == previous_end
+        offsets.append(length - 1 if shares_vertex else length)
+        length += len(shape) - 1 if shares_vertex else len(shape)
+        if shape:
+            previous_end = shape[-1]
+    return [max(offset, 0) for offset in offsets]
+
+
+def _paired_exit(
+    flat: list[tuple[dict[str, Any], int]], enter_position: int
+) -> dict[str, Any] | None:
+    """The exit belonging to the roundabout entered at `enter_position`.
+
+    Bounded by the next roundabout: if this one's exit is missing - a trace
+    chunk can end mid-roundabout - folding against a later roundabout's exit
+    would name the wrong road and give the wrong direction.
+    """
+    for maneuver, _ in flat[enter_position + 1 :]:
+        m_type = int(maneuver.get("type", 0))
+        if m_type == ROUNDABOUT_EXIT:
+            return maneuver
+        if m_type == ROUNDABOUT_ENTER:
+            return None
+    return None
+
+
+def _folded_roundabout_exits(flat: list[tuple[dict[str, Any], int]]) -> set[int]:
+    """Positions of exits already accounted for by their enter maneuver."""
+    folded: set[int] = set()
+    for position, (maneuver, _) in enumerate(flat):
+        if int(maneuver.get("type", 0)) != ROUNDABOUT_ENTER:
+            continue
+        for offset in range(position + 1, len(flat)):
+            m_type = int(flat[offset][0].get("type", 0))
+            if m_type == ROUNDABOUT_EXIT:
+                folded.add(offset)
+                break
+            if m_type == ROUNDABOUT_ENTER:
+                break
+    return folded
+
+
 def _course_points(
     legs: list[RouteLeg],
     shapes: list[list[Point]],
@@ -127,46 +180,38 @@ def _course_points(
     base_ms: int,
 ) -> list[CoursePointMessage]:
     messages: list[CoursePointMessage] = []
-    leg_offset = 0
-    for leg, shape in zip(legs, shapes, strict=True):
-        folded_exit = False
-        for position, maneuver in enumerate(leg.maneuvers):
-            m_type = int(maneuver.get("type", 0))
-            if m_type in SKIPPED_MANEUVER_TYPES:
-                continue
-            # The exit of a roundabout we already emitted as a single turn.
-            if m_type == ROUNDABOUT_EXIT and folded_exit:
-                folded_exit = False
-                continue
-            folded_exit = False
-            if m_type == ROUNDABOUT_ENTER:
-                exit_maneuver = next(
-                    (
-                        m
-                        for m in leg.maneuvers[position + 1 :]
-                        if int(m.get("type", 0)) == ROUNDABOUT_EXIT
-                    ),
-                    None,
-                )
-                folded_exit = exit_maneuver is not None
-                point_type = _roundabout_point(maneuver, exit_maneuver)
-                label = _roundabout_name(maneuver, exit_maneuver)
-            else:
-                point_type = MANEUVER_TYPE_MAP.get(m_type, CoursePoint.GENERIC)
-                label = str(maneuver.get("instruction", ""))
+    # Flattened first, because a roundabout can straddle a leg boundary when a
+    # waypoint sits on it: the enter maneuver ends one leg and the exit starts
+    # the next. Folding per-leg would miss those and emit two vague cues.
+    flat: list[tuple[dict[str, Any], int]] = []
+    for offset, leg in zip(_leg_offsets(shapes), legs, strict=True):
+        for maneuver in leg.maneuvers:
             begin_index: int = maneuver.get("begin_shape_index", 0)
-            # Legs share boundary vertices, so the concatenated index for a
-            # leg-local shape index is offset by len(shape)-1 per prior leg.
-            index = min(leg_offset + begin_index, len(merged) - 1)
-            point = CoursePointMessage()
-            point.timestamp = base_ms + _time_offset_ms(dists[index], total_dist, duration_s)
-            point.position_lat = merged[index][0]
-            point.position_long = merged[index][1]
-            point.distance = dists[index]
-            point.type = point_type
-            point.course_point_name = label[:COURSE_POINT_NAME_MAX]
-            messages.append(point)
-        leg_offset += max(len(shape) - 1, 0)
+            flat.append((maneuver, min(offset + begin_index, len(merged) - 1)))
+
+    # Identified by position rather than a running flag: Valhalla puts a
+    # destination maneuver between the two halves of a roundabout that a
+    # waypoint sits on, and any flag would be cleared by it.
+    folded_exits = _folded_roundabout_exits(flat)
+    for position, (maneuver, index) in enumerate(flat):
+        m_type = int(maneuver.get("type", 0))
+        if m_type in SKIPPED_MANEUVER_TYPES or position in folded_exits:
+            continue
+        if m_type == ROUNDABOUT_ENTER:
+            exit_maneuver = _paired_exit(flat, position)
+            point_type = _roundabout_point(maneuver, exit_maneuver)
+            label = _roundabout_name(maneuver, exit_maneuver)
+        else:
+            point_type = MANEUVER_TYPE_MAP.get(m_type, CoursePoint.GENERIC)
+            label = str(maneuver.get("instruction", ""))
+        point = CoursePointMessage()
+        point.timestamp = base_ms + _time_offset_ms(dists[index], total_dist, duration_s)
+        point.position_lat = merged[index][0]
+        point.position_long = merged[index][1]
+        point.distance = dists[index]
+        point.type = point_type
+        point.course_point_name = label[:COURSE_POINT_NAME_MAX]
+        messages.append(point)
     return messages
 
 

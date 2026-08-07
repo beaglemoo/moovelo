@@ -7,7 +7,7 @@ that runs them in order and decides what to do when matching fails.
 from fastapi import HTTPException
 
 from app.schemas import ElevationPoint, Preset, RouteLeg, RouteResponse, Waypoint
-from app.services.geo import cumulative_distances, resample_by_distance
+from app.services.geo import Point, cumulative_distances, resample_by_distance
 from app.services.importer import ImportedTrack, elevation_profile, parse_route_file
 from app.services.polyline import encode_polyline6
 from app.services.valhalla import TRACE_SPACING_M, ValhallaClient, ascent_descent
@@ -41,6 +41,28 @@ class ImportedRoute:
         return sum(len(leg.maneuvers) for leg in self.snapshot.legs)
 
 
+async def match_or_keep(
+    shape: list[Point], preset: Preset, valhalla: ValhallaClient
+) -> tuple[RouteResponse, bool]:
+    """Map match a track, falling back to keeping it unmatched.
+
+    Shared by import and reverse so both treat an unmatchable track the same
+    way. A track may leave the map extract or follow paths the routing graph
+    does not have: the ride still exists, so keep the line and lose only the
+    turn cues.
+
+    A routing engine that is unreachable or still building tiles is a
+    different thing entirely - that is retryable, and silently storing a
+    cueless route would make the loss permanent - so 5xx propagates.
+    """
+    try:
+        return await valhalla.trace_route(shape, preset), True
+    except HTTPException as exc:
+        if exc.status_code >= 500:
+            raise
+        return _unmatched_snapshot(shape), False
+
+
 async def import_route(
     filename: str, data: bytes, preset: Preset, valhalla: ValhallaClient
 ) -> ImportedRoute:
@@ -48,15 +70,7 @@ async def import_route(
     file itself is unusable; a file that parses but cannot be matched is kept
     as an unmatched track rather than rejected."""
     track = parse_route_file(filename, data)
-    try:
-        snapshot = await valhalla.trace_route(track.shape, preset)
-        matched = True
-    except HTTPException:
-        # The track may leave the map extract, or follow paths the routing
-        # graph does not have. The ride still exists, so keep the line and
-        # lose only the turn cues.
-        snapshot = _unmatched_snapshot(track)
-        matched = False
+    snapshot, matched = await match_or_keep(track.shape, preset, valhalla)
 
     if not snapshot.elevation:
         profile = elevation_profile(track, snapshot.distance_m)
@@ -68,8 +82,8 @@ async def import_route(
     return ImportedRoute(track, snapshot, matched)
 
 
-def _unmatched_snapshot(track: ImportedTrack) -> RouteResponse:
-    shape = resample_by_distance(track.shape, TRACE_SPACING_M)
+def _unmatched_snapshot(track_shape: list[Point]) -> RouteResponse:
+    shape = resample_by_distance(track_shape, TRACE_SPACING_M)
     distance_m = cumulative_distances(shape)[-1]
     profile: list[ElevationPoint] = []
     return RouteResponse(

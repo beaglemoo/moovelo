@@ -163,3 +163,95 @@ def test_roundabout_exit_without_an_enter_still_produces_a_cue() -> None:
     points = course_points_for([ROUNDABOUT_EXIT])
     assert len(points) == 1
     assert points[0].course_point_name.startswith("Exit the roundabout")
+
+
+def test_roundabout_spanning_a_leg_boundary_is_still_one_cue() -> None:
+    """A via point on a roundabout splits enter and exit across legs.
+
+    Valhalla ends the first leg with a destination maneuver and starts the
+    next with a start maneuver, so the two halves are not adjacent - the
+    fixture has to include them or it tests something that never happens.
+    """
+    shape_a = [(53.7996 + i * 0.001, -1.5491) for i in range(3)]
+    shape_b = [(53.7996 + i * 0.001, -1.5491) for i in range(2, 5)]
+    legs = [
+        {
+            "geometry": encode_polyline6(shape_a),
+            "maneuvers": [
+                ROUNDABOUT_ENTER,
+                {"type": 4, "instruction": "You have arrived.", "begin_shape_index": 2},
+            ],
+        },
+        {
+            "geometry": encode_polyline6(shape_b),
+            "maneuvers": [
+                {"type": 1, "instruction": "Ride north.", "begin_shape_index": 0},
+                {**ROUNDABOUT_EXIT, "begin_shape_index": 0},
+            ],
+        },
+    ]
+    elevation = [{"dist_m": 0.0, "elev_m": 50.0}, {"dist_m": 500.0, "elev_m": 60.0}]
+    fit = build_fit("Split roundabout", legs, elevation, 600.0, BASE_TIME)
+    points = [
+        record.message
+        for record in FitFile.from_bytes(fit).records
+        if isinstance(record.message, CoursePointMessage)
+    ]
+    # One roundabout cue, and no leftover "Exit the roundabout" beside it.
+    assert [p.course_point_name for p in points] == [
+        "3rd exit onto Bulbourne Road",
+        "You have arrived.",
+    ]
+    assert points[0].type == CoursePoint.RIGHT.value
+
+
+def test_a_roundabout_without_its_exit_does_not_borrow_the_next_ones() -> None:
+    """A trace chunk can end mid-roundabout, leaving an enter with no exit."""
+    second_enter = {
+        **ROUNDABOUT_ENTER,
+        "begin_shape_index": 3,
+        "roundabout_exit_count": 1,
+        "instruction": "Enter the roundabout and take the 1st exit onto Mill Lane.",
+    }
+    second_exit = {
+        **ROUNDABOUT_EXIT,
+        "begin_shape_index": 4,
+        "begin_street_names": ["Mill Lane"],
+    }
+    points = course_points_for([ROUNDABOUT_ENTER, second_enter, second_exit])
+    # The first roundabout has no exit of its own, so it must not take the
+    # second one's street name or direction.
+    assert [p.course_point_name for p in points] == [
+        "3rd exit",
+        "1st exit onto Mill Lane",
+    ]
+
+
+def test_course_points_stay_aligned_when_legs_do_not_share_a_vertex() -> None:
+    """Independently matched trace chunks need not meet at an identical point."""
+    shape_a = [(53.7996 + i * 0.001, -1.5491) for i in range(3)]
+    shape_b = [(53.8100 + i * 0.001, -1.5491) for i in range(3)]
+    legs = [
+        {
+            "geometry": encode_polyline6(shape_a),
+            "maneuvers": [{"type": 10, "instruction": "Turn right.", "begin_shape_index": 1}],
+        },
+        {
+            "geometry": encode_polyline6(shape_b),
+            "maneuvers": [{"type": 15, "instruction": "Turn left.", "begin_shape_index": 2}],
+        },
+    ]
+    fit = build_fit(
+        "Disjoint legs",
+        legs,
+        [{"dist_m": 0.0, "elev_m": 50.0}, {"dist_m": 5000.0, "elev_m": 60.0}],
+        600.0,
+        BASE_TIME,
+    )
+    decoded = FitFile.from_bytes(fit)
+    points = [r.message for r in decoded.records if isinstance(r.message, CoursePointMessage)]
+    records = [r.message for r in decoded.records if isinstance(r.message, RecordMessage)]
+    # Six vertices survive (nothing deduplicated), and the last cue sits on the
+    # final vertex rather than one short of it.
+    assert len(records) == 6
+    assert points[-1].distance == pytest.approx(records[-1].distance)

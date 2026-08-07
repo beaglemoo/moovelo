@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { routes, wahoo, type RouteQuery, type RouteSummary, type WahooStatus } from '$lib/api';
 	import ImportResults from '$lib/components/ImportResults.svelte';
+	import { km } from '$lib/format';
 	import { ACCEPTED_FILES, importQueue } from '$lib/import.svelte';
 	import { onDestroy } from 'svelte';
 
@@ -13,8 +14,19 @@
 		await importQueue.add(input.files);
 		// Let the same file be picked again after a failed attempt.
 		input.value = '';
-		await refresh();
 	}
+
+	// Imports also start from the window-wide drop target in the layout, so
+	// the list refreshes on the queue finishing rather than on this page
+	// having been the thing that started it.
+	let seenBatch = 0;
+	$effect(() => {
+		const batch = importQueue.completedBatches;
+		if (batch !== seenBatch) {
+			seenBatch = batch;
+			void refresh();
+		}
+	});
 
 	let items: RouteSummary[] = $state([]);
 	let loaded = $state(false);
@@ -65,6 +77,7 @@
 	}
 	onDestroy(() => {
 		if (pollTimer) clearTimeout(pollTimer);
+		if (searchTimer) clearTimeout(searchTimer);
 	});
 
 	async function sendToWahoo(item: RouteSummary) {
@@ -104,10 +117,6 @@
 		}
 	}
 
-	function km(m: number): string {
-		return `${(m / 1000).toFixed(1)} km`;
-	}
-
 	function formatDate(iso: string): string {
 		return new Date(iso).toLocaleDateString(undefined, {
 			day: 'numeric',
@@ -130,8 +139,14 @@
 	}
 
 	async function toggleFavourite(item: RouteSummary) {
-		const updated = await routes.update(item.id, { is_favourite: !item.is_favourite });
-		items = items.map((r) => (r.id === item.id ? { ...r, is_favourite: updated.is_favourite } : r));
+		try {
+			const updated = await routes.update(item.id, { is_favourite: !item.is_favourite });
+			items = items.map((r) =>
+				r.id === item.id ? { ...r, is_favourite: updated.is_favourite } : r
+			);
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Could not update that route';
+		}
 	}
 
 	let taggingId: string | null = $state(null);
@@ -152,9 +167,15 @@
 			.split(',')
 			.map((t) => t.trim())
 			.filter(Boolean);
-		const updated = await routes.update(id, { tags });
-		items = items.map((r) => (r.id === id ? { ...r, tags: updated.tags } : r));
-		allTags = await routes.tags();
+		try {
+			const updated = await routes.update(id, { tags });
+			items = items.map((r) => (r.id === id ? { ...r, tags: updated.tags } : r));
+			allTags = await routes.tags();
+		} catch (err) {
+			// Put the edit back in the box rather than losing what was typed.
+			taggingId = id;
+			error = err instanceof Error ? err.message : 'Could not save those tags';
+		}
 	}
 
 	let working: string | null = $state(null);

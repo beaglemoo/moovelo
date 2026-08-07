@@ -1,5 +1,6 @@
 """Client for the Valhalla routing engine: /route, /trace_route and /height."""
 
+import asyncio
 import contextlib
 from typing import Any
 
@@ -8,8 +9,14 @@ from fastapi import HTTPException
 
 from app.config import settings
 from app.schemas import ElevationPoint, Preset, RouteLeg, RouteRequest, RouteResponse
-from app.services.geo import Point, concat_shapes, resample_by_distance
-from app.services.polyline import decode_polyline6
+from app.services.geo import (
+    Point,
+    concat_shapes,
+    cumulative_distances,
+    evenly_sampled,
+    resample_by_distance,
+)
+from app.services.polyline import decode_polyline6, encode_polyline6
 from app.services.presets import PRESETS
 
 MAX_ELEVATION_SAMPLES = 500
@@ -20,6 +27,14 @@ MAX_ELEVATION_SAMPLES = 500
 # chunk of it.
 TRACE_SPACING_M = 15.0
 TRACE_MAX_POINTS = 1000
+
+# Valhalla ends every trip with a destination maneuver. A chunk is a piece of
+# one ride, so every chunk but the last would contribute a spurious "you have
+# arrived" cue partway along.
+DESTINATION_MANEUVERS = {4, 5, 6}
+
+# Only used to give an unmatched chunk a plausible duration, in metres/second.
+FALLBACK_SPEED_MS = 5.0
 
 
 class ValhallaClient:
@@ -81,22 +96,55 @@ class ValhallaClient:
         if len(thinned) < 2:
             raise HTTPException(status_code=422, detail="Track is too short to match to roads.")
 
+        # Chunks are independent, so request them together and join the
+        # results in order afterwards: a long track otherwise waits for the
+        # sum of every round trip rather than the slowest one.
+        chunks = _chunks(thinned, TRACE_MAX_POINTS)
+        results = await asyncio.gather(
+            *(self._trace_chunk(chunk, preset) for chunk in chunks),
+            return_exceptions=True,
+        )
+        outcomes: list[dict[str, Any] | HTTPException] = []
+        for result in results:
+            # An unreachable engine is retryable, so it must not be quietly
+            # downgraded into a partly-cueless route.
+            if isinstance(result, BaseException) and (
+                not isinstance(result, HTTPException) or result.status_code >= 500
+            ):
+                raise result
+            outcomes.append(result)
+
+        # A track that matched nowhere is unmatchable, and the caller decides
+        # what to do with it. Only a partial failure is worth salvaging here.
+        failures = [o for o in outcomes if isinstance(o, HTTPException)]
+        if len(failures) == len(outcomes):
+            raise failures[0]
+
         legs: list[RouteLeg] = []
         distance_m = duration_s = 0.0
-        for chunk in _chunks(thinned, TRACE_MAX_POINTS):
-            payload: dict[str, Any] = {
-                "shape": [{"lat": lat, "lon": lon} for lat, lon in chunk],
-                "shape_match": "map_snap",
-                "costing": "bicycle",
-                "costing_options": {"bicycle": PRESETS[preset]},
-                "units": "kilometers",
-            }
-            trip = (await self._post("/trace_route", payload))["trip"]
-            legs.extend(
-                RouteLeg(geometry=leg["shape"], maneuvers=leg["maneuvers"]) for leg in trip["legs"]
-            )
-            distance_m += trip["summary"]["length"] * 1000.0
-            duration_s += trip["summary"]["time"]
+        # Keyed off the last chunk that actually matched, not the last chunk:
+        # if the final stretch failed to match it contributes no maneuvers, so
+        # stripping the previous chunk's destination would leave the whole
+        # route with no arrival cue at all.
+        last = max(i for i, o in enumerate(outcomes) if not isinstance(o, HTTPException))
+        for position, (chunk, result) in enumerate(zip(chunks, outcomes, strict=True)):
+            if isinstance(result, HTTPException):
+                # Keep the stretch this chunk covers instead of discarding
+                # every chunk that did match - the point of chunking.
+                length = cumulative_distances(chunk)[-1]
+                legs.append(RouteLeg(geometry=encode_polyline6(chunk), maneuvers=[]))
+                distance_m += length
+                duration_s += length / FALLBACK_SPEED_MS
+                continue
+            for leg in result["legs"]:
+                maneuvers = leg["maneuvers"]
+                if position != last:
+                    maneuvers = [
+                        m for m in maneuvers if int(m.get("type", 0)) not in DESTINATION_MANEUVERS
+                    ]
+                legs.append(RouteLeg(geometry=leg["shape"], maneuvers=maneuvers))
+            distance_m += result["summary"]["length"] * 1000.0
+            duration_s += result["summary"]["time"]
 
         matched = concat_shapes([decode_polyline6(leg.geometry) for leg in legs])
         elevation = await self._elevation_profile(matched)
@@ -110,8 +158,19 @@ class ValhallaClient:
             elevation=elevation,
         )
 
+    async def _trace_chunk(self, chunk: list[Point], preset: Preset) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "shape": [{"lat": lat, "lon": lon} for lat, lon in chunk],
+            "shape_match": "map_snap",
+            "costing": "bicycle",
+            "costing_options": {"bicycle": PRESETS[preset]},
+            "units": "kilometers",
+        }
+        trip: dict[str, Any] = (await self._post("/trace_route", payload))["trip"]
+        return trip
+
     async def _elevation_profile(self, shape: list[tuple[float, float]]) -> list[ElevationPoint]:
-        sampled = _downsample(shape, MAX_ELEVATION_SAMPLES)
+        sampled = evenly_sampled(shape, MAX_ELEVATION_SAMPLES)
         payload = {
             "shape": [{"lat": lat, "lon": lon} for lat, lon in sampled],
             "range": True,
@@ -135,13 +194,6 @@ def _chunks(points: list[Point], size: int) -> list[list[Point]]:
     if len(points) <= size:
         return [points]
     return [points[start : start + size] for start in range(0, len(points) - 1, size - 1)]
-
-
-def _downsample(points: list[tuple[float, float]], limit: int) -> list[tuple[float, float]]:
-    if len(points) <= limit:
-        return points
-    step = (len(points) - 1) / (limit - 1)
-    return [points[round(i * step)] for i in range(limit)]
 
 
 def ascent_descent(elevation: list[ElevationPoint]) -> tuple[float, float]:

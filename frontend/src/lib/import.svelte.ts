@@ -1,6 +1,9 @@
 import { routes, type Preset, type SavedRoute } from '$lib/api';
 
 export interface ImportResult {
+	/** Filenames repeat - two apps both export "route.gpx" - so rows need
+	 * an identity of their own to stay matched to the right file. */
+	id: number;
 	filename: string;
 	status: 'waiting' | 'importing' | 'done' | 'failed';
 	route?: SavedRoute;
@@ -24,6 +27,11 @@ function cueCount(route: SavedRoute): number {
 class ImportQueue {
 	results = $state<ImportResult[]>([]);
 	busy = $state(false);
+	/** Bumped when a batch finishes, so views can refresh themselves. */
+	completedBatches = $state(0);
+	#nextId = 1;
+	#running = 0;
+	#tail: Promise<void> = Promise.resolve();
 
 	get imported(): SavedRoute[] {
 		return this.results.filter((r) => r.route).map((r) => r.route as SavedRoute);
@@ -42,35 +50,52 @@ class ImportQueue {
 		const incoming = [...files];
 		if (incoming.length === 0) return;
 
-		const start = this.results.length;
-		this.results = [
-			...this.results,
-			...incoming.map((file): ImportResult => ({ filename: file.name, status: 'waiting' }))
-		];
+		const queued: ImportResult[] = incoming.map((file) => ({
+			id: this.#nextId++,
+			filename: file.name,
+			status: 'waiting'
+		}));
+		this.results = [...this.results, ...queued];
 
+		this.#running += 1;
 		this.busy = true;
-		try {
+
+		// Batches run one after another. Dropping files while a picked import
+		// is still going would otherwise interleave, and the first batch to
+		// finish would clear `busy` while the other was still uploading.
+		const run = this.#tail.then(async () => {
 			for (const [offset, file] of incoming.entries()) {
-				const index = start + offset;
-				this.update(index, { status: 'importing' });
+				const { id } = queued[offset];
+				this.#patch(id, { status: 'importing' });
 				try {
 					const route = await routes.importFile(file, preset);
-					this.update(index, { status: 'done', route });
+					this.#patch(id, { status: 'done', route });
 				} catch (err) {
-					this.update(index, {
+					this.#patch(id, {
 						status: 'failed',
 						error: err instanceof Error ? err.message : 'Import failed'
 					});
 				}
 			}
+		});
+		this.#tail = run.catch(() => {});
+
+		try {
+			await run;
 		} finally {
-			this.busy = false;
+			this.#running -= 1;
+			if (this.#running === 0) {
+				this.busy = false;
+				this.completedBatches += 1;
+			}
 		}
 	}
 
-	private update(index: number, patch: Partial<ImportResult>) {
-		this.results = this.results.map((result, i) =>
-			i === index ? { ...result, ...patch } : result
+	/** Patched by id: rows can be dismissed or added while a batch runs, so a
+	 * positional index is not stable. */
+	#patch(id: number, patch: Partial<ImportResult>) {
+		this.results = this.results.map((result) =>
+			result.id === id ? { ...result, ...patch } : result
 		);
 	}
 }
