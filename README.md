@@ -51,6 +51,11 @@ cues.
   (water, cafes, bike shops, toilets, viewpoints, campsites) and 5,500
   signed cycle routes, in about 37 seconds. See
   [docs/data.md](docs/data.md).
+- Search for a place from the planner once that index exists: type a few
+  letters, arrow through the results, and start, extend or end a route
+  from any of them. Typos are forgiven ("birmingam" finds Birmingham) and
+  results prefer the part of the map you are looking at, which matters
+  because 21,848 English places share a name with another.
 - Entirely self-hostable: routing (Valhalla), app, database, and
   optionally the map tiles run on your own hardware. The only external
   service is Wahoo's cloud, and only if you use it.
