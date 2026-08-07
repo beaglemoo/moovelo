@@ -32,6 +32,10 @@
 		/** Name the point under the context menu. Left out when there is no
 		 * place index, and by the read-only share page, which has no menu. */
 		resolvePlaceName?: (wp: Waypoint) => Promise<string | null>;
+		/** Whether the place index exists, so the signed cycle network has
+		 * anything to draw. False leaves the source unadded and the toggle
+		 * hidden rather than fetching empty tiles forever. */
+		cycleNetworkAvailable?: boolean;
 		/** Water, coffee and the rest, drawn as a circle layer. */
 		pois?: PoiResult[];
 		hoveredPoiId?: number | null;
@@ -52,6 +56,7 @@
 		flyTrigger = 0,
 		onMapMove,
 		resolvePlaceName,
+		cycleNetworkAvailable = false,
 		pois = [],
 		hoveredPoiId = null,
 		onHoverPoi,
@@ -119,6 +124,9 @@
 
 	let basemap: Basemap = $state('cyclosm');
 
+	const OVERLAY_STORAGE_KEY = 'moovelo:cycle-network';
+	let cycleNetwork = $state(false);
+
 	let container: HTMLDivElement;
 	let map: maplibregl.Map | undefined;
 	let mapReady = $state(false);
@@ -153,6 +161,7 @@
 
 	onMount(() => {
 		basemap = savedBasemap();
+		cycleNetwork = localStorage.getItem(OVERLAY_STORAGE_KEY) === 'on';
 		map = new maplibregl.Map({
 			container,
 			style: baseStyle(cyclosmTileUrl ? [cyclosmTileUrl] : PUBLIC_CYCLOSM_TILES),
@@ -173,6 +182,44 @@
 
 		map.on('load', () => {
 			if (!map) return;
+			// Added first so the planned route and its markers draw on top of
+			// it. The overlay is context, not the thing being edited.
+			if (cycleNetworkAvailable) {
+				map.addSource('cycle-network', {
+					type: 'vector',
+					tiles: [`${location.origin}/api/places/cycle-network/{z}/{x}/{y}.mvt`],
+					minzoom: 4,
+					maxzoom: 16
+				});
+				map.addLayer({
+					id: 'cycle-network-line',
+					type: 'line',
+					source: 'cycle-network',
+					'source-layer': 'cycle_ways',
+					layout: {
+						'line-cap': 'round',
+						'line-join': 'round',
+						visibility: 'none'
+					},
+					paint: {
+						'line-color': [
+							'match',
+							['get', 'network'],
+							'icn',
+							'#6c71c4',
+							'ncn',
+							'#268bd2',
+							'rcn',
+							'#cb4b16',
+							'#859900'
+						],
+						// Thin at country scale where routes are dense, and
+						// wide enough to follow once you are looking at roads.
+						'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1, 10, 2, 14, 3.5],
+						'line-opacity': 0.75
+					}
+				});
+			}
 			map.addSource('route', { type: 'geojson', data: lineGeoJSON([]) });
 			map.addLayer({
 				id: 'route-line',
@@ -527,6 +574,19 @@
 		basemap = next;
 		localStorage.setItem(BASEMAP_STORAGE_KEY, next);
 	}
+
+	// Sync the overlay. A plain aria-pressed toggle rather than a member of
+	// the basemap radiogroup: showing the network is orthogonal to which
+	// basemap is underneath it, not mutually exclusive with it.
+	$effect(() => {
+		if (!map || !mapReady || !cycleNetworkAvailable) return;
+		map.setLayoutProperty('cycle-network-line', 'visibility', cycleNetwork ? 'visible' : 'none');
+	});
+
+	function toggleCycleNetwork() {
+		cycleNetwork = !cycleNetwork;
+		localStorage.setItem(OVERLAY_STORAGE_KEY, cycleNetwork ? 'on' : 'off');
+	}
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -584,6 +644,18 @@
 		OSM
 	</button>
 </div>
+{#if cycleNetworkAvailable}
+	<button
+		type="button"
+		class="overlay-toggle"
+		class:active={cycleNetwork}
+		aria-pressed={cycleNetwork}
+		title="Show signed cycle routes (NCN, RCN, LCN)"
+		onclick={toggleCycleNetwork}
+	>
+		Cycle routes
+	</button>
+{/if}
 
 <style>
 	.map {
@@ -615,6 +687,26 @@
 	}
 	.basemap-switch button.active {
 		background: #268bd2;
+		color: #fff;
+	}
+	.overlay-toggle {
+		position: absolute;
+		bottom: 28px;
+		left: 132px;
+		border: 1px solid #ccc;
+		border-radius: 8px;
+		background: #fff;
+		box-shadow: 0 1px 4px #0002;
+		padding: 0.3rem 0.6rem;
+		font: inherit;
+		font-size: 0.8rem;
+		color: #586e75;
+		cursor: pointer;
+		z-index: 5;
+	}
+	.overlay-toggle.active {
+		background: #268bd2;
+		border-color: #268bd2;
 		color: #fff;
 	}
 	.context-menu {

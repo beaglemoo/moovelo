@@ -1,12 +1,16 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Path, Query
+from fastapi.responses import Response
 
 from app.api.deps import DbDep, UserDep
 from app.schemas import PlaceResult, PoiQuery, PoisAlongRoute
 from app.services.places import (
+    MAX_CYCLE_ZOOM,
     MAX_LIMIT,
+    MIN_CYCLE_ZOOM,
     MIN_QUERY_LENGTH,
+    cycle_network_tile,
     pois_along_route,
     reverse_geocode,
     search_places,
@@ -58,3 +62,26 @@ async def pois(db: DbDep, _user: UserDep, query: PoiQuery) -> PoisAlongRoute:
     the question comes up.
     """
     return await pois_along_route(db, query.line, query.radius_m, query.categories)
+
+
+@router.get("/cycle-network/{z}/{x}/{y}.mvt")
+async def cycle_network(
+    db: DbDep,
+    _user: UserDep,
+    z: Annotated[int, Path(ge=MIN_CYCLE_ZOOM, le=MAX_CYCLE_ZOOM)],
+    x: Annotated[int, Path(ge=0)],
+    y: Annotated[int, Path(ge=0)],
+) -> Response:
+    """A vector tile of the signed cycle network (NCN, RCN, LCN)."""
+    # 2^z tiles per axis. Out of range is a client bug, and returning an
+    # empty tile would hide it.
+    if x >= 2**z or y >= 2**z:
+        return Response(status_code=404)
+    tile = await cycle_network_tile(db, z, x, y)
+    return Response(
+        content=tile,
+        media_type="application/vnd.mapbox-vector-tile",
+        # Tiles change only when the indexer reruns, which is monthly at
+        # most. Private because the whole API sits behind a session.
+        headers={"Cache-Control": "private, max-age=86400"},
+    )

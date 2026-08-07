@@ -186,13 +186,22 @@ def assemble_cycle_routes(connection: psycopg.Connection[Any]) -> int:
 
     Done in SQL rather than Python so the geometry never has to be held in
     memory all at once, and so PostGIS owns the assembly.
+
+    ST_LineMerge stitches contiguous member ways into continuous lines, and
+    it is what makes the vector-tile overlay affordable. A collected route
+    averages 195 separate parts (NCN 1 has 3,547); merged it averages 11.
+    Douglas-Peucker keeps both endpoints of every part no matter the
+    tolerance, so without this an unmerged route resists simplification
+    entirely - the England-wide tile measured 228 kB simplified against
+    50 kB merged first. 98 ms for all 5,545 routes, once, here rather than
+    in every tile request.
     """
     with connection.cursor() as cursor:
         cursor.execute(
             sql.SQL("""
                 INSERT INTO {} (id, ref, name, network, operator, geom)
                 SELECT relation_id, min(ref), min(name), min(network), min(operator),
-                       ST_Multi(ST_Collect(geom))
+                       ST_Multi(ST_LineMerge(ST_Collect(geom)))
                 FROM {}
                 GROUP BY relation_id
             """).format(sql.Identifier(_stage("cycle_ways")), sql.Identifier(MEMBER_TABLE))

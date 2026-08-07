@@ -57,6 +57,9 @@ cues.
 - Water, coffee, toilets and bike shops along a route, listed in the
   order you will pass them and shown on the map, with opening hours where
   OpenStreetMap has them.
+- Toggleable overlay of the signed cycle network (NCN, RCN, LCN), served
+  as vector tiles. Most useful on the OSM standard basemap, since CyclOSM
+  already draws the national network itself.
 - Search for a place from the planner once that index exists: type a few
   letters, arrow through the results, and start, extend or end a route
   from any of them. Typos are forgiven ("birmingam" finds Birmingham) and

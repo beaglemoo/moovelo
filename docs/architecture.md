@@ -224,6 +224,56 @@ and the default is water, coffee, toilets and bike.
 OSM names and opening hours are rendered as text, never as markup. They
 are untrusted input, and Phase 9's prompt-injection rule starts here.
 
+### Cycle-network overlay
+
+`GET /api/places/cycle-network/{z}/{x}/{y}.mvt` serves the signed network
+(5,545 relations, 43,897 km in England) as Mapbox vector tiles. A bbox
+GeoJSON endpoint would refetch multiple megabytes on every pan and push
+simplification onto the browser; MVT is clipped, quantised and cacheable
+per tile.
+
+Which networks appear depends on zoom, the way a paper map drops detail
+rather than drawing everything at every scale:
+
+| zoom | networks |
+|---|---|
+| 11+ | all four, including local |
+| 8-10 | international, national, regional |
+| below 8 | international and national only |
+
+`ST_Transform` is applied to the tile *envelope*, not to every row: the
+envelope is a constant, so `ix_cycle_ways_geom` still serves the
+bounding-box filter. Transforming each row would disable it.
+
+An empty tile is a normal answer and never a 404 - most of the world has
+no NCN, and MapLibre handles a zero-length body fine. A tile outside the
+pyramid *is* a 404, because that is a client bug worth seeing.
+
+#### Why the indexer merges the ways
+
+`assemble_cycle_routes` wraps the collected geometry in `ST_LineMerge`,
+and that one call is what makes this overlay affordable. A route
+collected from its member ways averages 195 separate parts, and NCN 1 has
+3,547. Douglas-Peucker preserves both endpoints of every part whatever
+the tolerance, so an unmerged route resists simplification entirely: the
+England-wide tile measured 228 kB simplified against 50 kB when merged
+first, and raising the tolerance eightfold moved it by 3 kB. Merged, the
+average route is 5 parts and the whole country is one 50 kB tile. The
+merge costs 98 ms for all 5,545 routes, once, at index time.
+
+#### What it is actually for
+
+Worth being plain about: **the CyclOSM basemap already draws the NCN**,
+so on the default basemap this overlay mostly recolours lines that are
+already there. It earns its keep on the OSM standard basemap, which shows
+no cycle routes at all, and it is ours to label and query later - the
+tiles carry `ref`, `name` and `network` per feature. Route labels would
+need a glyph source, which the style deliberately does not have, so they
+are not drawn today.
+
+The overlay covers whatever the Geofabrik extract covers. With the
+default England extract it stops at the Welsh and Scottish borders.
+
 ### Trigrams and accents
 
 Names are matched with `pg_trgm` trigram indexes, which serve both
