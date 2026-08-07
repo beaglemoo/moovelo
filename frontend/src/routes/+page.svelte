@@ -234,6 +234,18 @@
 		}
 	}
 
+	// Exports come from the stored route, so unsaved edits would silently
+	// download the previous version.
+	const canExport = $derived(savedId !== null && !dirty);
+	const exportHint = $derived(
+		dirty ? 'Save your changes first - exports come from the saved route' : ''
+	);
+
+	function download(format: 'gpx' | 'fit') {
+		if (!savedId) return;
+		window.location.href = format === 'gpx' ? routes.gpxUrl(savedId) : routes.fitUrl(savedId);
+	}
+
 	async function confirmSave(event: SubmitEvent) {
 		event.preventDefault();
 		if (!route || !saveNameInput.trim()) return;
@@ -307,6 +319,22 @@
 			>
 				{savedId === null ? 'Save' : dirty ? 'Save changes' : 'Saved'}
 			</button>
+			{#if savedId}
+				<button
+					type="button"
+					class="export"
+					onclick={() => download('gpx')}
+					disabled={!canExport}
+					title={exportHint || 'Download this route as GPX'}>GPX</button
+				>
+				<button
+					type="button"
+					class="export"
+					onclick={() => download('fit')}
+					disabled={!canExport}
+					title={exportHint || 'Download this route as a FIT course'}>FIT</button
+				>
+			{/if}
 			{#if savedName}
 				<span class="route-name">{savedName}{dirty ? ' *' : ''}</span>
 			{/if}
