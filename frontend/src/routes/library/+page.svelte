@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { routes, wahoo, type RouteSummary, type WahooStatus } from '$lib/api';
+	import { routes, wahoo, type RouteQuery, type RouteSummary, type WahooStatus } from '$lib/api';
 	import ImportResults from '$lib/components/ImportResults.svelte';
 	import { ACCEPTED_FILES, importQueue } from '$lib/import.svelte';
 	import { onDestroy } from 'svelte';
@@ -24,9 +24,28 @@
 	let wahooStatus: WahooStatus | null = $state(null);
 	let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
+	let query: RouteQuery = $state({ sort: 'updated', order: 'desc' });
+	let search = $state('');
+	let allTags: string[] = $state([]);
+	let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+	// Debounced so typing does not fire a request per keystroke.
+	function onSearchInput() {
+		if (searchTimer) clearTimeout(searchTimer);
+		searchTimer = setTimeout(() => {
+			query = { ...query, q: search.trim() || undefined };
+			void refresh();
+		}, 250);
+	}
+
+	function setQuery(patch: Partial<RouteQuery>) {
+		query = { ...query, ...patch };
+		void refresh();
+	}
+
 	async function refresh() {
 		try {
-			items = await routes.list();
+			items = await routes.list(query);
 			loaded = true;
 			schedulePoll();
 		} catch (err) {
@@ -34,6 +53,7 @@
 		}
 	}
 	refresh();
+	routes.tags().then((t) => (allTags = t));
 	wahoo.status().then((s) => (wahooStatus = s));
 
 	// Keep refreshing while any push is in flight.
@@ -122,6 +142,8 @@
 		tagValue = item.tags.join(', ');
 	}
 
+	const filtered = $derived(Boolean(query.q || query.tag || query.favourite || query.source));
+
 	async function commitTags() {
 		if (!taggingId) return;
 		const id = taggingId;
@@ -132,6 +154,7 @@
 			.filter(Boolean);
 		const updated = await routes.update(id, { tags });
 		items = items.map((r) => (r.id === id ? { ...r, tags: updated.tags } : r));
+		allTags = await routes.tags();
 	}
 
 	async function remove(item: RouteSummary) {
@@ -193,8 +216,72 @@
 		{/if}
 	</div>
 	<ImportResults />
+	<div class="filters">
+		<input
+			type="search"
+			placeholder="Search names and notes"
+			bind:value={search}
+			oninput={onSearchInput}
+		/>
+		<select
+			value={query.tag ?? ''}
+			onchange={(e) => setQuery({ tag: e.currentTarget.value || undefined })}
+		>
+			<option value="">All tags</option>
+			{#each allTags as tag (tag)}
+				<option value={tag}>{tag}</option>
+			{/each}
+		</select>
+		<select
+			value={query.source ?? ''}
+			onchange={(e) =>
+				setQuery({ source: (e.currentTarget.value || undefined) as RouteQuery['source'] })}
+		>
+			<option value="">Planned and imported</option>
+			<option value="planned">Planned</option>
+			<option value="imported">Imported</option>
+		</select>
+		<button
+			type="button"
+			class="toggle"
+			class:on={query.favourite}
+			aria-pressed={Boolean(query.favourite)}
+			onclick={() => setQuery({ favourite: query.favourite ? undefined : true })}
+		>
+			★ Favourites
+		</button>
+		<select
+			value={`${query.sort}:${query.order}`}
+			onchange={(e) => {
+				const [sort, order] = e.currentTarget.value.split(':');
+				setQuery({ sort: sort as RouteQuery['sort'], order: order as RouteQuery['order'] });
+			}}
+		>
+			<option value="updated:desc">Newest first</option>
+			<option value="updated:asc">Oldest first</option>
+			<option value="name:asc">Name A-Z</option>
+			<option value="name:desc">Name Z-A</option>
+			<option value="distance:desc">Longest first</option>
+			<option value="distance:asc">Shortest first</option>
+			<option value="ascent:desc">Most climbing</option>
+			<option value="ascent:asc">Least climbing</option>
+		</select>
+	</div>
 	{#if error}
 		<p class="error">{error}</p>
+	{:else if loaded && items.length === 0 && filtered}
+		<p class="empty">
+			Nothing matches those filters.
+			<button
+				type="button"
+				class="link"
+				onclick={() => {
+					search = '';
+					query = { sort: query.sort, order: query.order };
+					void refresh();
+				}}>Clear filters</button
+			>
+		</p>
 	{:else if loaded && items.length === 0}
 		<p class="empty">
 			No saved routes yet. <a href="/">Plan one</a> and hit Save, or import a GPX, TCX or FIT file.
@@ -312,6 +399,44 @@
 </div>
 
 <style>
+	.filters {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		margin-bottom: 0.9rem;
+		align-items: center;
+	}
+	.filters input[type='search'] {
+		flex: 1 1 14rem;
+		min-width: 10rem;
+		padding: 0.3rem 0.5rem;
+		font: inherit;
+		font-size: 0.9rem;
+	}
+	.filters select,
+	.toggle {
+		font: inherit;
+		font-size: 0.85rem;
+		padding: 0.3rem 0.5rem;
+		border: 1px solid #c8c8c8;
+		border-radius: 6px;
+		background: #fff;
+		cursor: pointer;
+	}
+	.toggle.on {
+		background: #fff8e1;
+		border-color: #e0a800;
+		color: #7a5b00;
+	}
+	.link {
+		border: none;
+		background: none;
+		padding: 0;
+		color: #0b6fa4;
+		cursor: pointer;
+		font: inherit;
+		text-decoration: underline;
+	}
 	.star {
 		border: none;
 		background: none;

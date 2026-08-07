@@ -176,8 +176,25 @@ export interface RoutePayload {
 	snapshot: RouteResponse;
 }
 
+export interface RouteQuery {
+	q?: string;
+	tag?: string;
+	favourite?: boolean;
+	source?: RouteSource;
+	sort?: 'updated' | 'name' | 'distance' | 'ascent';
+	order?: 'asc' | 'desc';
+}
+
 export const routes = {
-	list: () => request<RouteSummary[]>('/api/routes'),
+	list: (query: RouteQuery = {}) => {
+		const params = new URLSearchParams();
+		for (const [key, value] of Object.entries(query)) {
+			if (value !== undefined && value !== '') params.set(key, String(value));
+		}
+		const qs = params.toString();
+		return request<RouteSummary[]>(`/api/routes${qs ? `?${qs}` : ''}`);
+	},
+	tags: () => request<string[]>('/api/routes/tags'),
 	get: (id: string) => request<SavedRoute>(`/api/routes/${id}`),
 	create: (payload: RoutePayload) =>
 		request<SavedRoute>('/api/routes', { method: 'POST', body: JSON.stringify(payload) }),

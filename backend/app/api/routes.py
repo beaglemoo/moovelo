@@ -1,11 +1,11 @@
 import re
 import secrets
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from geoalchemy2 import WKTElement
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from app.api.deps import DbDep, UserDep
 from app.models import Route
@@ -87,18 +87,57 @@ def _saved(route: Route) -> SavedRoute:
     )
 
 
+SORT_COLUMNS = {
+    "updated": Route.updated_at,
+    "name": Route.name,
+    "distance": Route.distance_m,
+    "ascent": Route.ascent_m,
+}
+
+
 @router.get("")
-async def list_routes(db: DbDep, user: UserDep) -> list[RouteSummary]:
-    rows = (
-        (
-            await db.execute(
-                select(Route).where(Route.user_id == user.id).order_by(Route.updated_at.desc())
-            )
-        )
-        .scalars()
-        .all()
-    )
+async def list_routes(
+    db: DbDep,
+    user: UserDep,
+    q: str | None = None,
+    tag: str | None = None,
+    favourite: bool | None = None,
+    source: str | None = None,
+    sort: Literal["updated", "name", "distance", "ascent"] = "updated",
+    order: Literal["asc", "desc"] = "desc",
+) -> list[RouteSummary]:
+    """List the user's routes, optionally searched, filtered and sorted."""
+    query = select(Route).where(Route.user_id == user.id)
+    if q:
+        # Notes are searched as well as names - recording "cafe at 12km" is
+        # only useful if it can be found again.
+        pattern = f"%{q.strip()}%"
+        query = query.where(or_(Route.name.ilike(pattern), Route.notes.ilike(pattern)))
+    if tag:
+        query = query.where(Route.tags.contains([tag]))
+    if favourite is not None:
+        query = query.where(Route.is_favourite.is_(favourite))
+    if source:
+        query = query.where(Route.source == source)
+
+    column = SORT_COLUMNS[sort]
+    query = query.order_by(column.asc() if order == "asc" else column.desc())
+    rows = (await db.execute(query)).scalars().all()
     return [RouteSummary.from_route(r) for r in rows]
+
+
+@router.get("/tags")
+async def list_tags(db: DbDep, user: UserDep) -> list[str]:
+    """Every tag the user has used, so the library can offer them."""
+    rows = (
+        await db.execute(
+            select(func.unnest(Route.tags).label("tag"))
+            .where(Route.user_id == user.id)
+            .distinct()
+            .order_by("tag")
+        )
+    ).scalars()
+    return list(rows)
 
 
 @router.post("/import", status_code=201)

@@ -111,6 +111,12 @@ GIN index, since filtering by tag is a containment query), `notes` and
 trimmed, de-duplicated and length-capped server-side so the library does
 not accumulate near-identical tags.
 
+`GET /api/routes` takes `q`, `tag`, `favourite`, `source`, `sort` and
+`order`. Searching covers notes as well as names, since recording "cafe
+at 12km" is only useful if it can be found again. Filtering is
+server-side so it keeps working as the library outgrows one screen, and
+`GET /api/routes/tags` returns the tags actually in use.
+
 Imported routes are marked `source = imported`. Their waypoints are only
 the endpoints, so re-routing one in the planner would discard the
 imported track: the planner asks before the first edit, and a route that
