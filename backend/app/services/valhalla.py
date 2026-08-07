@@ -122,7 +122,11 @@ class ValhallaClient:
 
         legs: list[RouteLeg] = []
         distance_m = duration_s = 0.0
-        last = len(chunks) - 1
+        # Keyed off the last chunk that actually matched, not the last chunk:
+        # if the final stretch failed to match it contributes no maneuvers, so
+        # stripping the previous chunk's destination would leave the whole
+        # route with no arrival cue at all.
+        last = max(i for i, o in enumerate(outcomes) if not isinstance(o, HTTPException))
         for position, (chunk, result) in enumerate(zip(chunks, outcomes, strict=True)):
             if isinstance(result, HTTPException):
                 # Keep the stretch this chunk covers instead of discarding
