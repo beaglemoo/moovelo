@@ -52,11 +52,51 @@ docker compose --profile dev up -d            # or --profile prod
 Routing is unavailable while the build runs; the app shows "routing engine
 unavailable" until Valhalla's healthcheck passes.
 
+## The place index (optional)
+
+Place search, reverse geocoding, POIs along a route and the cycle-network
+overlay come from the same extract Valhalla downloaded - not from
+Nominatim, Overpass or any other service. Nothing leaves your network.
+
+Building the index is opt-in and runs to completion rather than staying
+up:
+
+```sh
+docker compose --profile index run --rm indexer
+```
+
+Until it has run, the app hides the search box, the POI panel and the
+network overlay, so a default install behaves exactly as before.
+
+**Run it after Valhalla has finished, never during a tile build.** The
+indexer reads the `.pbf` out of the `valhalla_tiles` volume, which is
+wiped by the refresh procedure below - so the order is always: wipe,
+let Valhalla download and build, then index. Running it alongside a tile
+build is the one situation where both jobs want several GB at once.
+
+Re-running is safe with the app up. The parse and load happen outside any
+lock, and only the final transaction swaps the new rows in; a full
+England rebuild answered every request throughout, the slowest taking
+40 ms.
+
+Measured on England (`england-latest.osm.pbf`, 1.6 GB):
+
+| Stage | Time | Peak memory |
+|-------|------|-------------|
+| `osmium tags-filter` | ~9 s | ~2.2 GB |
+| Parse and load | ~25 s | ~200 MB |
+| Publish | ~3 s | - |
+
+That yields roughly 73,000 places, 285,000 POIs and 5,500 cycle routes,
+adding about 150 MB to the database. The filter pass is the high-water
+mark: it reduces 1.6 GB to 45 MB, which is what keeps the parse cheap.
+
 ## Refreshing data (monthly)
 
 OSM data changes constantly; Geofabrik extracts are updated daily. To
-refresh, run the same wipe-and-rebuild as above. A scheduled refresh
-sidecar (compose cron, off by default) is planned.
+refresh, run the same wipe-and-rebuild as above, then rebuild the place
+index if you use it - wiping the volume deletes the extract it reads. A
+scheduled refresh sidecar (compose cron, off by default) is planned.
 
 ## Disk and memory expectations
 

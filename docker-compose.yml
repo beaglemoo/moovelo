@@ -37,6 +37,27 @@ services:
       start_period: 10m
     restart: unless-stopped
 
+  # Parses the OSM extract Valhalla already downloaded into the place
+  # index. Opt-in, and runs to completion rather than staying up:
+  #   docker compose --profile index run --rm indexer
+  # Until it has run, the app hides search, POIs and the cycle overlay.
+  indexer:
+    profiles: ["index"]
+    build:
+      context: .
+      dockerfile: indexer/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://bikegps:${POSTGRES_PASSWORD:-bikegps}@postgres:5432/bikegps
+      OSM_DIR: /custom_files
+    volumes:
+      # Read-only: this reads the extract Valhalla downloaded and must
+      # never write to the tiles volume. Scratch space goes in /tmp.
+      - valhalla_tiles:/custom_files:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   backend-dev:
     profiles: ["dev"]
     build:

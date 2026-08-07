@@ -43,6 +43,14 @@ cues.
 - CyclOSM cycling basemap with an OSM standard fallback toggle, plus
   optional fully self-hosted tiles (see
   [docs/self-hosted-tiles.md](docs/self-hosted-tiles.md)).
+- Optional offline place index, built from the same OpenStreetMap extract
+  the router already downloaded - no Nominatim, no Overpass, nothing
+  leaves your network. One opt-in command
+  (`docker compose --profile index run --rm indexer`) turns 1.6 GB of
+  England into roughly 73,000 searchable places, 285,000 cycling POIs
+  (water, cafes, bike shops, toilets, viewpoints, campsites) and 5,500
+  signed cycle routes, in about 37 seconds. See
+  [docs/data.md](docs/data.md).
 - Entirely self-hostable: routing (Valhalla), app, database, and
   optionally the map tiles run on your own hardware. The only external
   service is Wahoo's cloud, and only if you use it.
