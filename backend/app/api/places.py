@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import DbDep, UserDep
 from app.schemas import PlaceResult
-from app.services.places import MAX_LIMIT, MIN_QUERY_LENGTH, search_places
+from app.services.places import MAX_LIMIT, MIN_QUERY_LENGTH, reverse_geocode, search_places
 
 router = APIRouter(prefix="/api/places")
 
@@ -27,3 +27,17 @@ async def search(
     # Both or neither: half a coordinate cannot weight anything.
     near = (near_lat, near_lon) if near_lat is not None and near_lon is not None else None
     return await search_places(db, q, near=near, limit=limit)
+
+
+@router.get("/reverse")
+async def reverse(
+    db: DbDep,
+    _user: UserDep,
+    lat: Annotated[float, Query(ge=-90, le=90)],
+    lon: Annotated[float, Query(ge=-180, le=180)],
+) -> PlaceResult | None:
+    """Name the nearest place to a point, for waypoint labels and route names.
+
+    Null when nothing is within 50 km, which also covers an unbuilt index.
+    """
+    return await reverse_geocode(db, lat, lon)

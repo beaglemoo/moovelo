@@ -72,6 +72,35 @@ _SEARCH_SQL = text(f"""
 """)
 
 
+# Beyond this a point is not really "near" anywhere: a click out at sea, or
+# past the edge of the extract. Naming a route after a town 80 km away would
+# be worse than leaving it unnamed.
+REVERSE_MAX_DISTANCE_M = 50_000.0
+
+# Written out rather than built in a CTE so the KNN operator sees a
+# pseudo-constant and can drive an index scan on ix_places_geog. The casts
+# are for asyncpg, which infers parameter types from context.
+_POINT = (
+    "ST_SetSRID("
+    "ST_MakePoint(CAST(:lon AS double precision), CAST(:lat AS double precision)), 4326"
+    ")::geography"
+)
+
+# Nearest wins outright - no importance weighting. A hamlet 400 m away is a
+# better answer to "what is this place called" than the town 5 km down the
+# valley, even though search would rank them the other way round.
+_REVERSE_SQL = text(f"""
+    SELECT p.id, p.name, p.place_type,
+           ST_Y(p.geog::geometry) AS lat,
+           ST_X(p.geog::geometry) AS lon,
+           ST_Distance(p.geog, {_POINT}) AS distance_m
+    FROM places p
+    WHERE ST_DWithin(p.geog, {_POINT}, {REVERSE_MAX_DISTANCE_M})
+    ORDER BY p.geog <-> {_POINT}
+    LIMIT 1
+""")
+
+
 def normalise(name: str) -> str:
     """Fold accents and case, exactly as the indexer does when writing.
 
@@ -124,3 +153,22 @@ async def search_places(
         )
         for row in rows
     ]
+
+
+async def reverse_geocode(db: AsyncSession, lat: float, lon: float) -> PlaceResult | None:
+    """The nearest named place to a point, or None if nothing is close.
+
+    None is a normal answer, not an error: the index may not be built, and
+    a point can genuinely be nowhere near anywhere.
+    """
+    row = (await db.execute(_REVERSE_SQL, {"lat": lat, "lon": lon})).first()
+    if row is None:
+        return None
+    return PlaceResult(
+        id=row.id,
+        name=row.name,
+        place_type=row.place_type,
+        lat=row.lat,
+        lon=row.lon,
+        distance_m=row.distance_m,
+    )
