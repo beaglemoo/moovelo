@@ -15,6 +15,8 @@ dependencies = [
     "geoalchemy2>=0.16",
     "pwdlib[argon2]>=0.2",
     "fit-tool>=0.9.13",
+    # Required by FastAPI to accept multipart uploads (route file import).
+    "python-multipart>=0.0.20",
 ]
 
 [dependency-groups]

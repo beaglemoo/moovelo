@@ -1,8 +1,9 @@
 import re
 import secrets
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from geoalchemy2 import WKTElement
 from sqlalchemy import select
 
@@ -10,6 +11,7 @@ from app.api.deps import DbDep, UserDep
 from app.models import Route
 from app.schemas import (
     ElevationPoint,
+    Preset,
     RouteLeg,
     RoutePatchRequest,
     RouteResponse,
@@ -22,6 +24,8 @@ from app.schemas import (
 from app.services.fit import build_fit
 from app.services.geo import concat_shapes
 from app.services.gpx import build_gpx
+from app.services.import_routes import import_route
+from app.services.importer import RouteImportError
 from app.services.polyline import decode_polyline6
 
 router = APIRouter(prefix="/api/routes")
@@ -61,6 +65,7 @@ def _saved(route: Route) -> SavedRoute:
         id=route.id,
         name=route.name,
         preset=route.preset,
+        source=route.source,
         waypoints=route.waypoints,
         legs=route.legs,
         elevation=route.elevation,
@@ -91,6 +96,40 @@ async def list_routes(db: DbDep, user: UserDep) -> list[RouteSummary]:
         .all()
     )
     return [RouteSummary.from_route(r) for r in rows]
+
+
+@router.post("/import", status_code=201)
+async def import_route_file(
+    request: Request,
+    db: DbDep,
+    user: UserDep,
+    file: Annotated[UploadFile, File()],
+    preset: Annotated[Preset, Form()] = "road",
+) -> SavedRoute:
+    """Import a GPX, TCX or FIT file as a saved route."""
+    data = await file.read()
+    try:
+        imported = await import_route(file.filename or "", data, preset, request.app.state.valhalla)
+    except RouteImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    route = Route(
+        user_id=user.id,
+        name=imported.track.name or _name_from_filename(file.filename),
+        preset=preset,
+        source="imported",
+        waypoints=[wp.model_dump() for wp in imported.waypoints],
+    )
+    _apply_snapshot(route, imported.snapshot)
+    db.add(route)
+    await db.commit()
+    await db.refresh(route)
+    return _saved(route)
+
+
+def _name_from_filename(filename: str | None) -> str:
+    stem = (filename or "").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return " ".join(stem.replace("_", " ").replace("-", " ").split())[:200] or "Imported route"
 
 
 @router.post("", status_code=201)
