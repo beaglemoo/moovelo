@@ -110,6 +110,12 @@ class Route(Base):
     # Nullable: routes saved before Phase 7, and any route where the
     # edge_walk match failed, simply have none.
     surface: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Climbs detected from `elevation` by services/climbs.py. NOT NULL,
+    # unlike surface: detect_climbs always returns a (possibly empty) list,
+    # so there is no "match failed" case that needs a None to fall back on.
+    climbs: Mapped[list[Any]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
     geom: Mapped[Any] = mapped_column(Geometry(geometry_type="LINESTRING", srid=4326))
     # Wahoo sync state: none | queued | pushing | synced | error
     wahoo_status: Mapped[str] = mapped_column(String(10), default="none", server_default="none")

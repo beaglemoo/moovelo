@@ -50,6 +50,7 @@ def _snapshot_fields(route: Route) -> dict[str, Any]:
         "ascent_m": route.ascent_m,
         "descent_m": route.descent_m,
         "surface": route.surface,
+        "climbs": route.climbs,
     }
 
 
@@ -67,6 +68,7 @@ def _apply_snapshot(route: Route, snapshot: RouteResponse) -> None:
     route.ascent_m = snapshot.ascent_m
     route.descent_m = snapshot.descent_m
     route.surface = snapshot.surface.model_dump() if snapshot.surface else None
+    route.climbs = [climb.model_dump() for climb in snapshot.climbs]
     route.geom = _geom_wkt(snapshot)
 
 
@@ -96,6 +98,7 @@ def _saved(route: Route) -> SavedRoute:
         ascent_m=route.ascent_m,
         descent_m=route.descent_m,
         surface=cast("SurfaceBreakdown | None", route.surface),
+        climbs=route.climbs,
         updated_at=route.updated_at,
         wahoo=WahooState(
             status=route.wahoo_status,
@@ -437,6 +440,7 @@ async def get_shared(token: str, db: DbDep) -> SharedRoute:
         ascent_m=route.ascent_m,
         descent_m=route.descent_m,
         surface=cast("SurfaceBreakdown | None", route.surface),
+        climbs=route.climbs,
         updated_at=route.updated_at,
     )
 

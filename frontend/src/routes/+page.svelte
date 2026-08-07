@@ -20,6 +20,7 @@
 	import { gradientSegments as computeGradientSegments } from '$lib/gradient';
 	import { decodePolyline6 } from '$lib/polyline';
 	import { categoriesFor, DEFAULT_POI_GROUPS } from '$lib/pois';
+	import ClimbsList from '$lib/components/ClimbsList.svelte';
 	import ElevationProfile from '$lib/components/ElevationProfile.svelte';
 	import PlaceSearch from '$lib/components/PlaceSearch.svelte';
 	import PoiPanel from '$lib/components/PoiPanel.svelte';
@@ -55,6 +56,9 @@
 	let poisLoading = $state(false);
 	let hoveredPoiId: number | null = $state(null);
 	let poiController: AbortController | null = null;
+	// Shared by ClimbsList (row hover), ElevationProfile (highlight band) and
+	// MapView (highlight casing) - one index rather than three copies of it.
+	let hoveredClimbIndex: number | null = $state(null);
 
 	let wahooStatus: WahooStatus | null = $state(null);
 	let wahooPush: 'idle' | 'working' | 'synced' | 'error' = $state('idle');
@@ -194,6 +198,12 @@
 	const gradientSegments = $derived.by(() =>
 		computeGradientSegments(route?.elevation ?? [], routeLine, routeDists)
 	);
+	const hoveredClimb = $derived.by(() => {
+		const climbs = route?.climbs ?? [];
+		if (hoveredClimbIndex === null) return null;
+		const climb = climbs[hoveredClimbIndex];
+		return climb ? { start_dist_m: climb.start_dist_m, end_dist_m: climb.end_dist_m } : null;
+	});
 
 	// Far enough to catch a cafe just off the road, near enough that
 	// "on this ride" still means something.
@@ -470,6 +480,8 @@
 				{pois}
 				{hoveredPoiId}
 				onHoverPoi={(id) => (hoveredPoiId = id)}
+				climbs={route?.climbs ?? []}
+				{hoveredClimbIndex}
 				onAddWaypoint={addWaypoint}
 				onMoveWaypoint={moveWaypoint}
 				onInsertVia={insertVia}
@@ -569,7 +581,18 @@
 				<SurfaceBar surface={route.surface} />
 			{/if}
 			<div class="panel-body">
-				<ElevationProfile elevation={route.elevation} onHover={handleElevationHover} />
+				<ElevationProfile
+					elevation={route.elevation}
+					onHover={handleElevationHover}
+					{hoveredClimb}
+				/>
+				{#if route.climbs.length > 0}
+					<ClimbsList
+						climbs={route.climbs}
+						hoveredIndex={hoveredClimbIndex}
+						onHover={(i) => (hoveredClimbIndex = i)}
+					/>
+				{/if}
 				{#if config?.search_enabled}
 					<PoiPanel
 						{pois}
@@ -736,7 +759,8 @@
 		gap: 1rem;
 		align-items: flex-start;
 	}
-	.panel-body :global(.pois) {
+	.panel-body :global(.pois),
+	.panel-body :global(.climbs) {
 		flex: 0 0 21rem;
 		min-width: 0;
 	}
@@ -745,7 +769,8 @@
 			flex-direction: column;
 			gap: 0.2rem;
 		}
-		.panel-body :global(.pois) {
+		.panel-body :global(.pois),
+		.panel-body :global(.climbs) {
 			flex: none;
 			width: 100%;
 		}

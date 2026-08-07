@@ -80,8 +80,12 @@ cues.
 - Gradient colouring: the elevation profile and the map route line are
   coloured by gradient band (descent, 0-3, 3-6, 6-9, 9-12, 12%+), sharing
   the same maths so a red stretch on the chart is the same red stretch on
-  the map. A route without elevation data keeps the plain line. More route
-  intelligence (climb detection, realistic ride time) is planned.
+  the map. A route without elevation data keeps the plain line.
+- Climb detection: the elevation profile is segmented into climbs and
+  categorised (HC down to 4, road-cycling style) by a backend algorithm with
+  its own smoothing pass over the noisy /height data. Climbs are listed
+  beside the chart; hovering one highlights its stretch on both the chart
+  and the map. More route intelligence (realistic ride time) is planned.
 
 ## Screenshots
 
