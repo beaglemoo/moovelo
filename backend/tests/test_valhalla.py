@@ -7,9 +7,9 @@ from fastapi import HTTPException
 
 from app.schemas import ElevationPoint, RouteRequest, Waypoint
 from app.services.geo import haversine, resample_by_distance
+from app.services.polyline import encode_polyline6
 from app.services.presets import PRESETS
 from app.services.valhalla import ValhallaClient, _downsample, ascent_descent
-from tests.test_polyline import encode_polyline6
 
 BASE = "http://valhalla.test"
 

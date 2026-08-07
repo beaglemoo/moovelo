@@ -62,6 +62,7 @@ class RouteSummary(BaseModel):
     id: uuid.UUID
     name: str
     preset: str
+    source: str = "planned"
     distance_m: float
     ascent_m: float
     updated_at: datetime
@@ -74,6 +75,7 @@ class RouteSummary(BaseModel):
             id=route.id,
             name=route.name,
             preset=route.preset,
+            source=route.source,
             distance_m=route.distance_m,
             ascent_m=route.ascent_m,
             updated_at=route.updated_at,
@@ -91,6 +93,7 @@ class SavedRoute(RouteResponse):
     id: uuid.UUID
     name: str
     preset: str
+    source: str = "planned"
     waypoints: list[Waypoint]
     updated_at: datetime
     wahoo: WahooState = WahooState()

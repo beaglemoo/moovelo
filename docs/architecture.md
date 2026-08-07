@@ -88,6 +88,28 @@ falls back to POST.
 
 ## Share links
 
+## Importing route files
+
+`POST /api/routes/import` takes a GPX, TCX or FIT upload.
+`services/importer.py` parses it (namespace-agnostic, tracks or route
+points, dropping implausible fixes); `services/import_routes.py` then map
+matches the track through Valhalla `/trace_route` with
+`shape_match=map_snap`, which is what recovers the maneuvers an uploaded
+file does not have. Tracks are thinned to roughly one point per 15 m and
+chunked, so a failure costs one chunk rather than the whole ride.
+
+A file that parses but cannot be matched - it leaves the map extract, or
+follows paths the routing graph lacks - is stored as an unmatched line
+with no cues rather than rejected. Elevation comes from Valhalla exactly
+as it does for planned routes, so ascent stays comparable across the
+library; the file's own elevation is used only when the routing tiles
+carry none.
+
+Imported routes are marked `source = imported`. Their waypoints are only
+the endpoints, so re-routing one in the planner would discard the
+imported track: the planner asks before the first edit, and a route that
+is re-routed stops being an import.
+
 A route can be shared read-only: `POST /api/routes/{id}/share` sets a
 random `share_token` on the row (rotating it invalidates old links,
 DELETE revokes). `GET /api/shared/{token}` and `.../export.gpx` are the

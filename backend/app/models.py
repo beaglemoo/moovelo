@@ -58,6 +58,10 @@ class Route(Base):
     )
     name: Mapped[str] = mapped_column(String(200))
     preset: Mapped[str] = mapped_column(String(20))
+    # planned = built from waypoints in the app; imported = read from a file.
+    # An imported route's waypoints are only its endpoints, so re-routing it
+    # would discard the track that was imported.
+    source: Mapped[str] = mapped_column(String(16), default="planned", server_default="planned")
     waypoints: Mapped[list[Any]] = mapped_column(JSONB)
     # Full routing snapshot (RouteResponse shape) so saved routes and their
     # exports stay stable across OSM data refreshes.

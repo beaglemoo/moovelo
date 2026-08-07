@@ -2,11 +2,41 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, auth, type UserInfo } from '$lib/api';
+	import { importQueue } from '$lib/import.svelte';
 	import type { Snippet } from 'svelte';
 
 	let { children }: { children: Snippet } = $props();
 
 	let user: UserInfo | null = $state(null);
+	let dropping = $state(false);
+
+	// Files get dragged at the window, not at a particular drop target, so the
+	// whole app accepts them once you are logged in.
+	function hasFiles(event: DragEvent): boolean {
+		return user !== null && (event.dataTransfer?.types.includes('Files') ?? false);
+	}
+
+	function onDragOver(event: DragEvent) {
+		if (!hasFiles(event)) return;
+		event.preventDefault();
+		dropping = true;
+	}
+
+	function onDragLeave(event: DragEvent) {
+		// relatedTarget is null when the pointer actually leaves the window,
+		// rather than merely crossing between elements inside it.
+		if (!event.relatedTarget) dropping = false;
+	}
+
+	async function onDrop(event: DragEvent) {
+		if (!hasFiles(event)) return;
+		event.preventDefault();
+		dropping = false;
+		const files = [...(event.dataTransfer?.files ?? [])];
+		if (files.length === 0) return;
+		await goto('/library');
+		await importQueue.add(files);
+	}
 
 	// On every navigation while logged out, try to resolve the session;
 	// bounce to /login when there is none. Shared-route pages are public.
@@ -30,6 +60,8 @@
 	}
 </script>
 
+<svelte:window ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} />
+
 <div class="shell">
 	{#if user}
 		<nav>
@@ -47,6 +79,11 @@
 	<main>
 		{@render children()}
 	</main>
+	{#if dropping}
+		<div class="dropzone">
+			<p>Drop GPX, TCX or FIT files to import</p>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -107,6 +144,22 @@
 	main {
 		flex: 1;
 		min-height: 0;
+	}
+	.dropzone {
+		position: fixed;
+		inset: 0;
+		z-index: 50;
+		display: grid;
+		place-items: center;
+		background: rgba(7, 54, 66, 0.75);
+		color: #fdf6e3;
+		font-size: 1.2rem;
+		pointer-events: none;
+	}
+	.dropzone p {
+		border: 2px dashed #93a1a1;
+		border-radius: 10px;
+		padding: 2rem 3rem;
 	}
 	@media (max-width: 560px) {
 		.email {

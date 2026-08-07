@@ -1,5 +1,9 @@
 export type Preset = 'road' | 'gravel' | 'quiet';
 
+// Imported routes keep the track that was uploaded; their waypoints are only
+// the endpoints, so re-routing one would discard the imported line.
+export type RouteSource = 'planned' | 'imported';
+
 export interface Waypoint {
 	lat: number;
 	lon: number;
@@ -85,6 +89,7 @@ export interface RouteSummary {
 	id: string;
 	name: string;
 	preset: Preset;
+	source: RouteSource;
 	distance_m: number;
 	ascent_m: number;
 	updated_at: string;
@@ -96,6 +101,7 @@ export interface SavedRoute extends RouteResponse {
 	id: string;
 	name: string;
 	preset: Preset;
+	source: RouteSource;
 	waypoints: Waypoint[];
 	updated_at: string;
 	wahoo: WahooState;
@@ -119,7 +125,7 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const response = await fetch(path, {
-		headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
+		headers: typeof init?.body === 'string' ? { 'Content-Type': 'application/json' } : undefined,
 		...init
 	});
 	if (!response.ok) {
@@ -167,6 +173,12 @@ export const routes = {
 	update: (id: string, payload: Partial<RoutePayload>) =>
 		request<SavedRoute>(`/api/routes/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 	remove: (id: string) => request<void>(`/api/routes/${id}`, { method: 'DELETE' }),
+	importFile: (file: File, preset: Preset) => {
+		const form = new FormData();
+		form.append('file', file);
+		form.append('preset', preset);
+		return request<SavedRoute>('/api/routes/import', { method: 'POST', body: form });
+	},
 	gpxUrl: (id: string) => `/api/routes/${id}/export.gpx`,
 	fitUrl: (id: string) => `/api/routes/${id}/export.fit`,
 	share: (id: string) => request<SavedRoute>(`/api/routes/${id}/share`, { method: 'POST' }),
