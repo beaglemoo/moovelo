@@ -20,6 +20,7 @@ from app.schemas import (
     RouteSummary,
     SavedRoute,
     SharedRoute,
+    SurfaceBreakdown,
     WahooState,
     Waypoint,
 )
@@ -48,6 +49,7 @@ def _snapshot_fields(route: Route) -> dict[str, Any]:
         "duration_s": route.duration_s,
         "ascent_m": route.ascent_m,
         "descent_m": route.descent_m,
+        "surface": route.surface,
     }
 
 
@@ -64,6 +66,7 @@ def _apply_snapshot(route: Route, snapshot: RouteResponse) -> None:
     route.duration_s = snapshot.duration_s
     route.ascent_m = snapshot.ascent_m
     route.descent_m = snapshot.descent_m
+    route.surface = snapshot.surface.model_dump() if snapshot.surface else None
     route.geom = _geom_wkt(snapshot)
 
 
@@ -92,6 +95,7 @@ def _saved(route: Route) -> SavedRoute:
         duration_s=route.duration_s,
         ascent_m=route.ascent_m,
         descent_m=route.descent_m,
+        surface=cast("SurfaceBreakdown | None", route.surface),
         updated_at=route.updated_at,
         wahoo=WahooState(
             status=route.wahoo_status,
@@ -339,6 +343,13 @@ async def reverse_route(
             )
         )
 
+    # Surface is decorative: it degrades to None on any failure rather than
+    # blocking the reverse, so it is fetched after the snapshot is settled.
+    surface_shape = concat_shapes([decode_polyline6(leg.geometry) for leg in snapshot.legs])
+    surface = await valhalla.trace_attributes(surface_shape, cast("Preset", route.preset))
+    if surface is not None:
+        snapshot = snapshot.model_copy(update={"surface": surface})
+
     reversed_route = _copy_of(route, _suffixed(route.name, " (reversed)"))
     reversed_route.waypoints = waypoints
     _apply_snapshot(reversed_route, snapshot)
@@ -425,6 +436,7 @@ async def get_shared(token: str, db: DbDep) -> SharedRoute:
         duration_s=route.duration_s,
         ascent_m=route.ascent_m,
         descent_m=route.descent_m,
+        surface=cast("SurfaceBreakdown | None", route.surface),
         updated_at=route.updated_at,
     )
 

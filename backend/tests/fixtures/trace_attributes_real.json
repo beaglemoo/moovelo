@@ -1,0 +1,939 @@
+{
+ "units": "kilometers",
+ "edges": [
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "service_road",
+   "road_class": "service_other",
+   "length": 0.009,
+   "source_percent_along": 0.698
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "parking_aisle",
+   "road_class": "service_other",
+   "length": 0.055
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "parking_aisle",
+   "road_class": "service_other",
+   "length": 0.018
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "parking_aisle",
+   "road_class": "service_other",
+   "length": 0.015
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "parking_aisle",
+   "road_class": "service_other",
+   "length": 0.061
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved",
+   "use": "service_road",
+   "road_class": "service_other",
+   "length": 0.011
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.051
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.05
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.032
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.016
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.019
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.092
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.046
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.136
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.009
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.059
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.069
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.151
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.115
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.03
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.068
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.007
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.03
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.08
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "secondary",
+   "length": 0.041
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.013
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.031
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.056
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.034
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.233
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.08
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.413
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.017
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.315
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.391
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.128
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.054
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "unclassified",
+   "length": 0.056
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "unclassified",
+   "length": 0.117
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "unclassified",
+   "length": 0.385
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "unclassified",
+   "length": 0.545
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "unclassified",
+   "length": 0.019
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "unclassified",
+   "length": 0.074
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "unclassified",
+   "length": 0.036
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "unclassified",
+   "length": 1.048
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "unclassified",
+   "length": 0.156
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "ramp",
+   "road_class": "tertiary",
+   "length": 0.08
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.019
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.293
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.005
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.051
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.338
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.515
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.009
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.025
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.056
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.003
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.051
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.089
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.054
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.063
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.189
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.115
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.013
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.12
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.276
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.074
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.036
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.035
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.068
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.022
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.084
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.022
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.086
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.041
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.019
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.087
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.035
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.042
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.024
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.016
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.011
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.005
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.002
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.034
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.091
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.076
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.009
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.027
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.009
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.034
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.039
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "tertiary",
+   "length": 0.079
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.016
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.041
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.058
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.076
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.086
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.057
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.023
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.015
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.032
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.049
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.054
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.011
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.02
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.009
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.03
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.011
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.062
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.005
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.093
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.032
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.067
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.053
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.058
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.029
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.012
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.016
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "primary",
+   "length": 0.011
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "turn_channel",
+   "road_class": "primary",
+   "length": 0.139
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "trunk",
+   "length": 0.115
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "trunk",
+   "length": 0.607
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "trunk",
+   "length": 0.027
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "trunk",
+   "length": 0.892
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "trunk",
+   "length": 0.236
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "trunk",
+   "length": 2.349
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "trunk",
+   "length": 0.164
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "trunk",
+   "length": 0.14
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "trunk",
+   "length": 0.041
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "road",
+   "road_class": "trunk",
+   "length": 2.025
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "ramp",
+   "road_class": "primary",
+   "length": 0.194
+  },
+  {
+   "cycle_lane": "none",
+   "surface": "paved_smooth",
+   "use": "ramp",
+   "road_class": "primary",
+   "length": 0.052,
+   "target_percent_along": 0.468
+  }
+ ],
+ "alternate_paths": []
+}

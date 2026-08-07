@@ -8,7 +8,14 @@ import httpx
 from fastapi import HTTPException
 
 from app.config import settings
-from app.schemas import ElevationPoint, Preset, RouteLeg, RouteRequest, RouteResponse
+from app.schemas import (
+    ElevationPoint,
+    Preset,
+    RouteLeg,
+    RouteRequest,
+    RouteResponse,
+    SurfaceBreakdown,
+)
 from app.services.geo import (
     Point,
     concat_shapes,
@@ -169,6 +176,83 @@ class ValhallaClient:
         trip: dict[str, Any] = (await self._post("/trace_route", payload))["trip"]
         return trip
 
+    async def trace_attributes(self, shape: list[Point], preset: Preset) -> SurfaceBreakdown | None:
+        """Per-edge surface, road class, use and cycle-lane presence along a
+        route's own shape, aggregated into metres per bucket.
+
+        Deliberately the opposite failure policy to trace_route: there, a
+        5xx propagates because a lost turn cue has to be retried rather than
+        silently dropped. Here ANY failure - a 4xx or the 503 `_post` maps
+        an unreachable engine to - degrades to None. Surface is decorative
+        and never touches FIT or export, and `shape_match: edge_walk`
+        requires the shape to already lie exactly on the routing graph: an
+        unmatched imported track fails it by design, and that must not block
+        saving the route it describes.
+        """
+        if len(shape) < 2:
+            return None
+        chunks = _plain_chunks(shape, TRACE_MAX_POINTS)
+        try:
+            results = await asyncio.gather(
+                *(self._attributes_chunk(chunk, preset) for chunk in chunks)
+            )
+        except HTTPException:
+            return None
+
+        total_m = 0.0
+        surface_m: dict[str, float] = {}
+        road_class_m: dict[str, float] = {}
+        use_m: dict[str, float] = {}
+        cycle_lane_m = 0.0
+        for response in results:
+            for edge in response.get("edges", []):
+                # The first and last edge of a trace carry
+                # source_percent_along / target_percent_along, but a real
+                # 133-edge response (tests/fixtures/trace_attributes_real.json,
+                # a 16.949 km route) sums edge.length to the route's summary
+                # distance exactly - Valhalla has already accounted for the
+                # partial edges, so these keys need no correction here.
+                length_m = edge["length"] * 1000.0
+                total_m += length_m
+                if "surface" in edge:
+                    surface_m[edge["surface"]] = surface_m.get(edge["surface"], 0.0) + length_m
+                if "road_class" in edge:
+                    road_class_m[edge["road_class"]] = (
+                        road_class_m.get(edge["road_class"], 0.0) + length_m
+                    )
+                if "use" in edge:
+                    use_m[edge["use"]] = use_m.get(edge["use"], 0.0) + length_m
+                cycle_lane = edge.get("cycle_lane")
+                if cycle_lane and cycle_lane != "none":
+                    cycle_lane_m += length_m
+        return SurfaceBreakdown(
+            total_m=total_m,
+            surface_m=surface_m,
+            road_class_m=road_class_m,
+            use_m=use_m,
+            cycle_lane_m=cycle_lane_m,
+        )
+
+    async def _attributes_chunk(self, chunk: list[Point], preset: Preset) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "shape": [{"lat": lat, "lon": lon} for lat, lon in chunk],
+            "shape_match": "edge_walk",
+            "costing": "bicycle",
+            "costing_options": {"bicycle": PRESETS[preset]},
+            "units": "kilometers",
+            "filters": {
+                "action": "include",
+                "attributes": [
+                    "edge.length",
+                    "edge.surface",
+                    "edge.road_class",
+                    "edge.use",
+                    "edge.cycle_lane",
+                ],
+            },
+        }
+        return await self._post("/trace_attributes", payload)
+
     async def _elevation_profile(self, shape: list[tuple[float, float]]) -> list[ElevationPoint]:
         sampled = evenly_sampled(shape, MAX_ELEVATION_SAMPLES)
         payload = {
@@ -194,6 +278,23 @@ def _chunks(points: list[Point], size: int) -> list[list[Point]]:
     if len(points) <= size:
         return [points]
     return [points[start : start + size] for start in range(0, len(points) - 1, size - 1)]
+
+
+def _plain_chunks(points: list[Point], size: int) -> list[list[Point]]:
+    """Split a trace into request-sized chunks with no shared boundary point.
+
+    Unlike `_chunks`, this only accumulates aggregate metres per chunk -
+    nothing needs to stitch back into continuous geometry - so a clean,
+    non-overlapping split is both simpler and correct.
+    """
+    chunks = [points[start : start + size] for start in range(0, len(points), size)]
+    # A trailing single point cannot be traced - Valhalla rejects a one-point
+    # shape, and that one bad chunk would null the breakdown for the whole
+    # route. Dropping it loses at most one edge, the same tolerance the
+    # non-overlapping split already accepts at every chunk boundary.
+    if len(chunks) > 1 and len(chunks[-1]) < 2:
+        chunks.pop()
+    return chunks
 
 
 def ascent_descent(elevation: list[ElevationPoint]) -> tuple[float, float]:
