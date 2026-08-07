@@ -59,7 +59,7 @@ class ValhallaClient:
         legs = [RouteLeg(geometry=leg["shape"], maneuvers=leg["maneuvers"]) for leg in trip["legs"]]
         shape = concat_shapes([decode_polyline6(leg.geometry) for leg in legs])
         elevation = await self._elevation_profile(shape)
-        ascent, descent = _ascent_descent(elevation)
+        ascent, descent = ascent_descent(elevation)
         return RouteResponse(
             legs=legs,
             distance_m=trip["summary"]["length"] * 1000.0,
@@ -100,7 +100,7 @@ class ValhallaClient:
 
         matched = concat_shapes([decode_polyline6(leg.geometry) for leg in legs])
         elevation = await self._elevation_profile(matched)
-        ascent, descent = _ascent_descent(elevation)
+        ascent, descent = ascent_descent(elevation)
         return RouteResponse(
             legs=legs,
             distance_m=distance_m,
@@ -144,7 +144,7 @@ def _downsample(points: list[tuple[float, float]], limit: int) -> list[tuple[flo
     return [points[round(i * step)] for i in range(limit)]
 
 
-def _ascent_descent(elevation: list[ElevationPoint]) -> tuple[float, float]:
+def ascent_descent(elevation: list[ElevationPoint]) -> tuple[float, float]:
     ascent = descent = 0.0
     for prev, curr in zip(elevation, elevation[1:], strict=False):
         delta = curr.elev_m - prev.elev_m

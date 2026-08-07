@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from app.schemas import ElevationPoint, RouteRequest, Waypoint
 from app.services.geo import haversine, resample_by_distance
 from app.services.presets import PRESETS
-from app.services.valhalla import ValhallaClient, _ascent_descent, _downsample
+from app.services.valhalla import ValhallaClient, _downsample, ascent_descent
 from tests.test_polyline import encode_polyline6
 
 BASE = "http://valhalla.test"
@@ -107,7 +107,7 @@ def test_ascent_descent() -> None:
         ElevationPoint(dist_m=d, elev_m=e)
         for d, e in [(0, 100.0), (100, 110.0), (200, 105.0), (300, 120.0)]
     ]
-    ascent, descent = _ascent_descent(profile)
+    ascent, descent = ascent_descent(profile)
     assert ascent == pytest.approx(25.0)
     assert descent == pytest.approx(5.0)
 
