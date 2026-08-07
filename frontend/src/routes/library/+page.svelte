@@ -1,7 +1,20 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { routes, wahoo, type RouteSummary, type WahooStatus } from '$lib/api';
+	import ImportResults from '$lib/components/ImportResults.svelte';
+	import { ACCEPTED_FILES, importQueue } from '$lib/import.svelte';
 	import { onDestroy } from 'svelte';
+
+	let fileInput: HTMLInputElement | undefined = $state();
+
+	async function chooseFiles(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		if (!input.files?.length) return;
+		await importQueue.add(input.files);
+		// Let the same file be picked again after a failed attempt.
+		input.value = '';
+		await refresh();
+	}
 
 	let items: RouteSummary[] = $state([]);
 	let loaded = $state(false);
@@ -127,6 +140,22 @@
 <div class="page">
 	<div class="header">
 		<h1>Library</h1>
+		<button
+			type="button"
+			class="import"
+			onclick={() => fileInput?.click()}
+			disabled={importQueue.busy}
+		>
+			{importQueue.busy ? 'Importing…' : 'Import'}
+		</button>
+		<input
+			bind:this={fileInput}
+			type="file"
+			accept={ACCEPTED_FILES}
+			multiple
+			hidden
+			onchange={chooseFiles}
+		/>
 		{#if wahooStatus?.configured}
 			{#if wahooStatus.connected}
 				<span class="wahoo-connected">
@@ -138,11 +167,12 @@
 			{/if}
 		{/if}
 	</div>
+	<ImportResults />
 	{#if error}
 		<p class="error">{error}</p>
 	{:else if loaded && items.length === 0}
 		<p class="empty">
-			No saved routes yet. <a href="/">Plan one</a> and hit Save.
+			No saved routes yet. <a href="/">Plan one</a> and hit Save, or import a GPX, TCX or FIT file.
 		</p>
 	{:else if loaded}
 		<table>
@@ -221,6 +251,10 @@
 </div>
 
 <style>
+	.import {
+		margin-left: auto;
+	}
+
 	.page {
 		max-width: 900px;
 		margin: 0 auto;
