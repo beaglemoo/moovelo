@@ -215,29 +215,69 @@ async def reverse_geocode(db: AsyncSession, lat: float, lon: float) -> PlaceResu
 # box, the exact distance test keeps 722, and the whole thing takes 26 ms.
 # Without the geography column it would be a sequential scan of 285,000 POIs.
 #
-# ST_LineLocatePoint needs plain geometry, hence the geom/geog split, and it
-# runs only over the survivors. On a route that doubles back it reports the
-# first pass, which is the honest reading of "how far along".
+# ST_LineLocatePoint needs plain geometry and it runs only over the
+# survivors. It is fed web mercator, NOT the stored 4326: on unprojected
+# lon/lat it treats a degree of longitude and a degree of latitude as the
+# same unit, and at 51N a degree of longitude is only about 63% as long. A
+# route 20 km east then 20 km north reported a POI at the corner as 24,917 m
+# along a 40,382 m ride when the true figure is 20,357 m - 22% out. Mercator
+# is conformal, so both axes scale together and the same case comes back at
+# 20,311 m. The one test that existed used a purely east-west line, the
+# single geometry where the distortion vanishes.
+#
+# On a route that doubles back it reports the first pass, which is the
+# honest reading of "how far along".
 #
 # The category array is CAST explicitly: asyncpg infers parameter types from
 # context, and an empty list gives it nothing - "could not determine
 # polymorphic type because input has type unknown".
+#
+# The cap is spread along the route rather than taken from the front. POI
+# density is wildly uneven - a ride out of Oxford had 498 POIs within 500 m,
+# and the first 301 by distance-along all fell inside the opening 233 m, so
+# the answer described 0.6% of a 38 km ride while reporting only
+# "truncated". Bucketing by position and keeping the nearest few per bucket
+# guarantees the whole ride is represented; the window count reports how
+# many were dropped.
+POI_BUCKETS = 50
+POI_PER_BUCKET = MAX_POI_RESULTS // POI_BUCKETS
+
 _POIS_SQL = text(f"""
     WITH r AS (
-        SELECT line AS geom, line::geography AS geog, ST_Length(line::geography) AS len
+        SELECT line AS geom, ST_Transform(line, 3857) AS geom_m,
+               line::geography AS geog, ST_Length(line::geography) AS len
         FROM (SELECT ST_SetSRID(ST_GeomFromText(:wkt), 4326) AS line) s
+    ),
+    near AS (
+        SELECT p.id, p.name, p.category, p.osm_tags,
+               ST_Y(p.geog::geometry) AS lat,
+               ST_X(p.geog::geometry) AS lon,
+               ST_Distance(p.geog, r.geog) AS dist_from_route_m,
+               ST_LineLocatePoint(r.geom_m, ST_Transform(p.geog::geometry, 3857))
+                   * r.len AS dist_along_m,
+               r.len AS route_len
+        FROM pois p, r
+        WHERE ST_DWithin(p.geog, r.geog, :radius)
+          AND (cardinality(CAST(:categories AS text[])) = 0
+               OR p.category = ANY(CAST(:categories AS text[])))
+    ),
+    ranked AS (
+        SELECT near.*,
+               count(*) OVER () AS candidate_count,
+               ROW_NUMBER() OVER (
+                   PARTITION BY width_bucket(
+                       dist_along_m, 0, GREATEST(route_len, 1), {POI_BUCKETS}
+                   )
+                   ORDER BY dist_from_route_m
+               ) AS rank_in_bucket
+        FROM near
     )
-    SELECT p.id, p.name, p.category, p.osm_tags,
-           ST_Y(p.geog::geometry) AS lat,
-           ST_X(p.geog::geometry) AS lon,
-           ST_Distance(p.geog, r.geog) AS dist_from_route_m,
-           ST_LineLocatePoint(r.geom, p.geog::geometry) * r.len AS dist_along_m
-    FROM pois p, r
-    WHERE ST_DWithin(p.geog, r.geog, :radius)
-      AND (cardinality(CAST(:categories AS text[])) = 0
-           OR p.category = ANY(CAST(:categories AS text[])))
+    SELECT id, name, category, osm_tags, lat, lon,
+           dist_from_route_m, dist_along_m, candidate_count
+    FROM ranked
+    WHERE rank_in_bucket <= {POI_PER_BUCKET}
     ORDER BY dist_along_m
-    LIMIT {MAX_POI_RESULTS + 1}
+    LIMIT {MAX_POI_RESULTS}
 """)
 
 
@@ -323,9 +363,11 @@ async def pois_along_route(
             },
         )
     )
-    # One row over the limit was fetched purely to tell a full page from a
-    # truncated one, so the UI never presents a partial answer as complete.
-    truncated = len(rows) > MAX_POI_RESULTS
+    # The window count is over every candidate within the radius, before the
+    # per-bucket cap, so this reports what was actually dropped rather than
+    # whether the page happened to fill up.
+    candidates = rows[0].candidate_count if rows else 0
+    truncated = candidates > len(rows)
     return PoisAlongRoute(
         pois=[
             PoiResult(
@@ -338,7 +380,7 @@ async def pois_along_route(
                 dist_along_m=row.dist_along_m,
                 tags={str(k): str(v) for k, v in (row.osm_tags or {}).items()},
             )
-            for row in rows[:MAX_POI_RESULTS]
+            for row in rows
         ],
         truncated=truncated,
     )

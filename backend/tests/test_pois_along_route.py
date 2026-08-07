@@ -172,6 +172,60 @@ async def test_opening_hours_come_back_with_the_poi(client: AsyncClient, db: Asy
     assert (await find(client))["pois"][0]["tags"]["opening_hours"] == "Mo-Su 08:00-17:00"
 
 
+async def test_a_dense_start_does_not_eat_the_whole_answer(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The cap must be spread along the ride, not taken from the front.
+
+    Real POI density is urban-clustered: a route out of Oxford had 498 POIs
+    within 500 m, and the first 301 by distance-along all fell inside the
+    opening 233 m - so the answer described 0.6% of a 38 km ride while
+    reporting only "truncated". The test that existed seeded POIs evenly
+    spaced along the line, a distribution that can never expose this.
+    """
+    await register(client)
+    town = [
+        poi(i, "cafe", WEST + (i % 40) * 0.000_02, LAT, name=f"Town cafe {i}")
+        for i in range(MAX_POI_RESULTS + 100)
+    ]
+    # Three lonely ones spread over the rest of the 4 km line.
+    country = [
+        poi(90_001, "water", -0.0300, LAT, name="Halfway tap"),
+        poi(90_002, "water", -0.0150, LAT, name="Three quarter tap"),
+        poi(90_003, "water", -0.0010, LAT, name="Last tap"),
+    ]
+    await seed(db, *town, *country)
+
+    found = await find(client)
+    names_found = {p["name"] for p in found["pois"]}
+
+    assert {"Halfway tap", "Three quarter tap", "Last tap"} <= names_found
+    assert found["truncated"] is True
+
+
+async def test_distance_along_is_not_measured_in_degrees(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """An L-shaped route: 20 km east, then 20 km north.
+
+    ST_LineLocatePoint on unprojected lon/lat treats a degree of longitude
+    and a degree of latitude as the same unit, and at this latitude the
+    former is about 63% of the latter. That put a POI at the corner 22% too
+    far along. The only test that existed used a purely east-west line - the
+    one geometry where the distortion vanishes.
+    """
+    await register(client)
+    corner = (-0.71, 51.0)
+    await seed(db, poi(1, "water", corner[0], corner[1], name="At the corner"))
+
+    found = await find(client, line=[[-1.0, 51.0], list(corner), [-0.71, 51.18]])
+
+    # True geodesic distance to the corner is about 20.4 km of a 40.4 km
+    # route; the degree-space answer was 24.9 km.
+    along = found["pois"][0]["dist_along_m"]
+    assert 20_000 < along < 20_800, along
+
+
 async def test_a_long_list_is_cut_short_and_says_so(client: AsyncClient, db: AsyncSession) -> None:
     """No silent caps: a truncated answer must not look like a complete one."""
     await register(client)
@@ -186,8 +240,15 @@ async def test_a_long_list_is_cut_short_and_says_so(client: AsyncClient, db: Asy
 
     found = await find(client)
 
-    assert len(found["pois"]) == MAX_POI_RESULTS
+    # At most the cap, and fewer here because the per-bucket limit is what
+    # binds: the cap is a ceiling on a spread, not a page taken from the
+    # front.
+    assert 0 < len(found["pois"]) <= MAX_POI_RESULTS
     assert found["truncated"] is True
+    # Whatever survives still covers the ride end to end.
+    along = [p["dist_along_m"] for p in found["pois"]]
+    assert min(along) < 500
+    assert max(along) > 3000
 
 
 async def test_a_short_list_is_not_flagged_as_truncated(
