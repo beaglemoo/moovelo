@@ -60,8 +60,20 @@ def _cache_get(key: str) -> WeatherAlongRoute | None:
     return payload
 
 
+# Distinct route/start-hour keys would otherwise accumulate for the life of
+# the process - lazy same-key eviction alone never removes them.
+_CACHE_MAX_ENTRIES = 128
+
+
 def _cache_set(key: str, payload: WeatherAlongRoute) -> None:
-    _cache[key] = (time.monotonic(), payload)
+    now = time.monotonic()
+    expired = [k for k, (at, _) in _cache.items() if now - at > _CACHE_TTL_S]
+    for k in expired:
+        del _cache[k]
+    if len(_cache) >= _CACHE_MAX_ENTRIES:
+        oldest = min(_cache, key=lambda k: _cache[k][0])
+        del _cache[oldest]
+    _cache[key] = (now, payload)
 
 
 def _sample_route(shape: list[Point]) -> tuple[list[tuple[Point, float]], float]:
@@ -102,7 +114,9 @@ def _smallest_signed_angle(a_deg: float, b_deg: float) -> float:
 
 
 def _interpolate_ride_time(dist_m: float, ride_time: list[RideTimePoint]) -> float:
-    points = sorted(ride_time, key=lambda p: p.dist_m)
+    # Callers pass an already distance-ordered profile (weather_along_route
+    # sorts client input once); no re-sort per sample.
+    points = ride_time
     if dist_m <= points[0].dist_m:
         return points[0].time_s
     if dist_m >= points[-1].dist_m:
@@ -161,7 +175,13 @@ async def _fetch_forecast(params: dict[str, str]) -> list[dict[str, Any]] | dict
             if response.status_code == 429 or response.status_code >= 500:
                 if attempt == MAX_ATTEMPTS:
                     break
-                retry_after = float(response.headers.get("Retry-After", 2**attempt))
+                # Retry-After may legally be an HTTP-date rather than
+                # delay-seconds; anything non-numeric falls back to the
+                # exponential default instead of crashing the request.
+                try:
+                    retry_after = float(response.headers.get("Retry-After", 2**attempt))
+                except ValueError:
+                    retry_after = float(2**attempt)
                 logger.warning(
                     "Weather request retry %d after HTTP %d", attempt, response.status_code
                 )
@@ -190,6 +210,11 @@ async def weather_along_route(
     to reach each one."""
     if len(shape) < 2:
         return WeatherAlongRoute(segments=[], truncated=True)
+
+    # Client-supplied profiles are not guaranteed ordered; sort once here so
+    # the per-sample interpolation never has to.
+    if ride_time:
+        ride_time = sorted(ride_time, key=lambda p: p.dist_m)
 
     samples, total_m = _sample_route(shape)
     bearings = _travel_bearings(shape, [point for point, _ in samples])
@@ -236,6 +261,10 @@ async def weather_along_route(
         speeds = hourly.get("wind_speed_10m", [])
         directions = hourly.get("wind_direction_10m", [])
         if idx >= len(speeds) or idx >= len(directions):
+            continue
+        # Individual hourly slots can be null at the edge of the model's
+        # range; skip the sample (surfacing as truncated) rather than 500.
+        if speeds[idx] is None or directions[idx] is None:
             continue
         speed = float(speeds[idx])
         direction = float(directions[idx])
