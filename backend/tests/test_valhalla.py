@@ -6,10 +6,10 @@ import respx
 from fastapi import HTTPException
 
 from app.schemas import ElevationPoint, RouteRequest, Waypoint
-from app.services.geo import haversine, resample_by_distance
+from app.services.geo import evenly_sampled, haversine, resample_by_distance
 from app.services.polyline import encode_polyline6
 from app.services.presets import PRESETS
-from app.services.valhalla import ValhallaClient, _downsample, ascent_descent
+from app.services.valhalla import ValhallaClient, ascent_descent
 
 BASE = "http://valhalla.test"
 
@@ -94,9 +94,9 @@ async def test_height_failure_returns_route_without_profile() -> None:
     assert result.ascent_m == 0.0
 
 
-def test_downsample_limits_points() -> None:
+def test_evenly_sampled_limits_points() -> None:
     points = [(float(i), float(i)) for i in range(2000)]
-    sampled = _downsample(points, 500)
+    sampled = evenly_sampled(points, 500)
     assert len(sampled) == 500
     assert sampled[0] == points[0]
     assert sampled[-1] == points[-1]

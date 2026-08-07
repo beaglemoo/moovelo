@@ -18,7 +18,7 @@ from fit_tool.profile.messages.course_message import CourseMessage
 from fit_tool.profile.messages.record_message import RecordMessage
 
 from app.schemas import ElevationPoint
-from app.services.geo import Point, cumulative_distances
+from app.services.geo import Point, cumulative_distances, evenly_sampled
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
 # Matches the resolution the routing engine samples its own profiles at, so a
@@ -104,19 +104,11 @@ def elevation_profile(
     if len(samples) < 2 or dists[-1] <= 0:
         return []
 
-    scale = total_distance_m / dists[-1] if total_distance_m else 1.0
+    scale = total_distance_m / dists[-1] if total_distance_m is not None else 1.0
     return [
         ElevationPoint(dist_m=dist * scale, elev_m=ele)
-        for dist, ele in _evenly_sampled(samples, MAX_ELEVATION_SAMPLES)
+        for dist, ele in evenly_sampled(samples, MAX_ELEVATION_SAMPLES)
     ]
-
-
-def _evenly_sampled(samples: list[tuple[float, float]], limit: int) -> list[tuple[float, float]]:
-    """Thin to `limit` samples, keeping the first and last."""
-    if len(samples) <= limit:
-        return samples
-    step = (len(samples) - 1) / (limit - 1)
-    return [samples[round(i * step)] for i in range(limit)]
 
 
 def detect_format(filename: str, data: bytes) -> str:

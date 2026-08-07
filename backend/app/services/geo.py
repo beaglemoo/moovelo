@@ -7,6 +7,16 @@ EARTH_RADIUS_M = 6371000.0
 Point = tuple[float, float]
 
 
+def evenly_sampled[T](items: list[T], limit: int) -> list[T]:
+    """Thin a list to at most `limit` items, keeping the first and last."""
+    if limit <= 1:
+        return items[:limit]
+    if len(items) <= limit:
+        return items
+    step = (len(items) - 1) / (limit - 1)
+    return [items[round(i * step)] for i in range(limit)]
+
+
 def haversine(a: Point, b: Point) -> float:
     """Distance in meters between two (lat, lon) points."""
     dlat = math.radians(b[0] - a[0])

@@ -1,5 +1,6 @@
 """Client for the Valhalla routing engine: /route, /trace_route and /height."""
 
+import asyncio
 import contextlib
 from typing import Any
 
@@ -8,7 +9,7 @@ from fastapi import HTTPException
 
 from app.config import settings
 from app.schemas import ElevationPoint, Preset, RouteLeg, RouteRequest, RouteResponse
-from app.services.geo import Point, concat_shapes, resample_by_distance
+from app.services.geo import Point, concat_shapes, evenly_sampled, resample_by_distance
 from app.services.polyline import decode_polyline6
 from app.services.presets import PRESETS
 
@@ -81,17 +82,15 @@ class ValhallaClient:
         if len(thinned) < 2:
             raise HTTPException(status_code=422, detail="Track is too short to match to roads.")
 
+        # Chunks are independent, so request them together and join the
+        # results in order afterwards: a long track otherwise waits for the
+        # sum of every round trip rather than the slowest one.
+        trips = await asyncio.gather(
+            *(self._trace_chunk(chunk, preset) for chunk in _chunks(thinned, TRACE_MAX_POINTS))
+        )
         legs: list[RouteLeg] = []
         distance_m = duration_s = 0.0
-        for chunk in _chunks(thinned, TRACE_MAX_POINTS):
-            payload: dict[str, Any] = {
-                "shape": [{"lat": lat, "lon": lon} for lat, lon in chunk],
-                "shape_match": "map_snap",
-                "costing": "bicycle",
-                "costing_options": {"bicycle": PRESETS[preset]},
-                "units": "kilometers",
-            }
-            trip = (await self._post("/trace_route", payload))["trip"]
+        for trip in trips:
             legs.extend(
                 RouteLeg(geometry=leg["shape"], maneuvers=leg["maneuvers"]) for leg in trip["legs"]
             )
@@ -110,8 +109,19 @@ class ValhallaClient:
             elevation=elevation,
         )
 
+    async def _trace_chunk(self, chunk: list[Point], preset: Preset) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "shape": [{"lat": lat, "lon": lon} for lat, lon in chunk],
+            "shape_match": "map_snap",
+            "costing": "bicycle",
+            "costing_options": {"bicycle": PRESETS[preset]},
+            "units": "kilometers",
+        }
+        trip: dict[str, Any] = (await self._post("/trace_route", payload))["trip"]
+        return trip
+
     async def _elevation_profile(self, shape: list[tuple[float, float]]) -> list[ElevationPoint]:
-        sampled = _downsample(shape, MAX_ELEVATION_SAMPLES)
+        sampled = evenly_sampled(shape, MAX_ELEVATION_SAMPLES)
         payload = {
             "shape": [{"lat": lat, "lon": lon} for lat, lon in sampled],
             "range": True,
@@ -135,13 +145,6 @@ def _chunks(points: list[Point], size: int) -> list[list[Point]]:
     if len(points) <= size:
         return [points]
     return [points[start : start + size] for start in range(0, len(points) - 1, size - 1)]
-
-
-def _downsample(points: list[tuple[float, float]], limit: int) -> list[tuple[float, float]]:
-    if len(points) <= limit:
-        return points
-    step = (len(points) - 1) / (limit - 1)
-    return [points[round(i * step)] for i in range(limit)]
 
 
 def ascent_descent(elevation: list[ElevationPoint]) -> tuple[float, float]:
