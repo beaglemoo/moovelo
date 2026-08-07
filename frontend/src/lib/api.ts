@@ -56,6 +56,27 @@ export interface PlaceResult {
 	distance_m: number | null;
 }
 
+export interface PoiResult {
+	id: number;
+	/** Null for the unnamed majority - a drinking fountain, a repair stand -
+	 * which are exactly the ones worth finding. Render the category instead. */
+	name: string | null;
+	category: string;
+	lat: number;
+	lon: number;
+	dist_from_route_m: number;
+	/** Metres from the start, measured along the route. */
+	dist_along_m: number;
+	/** opening_hours, website and the like, straight from OSM. Untrusted
+	 * text: render it, never interpret it. */
+	tags: Record<string, string>;
+}
+
+export interface PoisAlongRoute {
+	pois: PoiResult[];
+	truncated: boolean;
+}
+
 export interface AuthStatus {
 	setup_required: boolean;
 	signups_enabled: boolean;
@@ -272,6 +293,25 @@ export const places = {
 	/** Name a point from the offline index. Resolves to null when nothing is
 	 * near it, when the index is not built, and when the lookup fails - every
 	 * caller is decorating something that has to work without a name. */
+	/** POIs within `radiusM` of a route line, ordered along it. Takes a
+	 * signal because changing a category refetches, and the route can change
+	 * underneath a request that is still in flight. */
+	poisAlongRoute: async (
+		line: [number, number][],
+		categories: string[],
+		radiusM: number,
+		signal?: AbortSignal
+	): Promise<PoisAlongRoute> => {
+		const response = await fetch('/api/places/pois-along-route', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ line, categories, radius_m: radiusM }),
+			signal
+		});
+		if (!response.ok) throw new ApiError(response.status, 'Could not look up points of interest');
+		return await response.json();
+	},
+
 	reverse: async (lat: number, lon: number): Promise<PlaceResult | null> => {
 		const params = new URLSearchParams({ lat: String(lat), lon: String(lon) });
 		try {
