@@ -90,6 +90,25 @@ class PoisAlongRoute(BaseModel):
     truncated: bool
 
 
+class SurfaceBreakdown(BaseModel):
+    """Aggregated Valhalla /trace_attributes edges over a route's own shape.
+
+    Metres, not fractions - summable across chunks, and the frontend derives
+    percentages from `total_m`. Keys are Valhalla's own enum strings
+    (including ones absent from its documented enum, e.g. "service_road" and
+    "parking_aisle"), so these are plain dicts rather than a Literal/enum.
+    """
+
+    total_m: float
+    surface_m: dict[str, float] = {}
+    road_class_m: dict[str, float] = {}
+    use_m: dict[str, float] = {}
+    # Metres where cycle_lane is present and not "none". Kept separate from
+    # use_m: surface mix and marked cycling infrastructure measure different
+    # things, and conflating them would misrepresent both.
+    cycle_lane_m: float = 0.0
+
+
 class Waypoint(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
@@ -118,6 +137,10 @@ class RouteResponse(BaseModel):
     ascent_m: float
     descent_m: float
     elevation: list[ElevationPoint]
+    # None default is what keeps snapshots stored before Phase 7 - and any
+    # route whose edge_walk match failed - parsing without a migration of
+    # their own.
+    surface: SurfaceBreakdown | None = None
 
 
 class RouteSaveRequest(BaseModel):
