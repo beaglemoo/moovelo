@@ -68,6 +68,12 @@ cookie, email matching) works with any generic provider;
 ignored unless OIDC is configured, so it can never lock you out. Admin
 accounts get a minimal `/admin` page (users, stats, config overview).
 
+Each user optionally has a `user_settings` row (weight, flat-road speed,
+optional FTP) edited at `/settings`. `GET /api/settings` returns sane
+defaults without inserting a row, so a user who never opens the page
+never gets one; the first `PATCH` creates it. These feed the ride-time
+model, which is not yet built.
+
 ## The place index
 
 `places`, `pois` and `cycle_ways` hold settlements, useful stops and
