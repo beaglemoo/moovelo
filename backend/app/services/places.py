@@ -101,9 +101,16 @@ MIN_IMPORTANCE = 0.05
 # is closest".
 _REACH = f"({REVERSE_MAX_REACH_M} * GREATEST(p.importance, {MIN_IMPORTANCE}) ^ 2)"
 
-# Written out rather than built in a CTE so the KNN operator sees a
-# pseudo-constant and can drive an index scan on ix_places_geog. The casts
+# Written out rather than built in a CTE so the point stays a
+# pseudo-constant the planner can push into the index condition. The casts
 # are for asyncpg, which infers parameter types from context.
+#
+# The ORDER BY below is arithmetic, so no index can satisfy it: what
+# ix_places_geog actually serves is the ST_DWithin bound, as a bitmap index
+# scan feeding a top-N sort. (An earlier draft ordered by the `<->` KNN
+# operator and this comment still claimed so long after the reach model
+# replaced it. Do not drop the ST_DWithin thinking KNN keeps it bounded -
+# it is the only thing that does.)
 _POINT = (
     "ST_SetSRID("
     "ST_MakePoint(CAST(:lon AS double precision), CAST(:lat AS double precision)), 4326"
