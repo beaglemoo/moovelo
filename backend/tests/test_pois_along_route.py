@@ -226,3 +226,16 @@ async def test_an_absurd_radius_is_rejected(client: AsyncClient) -> None:
     )
 
     assert response.status_code == 422
+
+
+async def test_a_line_with_impossible_coordinates_is_rejected(client: AsyncClient) -> None:
+    """PostGIS takes a latitude of 500 without complaint and returns a
+    distance computed from it, so nonsense would come back looking like a
+    real answer. Bounded like Waypoint has always been."""
+    await register(client)
+
+    response = await client.post(
+        "/api/places/pois-along-route", json={"line": [[WEST, LAT], [WEST, 500.0]]}
+    )
+
+    assert response.status_code == 422
