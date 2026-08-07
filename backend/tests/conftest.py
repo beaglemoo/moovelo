@@ -11,7 +11,7 @@ from app.db import get_db
 from app.main import app
 from app.models import Base
 from app.schemas import RouteResponse
-from tests.test_polyline import encode_polyline6
+from app.services.polyline import encode_polyline6
 
 TEST_DB_HOST = "127.0.0.1:5433"
 ADMIN_URL = f"postgresql+asyncpg://bikegps:bikegps@{TEST_DB_HOST}/bikegps"

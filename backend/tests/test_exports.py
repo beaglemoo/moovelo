@@ -13,8 +13,7 @@ from app.schemas import RouteResponse
 from app.services.fit import build_fit
 from app.services.geo import concat_shapes
 from app.services.gpx import build_gpx, interpolate_elevations
-from app.services.polyline import decode_polyline6
-from tests.test_polyline import encode_polyline6
+from app.services.polyline import decode_polyline6, encode_polyline6
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 BASE_TIME = datetime(2026, 1, 15, 9, 0, 0, tzinfo=UTC)
