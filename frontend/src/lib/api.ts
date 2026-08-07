@@ -26,6 +26,17 @@ export interface RouteLeg {
 	maneuvers: Maneuver[];
 }
 
+export interface SurfaceBreakdown {
+	total_m: number;
+	/** Keyed by Valhalla's own enum strings, including ones absent from its
+	 * documented enum (e.g. "service_road", "parking_aisle"). */
+	surface_m: Record<string, number>;
+	road_class_m: Record<string, number>;
+	use_m: Record<string, number>;
+	/** Metres where cycle_lane is present and not "none". */
+	cycle_lane_m: number;
+}
+
 export interface RouteResponse {
 	legs: RouteLeg[];
 	distance_m: number;
@@ -33,6 +44,9 @@ export interface RouteResponse {
 	ascent_m: number;
 	descent_m: number;
 	elevation: ElevationPoint[];
+	/** Null for snapshots stored before Phase 7, and for any route whose
+	 * edge_walk match failed - surface is decorative and never blocks a save. */
+	surface?: SurfaceBreakdown | null;
 }
 
 export interface AppConfig {
@@ -340,6 +354,26 @@ export async function fetchConfig(): Promise<AppConfig> {
 	} catch {
 		return CONFIG_FALLBACK;
 	}
+}
+
+/** Surface/road-class/use breakdown for a route line, via /trace_attributes
+ * with edge_walk. Takes a signal because the route can change underneath a
+ * request that is still in flight; resolves to null when the line does not
+ * lie exactly on the routing graph (edge_walk fails by design) or the
+ * request otherwise fails - surface is decorative, never blocking. */
+export async function routeSurface(
+	line: [number, number][],
+	preset: Preset,
+	signal?: AbortSignal
+): Promise<SurfaceBreakdown | null> {
+	const response = await fetch('/api/route/surface', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ line, preset }),
+		signal
+	});
+	if (!response.ok) return null;
+	return await response.json();
 }
 
 export async function planRoute(

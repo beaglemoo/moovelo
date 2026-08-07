@@ -4,6 +4,7 @@
 		fetchConfig,
 		places,
 		planRoute,
+		routeSurface,
 		routes,
 		wahoo,
 		type AppConfig,
@@ -22,6 +23,7 @@
 	import PlaceSearch from '$lib/components/PlaceSearch.svelte';
 	import PoiPanel from '$lib/components/PoiPanel.svelte';
 	import PresetSelector from '$lib/components/PresetSelector.svelte';
+	import SurfaceBar from '$lib/components/SurfaceBar.svelte';
 	import MapView from '$lib/map/MapView.svelte';
 	import { unsaved } from '$lib/unsaved.svelte';
 	import { onDestroy } from 'svelte';
@@ -224,6 +226,35 @@
 			})
 			.finally(() => {
 				if (!controller.signal.aborted) poisLoading = false;
+			});
+	});
+
+	let surfaceController: AbortController | null = null;
+
+	// Refetch the surface breakdown whenever the route or preset changes.
+	// Written straight onto `route.surface` (rather than replacing `route`
+	// itself) so the existing save path persists it with zero
+	// special-casing, without reassigning `route` wholesale - which would
+	// retrigger routeLine's own derivation and loop this effect back on
+	// itself.
+	$effect(() => {
+		const line = routeLine;
+		const currentPreset = preset;
+		surfaceController?.abort();
+		if (line.length < 2) {
+			if (route) route.surface = null;
+			return;
+		}
+		const controller = new AbortController();
+		surfaceController = controller;
+		routeSurface(line, currentPreset, controller.signal)
+			.then((result) => {
+				if (controller.signal.aborted || !route) return;
+				route.surface = result;
+			})
+			.catch(() => {
+				if (controller.signal.aborted || !route) return;
+				route.surface = null;
 			});
 	});
 
@@ -529,6 +560,9 @@
 				<span>↗ {Math.round(route.ascent_m)} m</span>
 				<span>↘ {Math.round(route.descent_m)} m</span>
 			</div>
+			{#if route.surface && route.surface.total_m > 0}
+				<SurfaceBar surface={route.surface} />
+			{/if}
 			<div class="panel-body">
 				<ElevationProfile elevation={route.elevation} onHover={handleElevationHover} />
 				{#if config?.search_enabled}
