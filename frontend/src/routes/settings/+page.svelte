@@ -52,7 +52,7 @@
 <div class="page">
 	<h1>Settings</h1>
 	<p class="hint">
-		These feed the ride-time estimate (arriving in this release) rather than changing routing
+		These feed the ride-time estimate shown in the planner and library, rather than changing routing
 		itself.
 	</p>
 
