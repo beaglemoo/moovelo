@@ -163,3 +163,25 @@ def test_roundabout_exit_without_an_enter_still_produces_a_cue() -> None:
     points = course_points_for([ROUNDABOUT_EXIT])
     assert len(points) == 1
     assert points[0].course_point_name.startswith("Exit the roundabout")
+
+
+def test_roundabout_spanning_a_leg_boundary_is_still_one_cue() -> None:
+    """A via point on a roundabout splits enter and exit across legs."""
+    shape_a = [(53.7996 + i * 0.001, -1.5491) for i in range(3)]
+    shape_b = [(53.7996 + i * 0.001, -1.5491) for i in range(2, 5)]
+    legs = [
+        {"geometry": encode_polyline6(shape_a), "maneuvers": [ROUNDABOUT_ENTER]},
+        {
+            "geometry": encode_polyline6(shape_b),
+            "maneuvers": [{**ROUNDABOUT_EXIT, "begin_shape_index": 0}],
+        },
+    ]
+    elevation = [{"dist_m": 0.0, "elev_m": 50.0}, {"dist_m": 500.0, "elev_m": 60.0}]
+    fit = build_fit("Split roundabout", legs, elevation, 600.0, BASE_TIME)
+    points = [
+        record.message
+        for record in FitFile.from_bytes(fit).records
+        if isinstance(record.message, CoursePointMessage)
+    ]
+    assert [p.type for p in points] == [CoursePoint.RIGHT.value]
+    assert points[0].course_point_name == "3rd exit onto Bulbourne Road"

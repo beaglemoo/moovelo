@@ -127,46 +127,48 @@ def _course_points(
     base_ms: int,
 ) -> list[CoursePointMessage]:
     messages: list[CoursePointMessage] = []
+    # Flattened first, because a roundabout can straddle a leg boundary when a
+    # waypoint sits on it: the enter maneuver ends one leg and the exit starts
+    # the next. Folding per-leg would miss those and emit two vague cues.
+    flat: list[tuple[dict[str, Any], int]] = []
     leg_offset = 0
     for leg, shape in zip(legs, shapes, strict=True):
-        folded_exit = False
-        for position, maneuver in enumerate(leg.maneuvers):
-            m_type = int(maneuver.get("type", 0))
-            if m_type in SKIPPED_MANEUVER_TYPES:
-                continue
-            # The exit of a roundabout we already emitted as a single turn.
-            if m_type == ROUNDABOUT_EXIT and folded_exit:
-                folded_exit = False
-                continue
-            folded_exit = False
-            if m_type == ROUNDABOUT_ENTER:
-                exit_maneuver = next(
-                    (
-                        m
-                        for m in leg.maneuvers[position + 1 :]
-                        if int(m.get("type", 0)) == ROUNDABOUT_EXIT
-                    ),
-                    None,
-                )
-                folded_exit = exit_maneuver is not None
-                point_type = _roundabout_point(maneuver, exit_maneuver)
-                label = _roundabout_name(maneuver, exit_maneuver)
-            else:
-                point_type = MANEUVER_TYPE_MAP.get(m_type, CoursePoint.GENERIC)
-                label = str(maneuver.get("instruction", ""))
+        for maneuver in leg.maneuvers:
             begin_index: int = maneuver.get("begin_shape_index", 0)
             # Legs share boundary vertices, so the concatenated index for a
             # leg-local shape index is offset by len(shape)-1 per prior leg.
-            index = min(leg_offset + begin_index, len(merged) - 1)
-            point = CoursePointMessage()
-            point.timestamp = base_ms + _time_offset_ms(dists[index], total_dist, duration_s)
-            point.position_lat = merged[index][0]
-            point.position_long = merged[index][1]
-            point.distance = dists[index]
-            point.type = point_type
-            point.course_point_name = label[:COURSE_POINT_NAME_MAX]
-            messages.append(point)
+            flat.append((maneuver, min(leg_offset + begin_index, len(merged) - 1)))
         leg_offset += max(len(shape) - 1, 0)
+
+    folded_exit = False
+    for position, (maneuver, index) in enumerate(flat):
+        m_type = int(maneuver.get("type", 0))
+        if m_type in SKIPPED_MANEUVER_TYPES:
+            continue
+        # The exit of a roundabout we already emitted as a single turn.
+        if m_type == ROUNDABOUT_EXIT and folded_exit:
+            folded_exit = False
+            continue
+        folded_exit = False
+        if m_type == ROUNDABOUT_ENTER:
+            exit_maneuver = next(
+                (m for m, _ in flat[position + 1 :] if int(m.get("type", 0)) == ROUNDABOUT_EXIT),
+                None,
+            )
+            folded_exit = exit_maneuver is not None
+            point_type = _roundabout_point(maneuver, exit_maneuver)
+            label = _roundabout_name(maneuver, exit_maneuver)
+        else:
+            point_type = MANEUVER_TYPE_MAP.get(m_type, CoursePoint.GENERIC)
+            label = str(maneuver.get("instruction", ""))
+        point = CoursePointMessage()
+        point.timestamp = base_ms + _time_offset_ms(dists[index], total_dist, duration_s)
+        point.position_lat = merged[index][0]
+        point.position_long = merged[index][1]
+        point.distance = dists[index]
+        point.type = point_type
+        point.course_point_name = label[:COURSE_POINT_NAME_MAX]
+        messages.append(point)
     return messages
 
 
