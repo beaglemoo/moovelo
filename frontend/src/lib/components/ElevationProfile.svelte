@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { ElevationPoint } from '$lib/api';
+	import { elevationRuns, GRADIENT_BANDS } from '$lib/gradient';
 
 	interface Props {
 		elevation: ElevationPoint[];
@@ -40,6 +41,26 @@
 			? `${linePath}L${x(totalDist).toFixed(1)},${H - PAD_BOTTOM}L${PAD_LEFT},${H - PAD_BOTTOM}Z`
 			: ''
 	);
+
+	// Runs of consecutive elevation samples in the same gradient band, each
+	// drawn as its own coloured stroke. Sharing the run's boundary sample
+	// with its neighbour (endIdx of one run is startIdx of the next) keeps
+	// the coloured line joined with no gaps.
+	const gradientPaths = $derived.by(() => {
+		return elevationRuns(elevation).map((run) => {
+			const points = elevation.slice(run.startIdx, run.endIdx + 1);
+			const path = points
+				.map((p, i) => `${i ? 'L' : 'M'}${x(p.dist_m).toFixed(1)},${y(p.elev_m).toFixed(1)}`)
+				.join('');
+			return { path, band: run.band };
+		});
+	});
+
+	// Only the bands this route actually has, in band order.
+	const legendBands = $derived.by(() => {
+		const present = new Set(gradientPaths.map((seg) => seg.band));
+		return GRADIENT_BANDS.map((b, i) => ({ ...b, index: i })).filter((b) => present.has(b.index));
+	});
 
 	const gridLines = $derived.by(() => {
 		const lines: { yPos: number; label: string }[] = [];
@@ -91,7 +112,9 @@
 			</text>
 		{/each}
 		<path d={areaPath} class="area" />
-		<path d={linePath} class="line" />
+		{#each gradientPaths as segment, i (i)}
+			<path d={segment.path} class="line" stroke={GRADIENT_BANDS[segment.band].colour} />
+		{/each}
 		{#if hover}
 			<line
 				x1={x(hover.dist_m)}
@@ -112,6 +135,14 @@
 		<text x={PAD_LEFT} y={H - 6} class="axis-label">0 km</text>
 		<text x={W - PAD_RIGHT} y={H - 6} class="axis-label" text-anchor="end">{km(totalDist)}</text>
 	</svg>
+	<div class="legend">
+		{#each legendBands as band (band.label)}
+			<span class="legend-item">
+				<span class="legend-dot" style="background: {band.colour}"></span>
+				{band.label}
+			</span>
+		{/each}
+	</div>
 {/if}
 
 <style>
@@ -126,7 +157,6 @@
 	}
 	.line {
 		fill: none;
-		stroke: #d33682;
 		stroke-width: 1.8;
 		vector-effect: non-scaling-stroke;
 	}
@@ -148,5 +178,24 @@
 	.hover-label {
 		font-weight: 600;
 		fill: #268bd2;
+	}
+	.legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.6rem;
+		padding: 0.15rem 0.2rem 0.3rem;
+	}
+	.legend-item {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+		font-size: 0.75rem;
+		color: #586e75;
+	}
+	.legend-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		flex-shrink: 0;
 	}
 </style>

@@ -17,6 +17,7 @@
 		type Waypoint
 	} from '$lib/api';
 	import { cumulativeDistances, pointAtDistance } from '$lib/geo';
+	import { gradientSegments as computeGradientSegments } from '$lib/gradient';
 	import { decodePolyline6 } from '$lib/polyline';
 	import { categoriesFor, DEFAULT_POI_GROUPS } from '$lib/pois';
 	import ElevationProfile from '$lib/components/ElevationProfile.svelte';
@@ -190,6 +191,9 @@
 		return starts;
 	});
 	const routeDists = $derived(cumulativeDistances(routeLine));
+	const gradientSegments = $derived.by(() =>
+		computeGradientSegments(route?.elevation ?? [], routeLine, routeDists)
+	);
 
 	// Far enough to catch a cafe just off the road, near enough that
 	// "on this ride" still means something.
@@ -453,6 +457,7 @@
 				{waypoints}
 				{routeLine}
 				{legStartIndices}
+				{gradientSegments}
 				{hoverPoint}
 				cyclosmTileUrl={config.tile_url_cyclosm}
 				{fitTrigger}

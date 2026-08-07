@@ -398,6 +398,20 @@ neither goes through the planner's own fetch. Saved snapshots carry
 saved before this existed - and any route whose edge_walk match failed -
 parsing without a migration of their own.
 
+## Gradient colouring
+
+`frontend/src/lib/gradient.ts` computes a gradient band per step between
+consecutive elevation samples (point-to-point, no smoothing - it is a
+coarse visual, not climb detection) and merges same-band runs. The
+elevation chart draws one coloured stroke per run; the map draws the same
+runs as a `route-gradient` GeoJSON FeatureCollection, one feature per
+segment with a `band` property consumed by a `match` expression on
+`line-color` - the same colouring idiom the POI layer uses. The original
+single-feature `route` source is untouched and keeps driving dragging and
+hit-testing (`route-hit`); when a route has no elevation, the gradient
+source falls back to one unbanded feature so the line renders in the plain
+colour rather than disappearing.
+
 ## Organising the library
 
 Routes carry free-form organisation: `tags` (a Postgres `text[]` with a
