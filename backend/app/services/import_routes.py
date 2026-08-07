@@ -7,9 +7,9 @@ that runs them in order and decides what to do when matching fails.
 from fastapi import HTTPException
 
 from app.schemas import ElevationPoint, Preset, RouteLeg, RouteResponse, Waypoint
-from app.services.geo import Point, cumulative_distances, resample_by_distance
+from app.services.geo import Point, concat_shapes, cumulative_distances, resample_by_distance
 from app.services.importer import ImportedTrack, elevation_profile, parse_route_file
-from app.services.polyline import encode_polyline6
+from app.services.polyline import decode_polyline6, encode_polyline6
 from app.services.valhalla import TRACE_SPACING_M, ValhallaClient, ascent_descent
 
 # Used only to give an unmatched track a plausible duration, since FIT course
@@ -79,6 +79,15 @@ async def import_route(
             snapshot = snapshot.model_copy(
                 update={"elevation": profile, "ascent_m": ascent, "descent_m": descent}
             )
+
+    # Surface is decorative: an unmatched track fails edge_walk by design and
+    # must not block the import, so this is fetched after everything that
+    # can raise has already succeeded.
+    shape = concat_shapes([decode_polyline6(leg.geometry) for leg in snapshot.legs])
+    surface = await valhalla.trace_attributes(shape, preset)
+    if surface is not None:
+        snapshot = snapshot.model_copy(update={"surface": surface})
+
     return ImportedRoute(track, snapshot, matched)
 
 
