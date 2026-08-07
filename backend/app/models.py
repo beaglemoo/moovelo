@@ -87,6 +87,10 @@ class Route(Base):
     duration_s: Mapped[float]
     ascent_m: Mapped[float]
     descent_m: Mapped[float]
+    # Surface/road-class/use breakdown from Valhalla /trace_attributes.
+    # Nullable: routes saved before Phase 7, and any route where the
+    # edge_walk match failed, simply have none.
+    surface: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     geom: Mapped[Any] = mapped_column(Geometry(geometry_type="LINESTRING", srid=4326))
     # Wahoo sync state: none | queued | pushing | synced | error
     wahoo_status: Mapped[str] = mapped_column(String(10), default="none", server_default="none")
