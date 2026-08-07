@@ -139,8 +139,14 @@
 	}
 
 	async function toggleFavourite(item: RouteSummary) {
-		const updated = await routes.update(item.id, { is_favourite: !item.is_favourite });
-		items = items.map((r) => (r.id === item.id ? { ...r, is_favourite: updated.is_favourite } : r));
+		try {
+			const updated = await routes.update(item.id, { is_favourite: !item.is_favourite });
+			items = items.map((r) =>
+				r.id === item.id ? { ...r, is_favourite: updated.is_favourite } : r
+			);
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Could not update that route';
+		}
 	}
 
 	let taggingId: string | null = $state(null);
@@ -161,9 +167,15 @@
 			.split(',')
 			.map((t) => t.trim())
 			.filter(Boolean);
-		const updated = await routes.update(id, { tags });
-		items = items.map((r) => (r.id === id ? { ...r, tags: updated.tags } : r));
-		allTags = await routes.tags();
+		try {
+			const updated = await routes.update(id, { tags });
+			items = items.map((r) => (r.id === id ? { ...r, tags: updated.tags } : r));
+			allTags = await routes.tags();
+		} catch (err) {
+			// Put the edit back in the box rather than losing what was typed.
+			taggingId = id;
+			error = err instanceof Error ? err.message : 'Could not save those tags';
+		}
 	}
 
 	let working: string | null = $state(null);
