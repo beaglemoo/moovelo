@@ -117,6 +117,15 @@ at 12km" is only useful if it can be found again. Filtering is
 server-side so it keeps working as the library outgrows one screen, and
 `GET /api/routes/tags` returns the tags actually in use.
 
+`POST /api/routes/{id}/duplicate` copies the stored snapshot rather than
+re-routing, so a duplicate is identical even if the map data has moved on.
+`POST /api/routes/{id}/reverse` does the opposite and deliberately
+re-routes: one-way streets and turn instructions are direction-dependent,
+so flipping the stored line would hand the rider cues for a journey they
+are not making. An imported route has no meaningful waypoints, so its
+track is reversed and map matched again. Both create a new route rather
+than modifying the original.
+
 Imported routes are marked `source = imported`. Their waypoints are only
 the endpoints, so re-routing one in the planner would discard the
 imported track: the planner asks before the first edit, and a route that

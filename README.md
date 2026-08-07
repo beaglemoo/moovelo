@@ -21,6 +21,9 @@ cues.
   Tags rather than folders - a route can be both "gravel" and "with the
   kids". Search across names and notes, filter by tag, favourite or
   planned/imported, and sort by date, name, distance or climbing.
+  Duplicate a route, or reverse one to ride it the other way - reversing
+  re-routes rather than flipping the line, so one-ways and turn cues stay
+  correct.
 - GPX and FIT export - the FIT files carry Valhalla's turn-by-turn
   maneuvers as course points, so a Wahoo ELEMNT shows cues on the ride.
 - Import GPX, TCX and FIT files - drop them anywhere in the app or use the
