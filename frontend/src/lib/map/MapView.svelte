@@ -574,6 +574,7 @@
 		const trigger = fitTrigger;
 		const line = routeLine;
 		if (trigger === 0 || !map || !mapReady || line.length < 2) return;
+		menu = null;
 		const lons = line.map((c) => c[0]);
 		const lats = line.map((c) => c[1]);
 		map.fitBounds(
@@ -590,6 +591,14 @@
 		const trigger = flyTrigger;
 		const target = flyTo;
 		if (trigger === 0 || !map || !mapReady || !target) return;
+		// Closed here rather than left to the gesture listeners. Under
+		// prefers-reduced-motion MapLibre turns flyTo into jumpTo, which
+		// fires movestart/move/moveend and fires zoomstart only if the zoom
+		// actually changes - and this call asks for max(current, 12), a
+		// no-op above zoom 12. So for a rider who has asked for reduced
+		// motion, picking a search result moved the map and left the menu
+		// sitting over the wrong place.
+		menu = null;
 		map.flyTo({
 			center: [target.lon, target.lat],
 			// Zoom in if the map is showing the whole country, but never
@@ -629,7 +638,12 @@
 	}
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<!-- A window resize or a device rotation reflows the map under a menu that
+     is positioned in pixels, so it has to go. This is safe to listen for
+     now that the POI panel is a fixed height: the panel no longer grows
+     under the map, which is what made the old movestart handler close
+     menus the rider had just opened. -->
+<svelte:window onkeydown={handleKeydown} onresize={() => (menu = null)} />
 
 <div class="map" bind:this={container}></div>
 {#if menu}
