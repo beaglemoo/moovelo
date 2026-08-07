@@ -140,6 +140,44 @@ is set with `SET LOCAL` so pooled connections are returned unchanged. The
 whole query runs in about 5 ms against the full index, with 34 rows
 reaching the sort.
 
+### Reverse geocoding
+
+`GET /api/places/reverse` names a point, which the planner uses twice:
+as a header on the map's right-click menu, and to open the save dialog on
+"Tring to Ivinghoe Beacon" rather than "Ride 7 Aug".
+
+**It is not a nearest-neighbour query**, which is what it was written as
+first. Over a third of England's 73,084 indexed places are
+`place=locality`, OSM's catch-all for named spots nobody lives in: field
+corners, bridges, trailheads, sandbanks out at sea. They are almost
+always the nearest named thing, so ranking by distance answered
+"Ivinghoe Beacon" with "The Ridgeway Trailhead (Northeast Side)" and a
+point in open farmland with "Dixon's Gap Bridge". Both are correct
+nearest neighbours and neither is where you are. The tests written
+alongside that first version passed.
+
+Instead each place gets a **reach** - how far it may lend its name -
+scaling with the square of the importance the indexer already assigns:
+
+| | city | town | village | hamlet | locality |
+|---|---|---|---|---|---|
+| reach | 48 km | 21 km | 8 km | 3 km | 1.1 km |
+
+Ranking by `distance / reach` asks how far into a place's natural range
+the point sits, rather than what is closest, and dropping rows beyond
+their own reach is what makes "nowhere" an answer. The farmland point
+now returns "Wilstone". A locality still wins within a kilometre of it,
+so nothing is thrown away - a whitelist would have lost that.
+
+The cost is the KNN operator: `distance / reach` cannot use `<->`, so
+the GiST index bounds the candidates at 50 km (reach can never exceed
+it) and the sort runs over what survives. Worst case measured is central
+Birmingham - 4,792 index rows, 74 within reach, 9 ms.
+
+Null is a normal answer - no index, or nowhere near anywhere - so both
+callers decorate something that still works without a name. The frontend
+never passes the lookup at all when `search_enabled` is false.
+
 Names are matched with `pg_trgm` trigram indexes, which serve both
 `LIKE 'prefix%'` and the `%` similarity operator. `unaccent` is
 deliberately unused: it is `STABLE` rather than `IMMUTABLE`, so it cannot
@@ -261,7 +299,7 @@ backend/app/
 ├── schemas.py               # request/response models
 ├── api/
 │   ├── route.py             # /api/health, /api/config, /api/route
-│   ├── places.py            # /api/places/search
+│   ├── places.py            # /api/places/search, /api/places/reverse
 │   ├── auth.py              # register/login/logout/me + OIDC flow
 │   ├── routes.py            # route CRUD, GPX/FIT export, share links
 │   ├── wahoo.py             # connect/callback/status/push

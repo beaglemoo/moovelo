@@ -51,6 +51,9 @@ cues.
   (water, cafes, bike shops, toilets, viewpoints, campsites) and 5,500
   signed cycle routes, in about 37 seconds. See
   [docs/data.md](docs/data.md).
+- With that index built, the planner gains a search box, place names on
+  the map's right-click menu, and a save dialog that opens on "Tring to
+  Ivinghoe Beacon" instead of today's date.
 - Search for a place from the planner once that index exists: type a few
   letters, arrow through the results, and start, extend or end a route
   from any of them. Typos are forgiven ("birmingam" finds Birmingham) and

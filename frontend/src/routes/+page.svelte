@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import {
 		fetchConfig,
+		places,
 		planRoute,
 		routes,
 		wahoo,
@@ -243,11 +244,34 @@
 		return `Ride ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
 	}
 
+	async function placeNameAt(wp: Waypoint): Promise<string | null> {
+		return (await places.reverse(wp.lat, wp.lon))?.name ?? null;
+	}
+
+	/** "Tring to Ivinghoe Beacon" rather than "Ride 7 Aug".
+	 *
+	 * The dialog opens straight away on the date-based fallback and this
+	 * replaces it once the lookups land, but only while that fallback is
+	 * still untouched - a name the rider has started typing is theirs.
+	 */
+	async function suggestName(fallback: string) {
+		if (!config?.search_enabled) return;
+		const [from, to] = await Promise.all([
+			places.reverse(waypoints[0].lat, waypoints[0].lon),
+			places.reverse(waypoints[waypoints.length - 1].lat, waypoints[waypoints.length - 1].lon)
+		]);
+		if (!from || !to) return;
+		const suggestion = from.id === to.id ? `${from.name} loop` : `${from.name} to ${to.name}`;
+		if (saveDialogOpen && saveNameInput === fallback) saveNameInput = suggestion;
+	}
+
 	async function save() {
 		if (!route || waypoints.length < 2) return;
 		if (savedId === null) {
-			saveNameInput = savedName ?? defaultName();
+			const fallback = savedName ?? defaultName();
+			saveNameInput = fallback;
 			saveDialogOpen = true;
+			void suggestName(fallback);
 			return;
 		}
 		saving = true;
@@ -328,6 +352,7 @@
 				{flyTo}
 				{flyTrigger}
 				onMapMove={(centre) => (mapCentre = centre)}
+				resolvePlaceName={config.search_enabled ? placeNameAt : undefined}
 				onAddWaypoint={addWaypoint}
 				onMoveWaypoint={moveWaypoint}
 				onInsertVia={insertVia}

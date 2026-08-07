@@ -72,6 +72,54 @@ _SEARCH_SQL = text(f"""
 """)
 
 
+# How far a place may lend its name, at maximum importance. Also the outer
+# bound of the index scan, since reach can never exceed it.
+REVERSE_MAX_REACH_M = 50_000.0
+
+# Floor on importance, so a future category weighted at zero cannot divide
+# by it. The indexer's lowest today is 0.10.
+MIN_IMPORTANCE = 0.05
+
+# A place's reach grows with the square of its importance, which turns the
+# indexer's weights into naming radii: a city carries about 48 km, a town
+# 21 km, a village 8 km, a hamlet 3 km, a locality 1.1 km. Ranking by
+# distance/reach then asks "how far into its natural range am I", not "what
+# is closest".
+_REACH = f"({REVERSE_MAX_REACH_M} * GREATEST(p.importance, {MIN_IMPORTANCE}) ^ 2)"
+
+# Written out rather than built in a CTE so the KNN operator sees a
+# pseudo-constant and can drive an index scan on ix_places_geog. The casts
+# are for asyncpg, which infers parameter types from context.
+_POINT = (
+    "ST_SetSRID("
+    "ST_MakePoint(CAST(:lon AS double precision), CAST(:lat AS double precision)), 4326"
+    ")::geography"
+)
+
+# Nearest-wins was the obvious design and it is wrong. Over a third of
+# England's 73,084 indexed places are place=locality, OSM's catch-all for
+# named spots nobody lives in: field corners, bridges, trailheads, sandbanks
+# out at sea. Ranked by distance alone the index answers "Ivinghoe Beacon"
+# with "The Ridgeway Trailhead (Northeast Side)" and a point in open
+# farmland with "Dixon's Gap Bridge". Both are the nearest named thing and
+# neither is where you are.
+#
+# Reach fixes that without a whitelist: a locality has to be within about a
+# kilometre to win, while the village up the lane reaches you from five. The
+# same farmland point now answers "Wilstone".
+_REVERSE_SQL = text(f"""
+    SELECT p.id, p.name, p.place_type,
+           ST_Y(p.geog::geometry) AS lat,
+           ST_X(p.geog::geometry) AS lon,
+           ST_Distance(p.geog, {_POINT}) AS distance_m
+    FROM places p
+    WHERE ST_DWithin(p.geog, {_POINT}, {REVERSE_MAX_REACH_M})
+      AND ST_Distance(p.geog, {_POINT}) <= {_REACH}
+    ORDER BY ST_Distance(p.geog, {_POINT}) / {_REACH}
+    LIMIT 1
+""")
+
+
 def normalise(name: str) -> str:
     """Fold accents and case, exactly as the indexer does when writing.
 
@@ -124,3 +172,22 @@ async def search_places(
         )
         for row in rows
     ]
+
+
+async def reverse_geocode(db: AsyncSession, lat: float, lon: float) -> PlaceResult | None:
+    """Name a point: the place whose reach covers it most comfortably.
+
+    None is a normal answer, not an error: the index may not be built, and
+    a point can genuinely be out of everywhere's range.
+    """
+    row = (await db.execute(_REVERSE_SQL, {"lat": lat, "lon": lon})).first()
+    if row is None:
+        return None
+    return PlaceResult(
+        id=row.id,
+        name=row.name,
+        place_type=row.place_type,
+        lat=row.lat,
+        lon=row.lon,
+        distance_m=row.distance_m,
+    )
