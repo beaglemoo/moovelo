@@ -27,6 +27,11 @@
 	let input: HTMLInputElement | undefined = $state();
 
 	function reset() {
+		// Abort as well as clear: without this, dismissing the list with
+		// Escape or a click outside leaves the request running, and when it
+		// lands `open = true` reopens the dropdown the rider just closed.
+		inflight?.abort();
+		searching = false;
 		results = [];
 		active = -1;
 		open = false;

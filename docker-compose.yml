@@ -56,6 +56,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # Only that the container exists - compose cannot tell whether
+      # Valhalla has finished downloading the extract, and the indexer
+      # reads that file. See docs/data.md: run this after a tile build has
+      # completed, never during one.
+      valhalla:
+        condition: service_started
     restart: "no"
 
   backend-dev:

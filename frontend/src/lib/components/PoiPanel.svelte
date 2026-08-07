@@ -41,45 +41,51 @@
 		{/each}
 	</div>
 
-	{#if selected.length === 0}
-		<p class="note">Pick a category to see what is on this ride.</p>
-	{:else if loading && pois.length === 0}
-		<p class="note">Looking…</p>
-	{:else if pois.length === 0}
-		<p class="note">Nothing of those kinds near this route.</p>
-	{:else}
-		<ul>
-			{#each pois as poi (poi.id)}
-				<li>
-					<button
-						type="button"
-						class:hovered={poi.id === hoveredId}
-						onmouseenter={() => onHover(poi.id)}
-						onmouseleave={() => onHover(null)}
-						onfocus={() => onHover(poi.id)}
-						onblur={() => onHover(null)}
-					>
-						<span class="dot" style="background: {categoryColour(poi.category)}"></span>
-						<span class="at">{km(poi.dist_along_m)}</span>
-						<!-- OSM strings are untrusted input: text only, never markup. -->
-						<span class="what">{poi.name ?? categoryLabel(poi.category)}</span>
-						<span class="meta">
-							{poi.name ? categoryLabel(poi.category) : ''}
-							{#if poi.tags.opening_hours}
-								<span class="hours" title={poi.tags.opening_hours}>{poi.tags.opening_hours}</span>
-							{/if}
-						</span>
-						<span class="off">{off(poi.dist_from_route_m)}</span>
-					</button>
-				</li>
-			{/each}
-		</ul>
-		{#if truncated}
-			<p class="note">
-				Showing the first {pois.length}. Narrow the categories to see the rest of the ride.
-			</p>
+	<!-- Fixed height whatever the state. Otherwise the panel grows when
+	     results arrive, the map above it resizes, and everything the rider
+	     was pointing at moves - which is how a context menu ended up
+	     closing itself under them. -->
+	<div class="results">
+		{#if selected.length === 0}
+			<p class="note">Pick a category to see what is on this ride.</p>
+		{:else if loading && pois.length === 0}
+			<p class="note">Looking…</p>
+		{:else if pois.length === 0}
+			<p class="note">Nothing of those kinds near this route.</p>
+		{:else}
+			<ul>
+				{#each pois as poi (poi.id)}
+					<li>
+						<button
+							type="button"
+							class:hovered={poi.id === hoveredId}
+							onmouseenter={() => onHover(poi.id)}
+							onmouseleave={() => onHover(null)}
+							onfocus={() => onHover(poi.id)}
+							onblur={() => onHover(null)}
+						>
+							<span class="dot" style="background: {categoryColour(poi.category)}"></span>
+							<span class="at">{km(poi.dist_along_m)}</span>
+							<!-- OSM strings are untrusted input: text only, never markup. -->
+							<span class="what">{poi.name ?? categoryLabel(poi.category)}</span>
+							<span class="meta">
+								{poi.name ? categoryLabel(poi.category) : ''}
+								{#if poi.tags.opening_hours}
+									<span class="hours" title={poi.tags.opening_hours}>{poi.tags.opening_hours}</span>
+								{/if}
+							</span>
+							<span class="off">{off(poi.dist_from_route_m)}</span>
+						</button>
+					</li>
+				{/each}
+			</ul>
+			{#if truncated}
+				<p class="note">
+					Showing {pois.length} of what is near this ride. Narrow the categories to see more.
+				</p>
+			{/if}
 		{/if}
-	{/if}
+	</div>
 </div>
 
 <style>
@@ -112,12 +118,14 @@
 		border-color: var(--chip);
 		color: #fff;
 	}
+	.results {
+		height: 150px;
+		overflow-y: auto;
+	}
 	ul {
 		list-style: none;
 		margin: 0;
 		padding: 0;
-		overflow-y: auto;
-		max-height: 150px;
 	}
 	li button {
 		display: flex;

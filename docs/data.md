@@ -74,10 +74,13 @@ wiped by the refresh procedure below - so the order is always: wipe,
 let Valhalla download and build, then index. Running it alongside a tile
 build is the one situation where both jobs want several GB at once.
 
-Re-running is safe with the app up. The parse and load happen outside any
-lock, and only the final transaction swaps the new rows in; a full
-England rebuild answered every request throughout, the slowest taking
-40 ms.
+Re-running is safe with the app up, with one caveat worth stating
+precisely. The parse and the COPY - the great majority of the runtime -
+hold no lock at all. The final transaction then truncates the live tables
+and refills them, and it holds `ACCESS EXCLUSIVE` for that whole move: on
+England that is roughly three seconds during which a request touching the
+place index waits rather than fails. Requests that do not touch it, and
+the routing path, are unaffected. Nobody ever sees a half-loaded index.
 
 Measured on England (`england-latest.osm.pbf`, 1.6 GB):
 

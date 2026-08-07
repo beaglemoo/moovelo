@@ -171,3 +171,31 @@ async def test_a_cycle_route_is_stored_per_relation(db: AsyncSession) -> None:
 
     row = await db.execute(text("SELECT ref, network, ST_NumGeometries(geom) FROM cycle_ways"))
     assert row.one() == ("6", "ncn", 1)
+
+
+async def test_config_carries_an_index_version_for_tile_cache_busting(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Cycle-network tiles are cached for a day at a stable URL, so without
+    a version in it a re-index would stay invisible until the cache expired
+    - on exactly the upgrade path the release notes ask people to take."""
+    before = (await client.get("/api/config")).json()
+    assert before["search_index_version"] is None
+
+    db.add(
+        SearchIndexMeta(
+            built_at=datetime(2026, 8, 7, 12, 0, tzinfo=UTC),
+            source_files=["england-latest.osm.pbf"],
+            place_count=1,
+            poi_count=1,
+            cycle_way_count=1,
+        )
+    )
+    await db.commit()
+
+    after = (await client.get("/api/config")).json()
+
+    assert after["search_enabled"] is True
+    assert after["search_index_version"] == str(
+        int(datetime(2026, 8, 7, 12, 0, tzinfo=UTC).timestamp())
+    )

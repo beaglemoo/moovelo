@@ -36,6 +36,9 @@
 		 * anything to draw. False leaves the source unadded and the toggle
 		 * hidden rather than fetching empty tiles forever. */
 		cycleNetworkAvailable?: boolean;
+		/** Index build stamp, appended to the tile URL. The tiles carry a
+		 * long max-age, so without it a re-index stays invisible for a day. */
+		cycleNetworkVersion?: string | null;
 		/** Water, coffee and the rest, drawn as a circle layer. */
 		pois?: PoiResult[];
 		hoveredPoiId?: number | null;
@@ -57,6 +60,7 @@
 		onMapMove,
 		resolvePlaceName,
 		cycleNetworkAvailable = false,
+		cycleNetworkVersion = null,
 		pois = [],
 		hoveredPoiId = null,
 		onHoverPoi,
@@ -166,7 +170,13 @@
 			container,
 			style: baseStyle(cyclosmTileUrl ? [cyclosmTileUrl] : PUBLIC_CYCLOSM_TILES),
 			center: [-1.4, 52.8],
-			zoom: 6.3
+			zoom: 6.3,
+			// Right-button drag rotates the map by default, and that gesture
+			// begins on the very press that opens our context menu - so the
+			// menu closed itself roughly one time in six. Right-click is a
+			// menu here, not a rotate. The compass control and two-finger
+			// touch rotation still work.
+			dragRotate: false
 		});
 		map.addControl(new maplibregl.NavigationControl(), 'top-right');
 		map.addControl(
@@ -187,7 +197,10 @@
 			if (cycleNetworkAvailable) {
 				map.addSource('cycle-network', {
 					type: 'vector',
-					tiles: [`${location.origin}/api/places/cycle-network/{z}/{x}/{y}.mvt`],
+					tiles: [
+						`${location.origin}/api/places/cycle-network/{z}/{x}/{y}.mvt` +
+							(cycleNetworkVersion ? `?v=${cycleNetworkVersion}` : '')
+					],
 					minzoom: 4,
 					maxzoom: 16
 				});
@@ -339,7 +352,16 @@
 		m.on('touchend', cancelPress);
 		m.on('touchcancel', cancelPress);
 
-		m.on('movestart', () => (menu = null));
+		// Close the menu when the rider moves the map under it - but listen
+		// for the gestures, not `movestart`, which also fires when the map is
+		// merely resized. The panel below the map grows as a route is planned
+		// and again when its POIs arrive, and each of those resizes was
+		// closing a context menu the rider had just opened. That is the whole
+		// of the "sometimes the menu vanishes before you can click Remove"
+		// flake: it needed a resize to land in the gap after the right-click.
+		for (const gesture of ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart'] as const) {
+			m.on(gesture, () => (menu = null));
+		}
 
 		m.on('mouseenter', 'route-hit', () => (m.getCanvas().style.cursor = 'grab'));
 		m.on('mouseleave', 'route-hit', () => (m.getCanvas().style.cursor = ''));
@@ -503,8 +525,26 @@
 		menu = null;
 	}
 
+	// MapLibre's own keyboard handler pans and zooms with arrows and +/-,
+	// and it does so through easeTo - which fires movestart, not any of the
+	// gesture events the menu listens for. So the keys are handled here
+	// too, or a menu opened by right-click would sit at stale pixel
+	// coordinates over a map that has moved beneath it.
+	const PAN_KEYS = new Set([
+		'ArrowUp',
+		'ArrowDown',
+		'ArrowLeft',
+		'ArrowRight',
+		'PageUp',
+		'PageDown',
+		'+',
+		'=',
+		'-',
+		'_'
+	]);
+
 	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') menu = null;
+		if (event.key === 'Escape' || PAN_KEYS.has(event.key)) menu = null;
 	}
 
 	// Sync route geometry.
@@ -534,6 +574,7 @@
 		const trigger = fitTrigger;
 		const line = routeLine;
 		if (trigger === 0 || !map || !mapReady || line.length < 2) return;
+		menu = null;
 		const lons = line.map((c) => c[0]);
 		const lats = line.map((c) => c[1]);
 		map.fitBounds(
@@ -550,6 +591,14 @@
 		const trigger = flyTrigger;
 		const target = flyTo;
 		if (trigger === 0 || !map || !mapReady || !target) return;
+		// Closed here rather than left to the gesture listeners. Under
+		// prefers-reduced-motion MapLibre turns flyTo into jumpTo, which
+		// fires movestart/move/moveend and fires zoomstart only if the zoom
+		// actually changes - and this call asks for max(current, 12), a
+		// no-op above zoom 12. So for a rider who has asked for reduced
+		// motion, picking a search result moved the map and left the menu
+		// sitting over the wrong place.
+		menu = null;
 		map.flyTo({
 			center: [target.lon, target.lat],
 			// Zoom in if the map is showing the whole country, but never
@@ -589,7 +638,12 @@
 	}
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<!-- A window resize or a device rotation reflows the map under a menu that
+     is positioned in pixels, so it has to go. This is safe to listen for
+     now that the POI panel is a fixed height: the panel no longer grows
+     under the map, which is what made the old movestart handler close
+     menus the rider had just opened. -->
+<svelte:window onkeydown={handleKeydown} onresize={() => (menu = null)} />
 
 <div class="map" bind:this={container}></div>
 {#if menu}

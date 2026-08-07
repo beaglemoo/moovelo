@@ -40,9 +40,17 @@ export interface AppConfig {
 	/** False until the place index has been built, which is opt-in. Gates
 	 * the search box, the POI panel and the cycle-network overlay. */
 	search_enabled: boolean;
+	/** Epoch seconds of the last index build, or null. Used to version the
+	 * cycle-network tile URL so a re-index is not hidden behind a day of
+	 * browser cache. */
+	search_index_version: string | null;
 }
 
-const CONFIG_FALLBACK: AppConfig = { tile_url_cyclosm: null, search_enabled: false };
+const CONFIG_FALLBACK: AppConfig = {
+	tile_url_cyclosm: null,
+	search_enabled: false,
+	search_index_version: null
+};
 
 export interface PlaceResult {
 	id: number;

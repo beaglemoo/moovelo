@@ -101,9 +101,16 @@ MIN_IMPORTANCE = 0.05
 # is closest".
 _REACH = f"({REVERSE_MAX_REACH_M} * GREATEST(p.importance, {MIN_IMPORTANCE}) ^ 2)"
 
-# Written out rather than built in a CTE so the KNN operator sees a
-# pseudo-constant and can drive an index scan on ix_places_geog. The casts
+# Written out rather than built in a CTE so the point stays a
+# pseudo-constant the planner can push into the index condition. The casts
 # are for asyncpg, which infers parameter types from context.
+#
+# The ORDER BY below is arithmetic, so no index can satisfy it: what
+# ix_places_geog actually serves is the ST_DWithin bound, as a bitmap index
+# scan feeding a top-N sort. (An earlier draft ordered by the `<->` KNN
+# operator and this comment still claimed so long after the reach model
+# replaced it. Do not drop the ST_DWithin thinking KNN keeps it bounded -
+# it is the only thing that does.)
 _POINT = (
     "ST_SetSRID("
     "ST_MakePoint(CAST(:lon AS double precision), CAST(:lat AS double precision)), 4326"
@@ -215,29 +222,93 @@ async def reverse_geocode(db: AsyncSession, lat: float, lon: float) -> PlaceResu
 # box, the exact distance test keeps 722, and the whole thing takes 26 ms.
 # Without the geography column it would be a sequential scan of 285,000 POIs.
 #
-# ST_LineLocatePoint needs plain geometry, hence the geom/geog split, and it
-# runs only over the survivors. On a route that doubles back it reports the
-# first pass, which is the honest reading of "how far along".
+# ST_LineLocatePoint needs plain geometry and it runs only over the
+# survivors. It is fed web mercator, NOT the stored 4326: on unprojected
+# lon/lat it treats a degree of longitude and a degree of latitude as the
+# same unit, and at 51N a degree of longitude is only about 63% as long. A
+# route 20 km east then 20 km north reported a POI at the corner as 24,917 m
+# along a 40,382 m ride when the true figure is 20,357 m - 22% out. Mercator
+# is conformal, so both axes scale together and the same case comes back at
+# 20,311 m. The one test that existed used a purely east-west line, the
+# single geometry where the distortion vanishes.
+#
+# Mercator is not exact: its scale varies with latitude, so a route
+# spanning degrees of it drifts. A straight 312 km run from 53N to 55.8N
+# puts its own midpoint at fraction 0.4915 rather than 0.5 - about 2.6 km,
+# or 0.8%. That is fine for "the cafe is 20 km in" and would not be for
+# navigation; it is not used for navigation.
+#
+# On a route that passes near itself - an out-and-back, or a loop whose
+# legs run close - ST_LineLocatePoint returns the nearest pass, not the
+# earlier one, so a POI between two legs can be reported against whichever
+# is marginally closer.
 #
 # The category array is CAST explicitly: asyncpg infers parameter types from
 # context, and an empty list gives it nothing - "could not determine
 # polymorphic type because input has type unknown".
+#
+# The cap is spread along the route rather than taken from the front. POI
+# density is wildly uneven - a ride out of Oxford had 498 POIs within 500 m,
+# and the first 301 by distance-along all fell inside the opening 233 m, so
+# the answer described 0.6% of a 38 km ride while reporting only
+# "truncated".
+#
+# Candidates are bucketed by position and taken round-robin: the nearest in
+# every bucket first, then the second nearest in every bucket, and so on
+# until the budget runs out. A flat per-bucket quota was tried first and was
+# worse than the problem - real POIs cluster into a handful of buckets, so a
+# ride out of Oxford with 275 candidates (comfortably under the cap)
+# returned 24 and still claimed truncation, because the quota in the 43
+# empty buckets was never redistributed. Round-robin spends the whole budget
+# while still reaching the far end of the ride.
+POI_BUCKETS = 50
+
 _POIS_SQL = text(f"""
     WITH r AS (
-        SELECT line AS geom, line::geography AS geog, ST_Length(line::geography) AS len
+        SELECT line AS geom, ST_Transform(line, 3857) AS geom_m,
+               line::geography AS geog, ST_Length(line::geography) AS len
         FROM (SELECT ST_SetSRID(ST_GeomFromText(:wkt), 4326) AS line) s
+    ),
+    near AS (
+        SELECT p.id, p.name, p.category, p.osm_tags,
+               ST_Y(p.geog::geometry) AS lat,
+               ST_X(p.geog::geometry) AS lon,
+               ST_Distance(p.geog, r.geog) AS dist_from_route_m,
+               ST_LineLocatePoint(r.geom_m, ST_Transform(p.geog::geometry, 3857))
+                   * r.len AS dist_along_m,
+               r.len AS route_len
+        FROM pois p, r
+        WHERE ST_DWithin(p.geog, r.geog, :radius)
+          AND (cardinality(CAST(:categories AS text[])) = 0
+               OR p.category = ANY(CAST(:categories AS text[])))
+    ),
+    ranked AS (
+        SELECT near.*,
+               count(*) OVER () AS candidate_count,
+               ROW_NUMBER() OVER (
+                   -- LEAST because width_bucket's top bucket is half-open:
+                   -- it answers 51, not 50, for anything at or past the end
+                   -- of the line, and ST_LineLocatePoint returns exactly 1.0
+                   -- for every POI whose nearest point is the final vertex.
+                   -- Left alone, the destination town sits in two partitions
+                   -- and draws twice the share of the town you rode through
+                   -- halfway along.
+                   PARTITION BY LEAST(
+                       width_bucket(dist_along_m, 0, GREATEST(route_len, 1), {POI_BUCKETS}),
+                       {POI_BUCKETS}
+                   )
+                   ORDER BY dist_from_route_m
+               ) AS rank_in_bucket
+        FROM near
+    ),
+    picked AS (
+        SELECT id, name, category, osm_tags, lat, lon,
+               dist_from_route_m, dist_along_m, candidate_count
+        FROM ranked
+        ORDER BY rank_in_bucket, dist_from_route_m
+        LIMIT {MAX_POI_RESULTS}
     )
-    SELECT p.id, p.name, p.category, p.osm_tags,
-           ST_Y(p.geog::geometry) AS lat,
-           ST_X(p.geog::geometry) AS lon,
-           ST_Distance(p.geog, r.geog) AS dist_from_route_m,
-           ST_LineLocatePoint(r.geom, p.geog::geometry) * r.len AS dist_along_m
-    FROM pois p, r
-    WHERE ST_DWithin(p.geog, r.geog, :radius)
-      AND (cardinality(CAST(:categories AS text[])) = 0
-           OR p.category = ANY(CAST(:categories AS text[])))
-    ORDER BY dist_along_m
-    LIMIT {MAX_POI_RESULTS + 1}
+    SELECT * FROM picked ORDER BY dist_along_m
 """)
 
 
@@ -323,9 +394,11 @@ async def pois_along_route(
             },
         )
     )
-    # One row over the limit was fetched purely to tell a full page from a
-    # truncated one, so the UI never presents a partial answer as complete.
-    truncated = len(rows) > MAX_POI_RESULTS
+    # The window count is over every candidate within the radius, before the
+    # per-bucket cap, so this reports what was actually dropped rather than
+    # whether the page happened to fill up.
+    candidates = rows[0].candidate_count if rows else 0
+    truncated = candidates > len(rows)
     return PoisAlongRoute(
         pois=[
             PoiResult(
@@ -338,7 +411,7 @@ async def pois_along_route(
                 dist_along_m=row.dist_along_m,
                 tags={str(k): str(v) for k, v in (row.osm_tags or {}).items()},
             )
-            for row in rows[:MAX_POI_RESULTS]
+            for row in rows
         ],
         truncated=truncated,
     )

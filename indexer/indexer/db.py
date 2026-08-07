@@ -2,11 +2,14 @@
 
 The parse takes minutes; the app is serving search the whole time. So
 nothing is written to the live tables until the very end. Rows stream by
-COPY into clones created with `LIKE ... INCLUDING ALL`, which copies
-whatever columns, defaults, constraints and indexes Alembic currently
-defines - so this file never hand-duplicates DDL that could drift from the
-migration. The swap is then a rename, which is a catalogue change holding
-its lock for milliseconds rather than the minutes the load took.
+COPY into clones created with `LIKE ... INCLUDING DEFAULTS`, which mirrors
+whatever columns and defaults Alembic currently defines - so this file never
+hand-duplicates DDL that could drift from the migration. Indexes are left
+off the clones on purpose; nothing queries a staging table.
+
+Only the final transaction touches the live tables, and it moves rows
+rather than renaming: see publish() for why the rename it originally did
+could not work.
 """
 
 import logging
@@ -47,6 +50,13 @@ COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 MEMBER_TABLE = "cycle_way_members_stage"
+
+# What makes a row unique, used to deduplicate at publish time.
+NATURAL_KEY: dict[str, tuple[str, ...]] = {
+    "places": ("osm_type", "osm_id"),
+    "pois": ("osm_type", "osm_id"),
+    "cycle_ways": ("id",),
+}
 
 
 def _stage(table: str) -> str:
@@ -241,9 +251,24 @@ def publish(
         )
         for table in INDEXED_TABLES:
             columns = sql.SQL(", ").join(sql.Identifier(c) for c in COLUMNS[table])
+            key = sql.SQL(", ").join(sql.Identifier(c) for c in NATURAL_KEY[table])
+            # DISTINCT ON the natural key. The in-memory dedup in load() is
+            # per extract, and VALHALLA_TILE_URL accepts several - Geofabrik
+            # extracts overlap at their borders, so the same OSM node can
+            # arrive from two files and would collide with the unique index
+            # here, failing the whole build at the last step. Doing it in SQL
+            # covers every source of duplication at no memory cost.
             cursor.execute(
-                sql.SQL("INSERT INTO {} ({}) SELECT {} FROM {}").format(
-                    sql.Identifier(table), columns, columns, sql.Identifier(_stage(table))
+                sql.SQL("""
+                    INSERT INTO {} ({})
+                    SELECT DISTINCT ON ({}) {} FROM {} ORDER BY {}, ctid
+                """).format(
+                    sql.Identifier(table),
+                    columns,
+                    key,
+                    columns,
+                    sql.Identifier(_stage(table)),
+                    key,
                 )
             )
         cursor.execute("DELETE FROM search_index_meta")

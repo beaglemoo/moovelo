@@ -62,24 +62,32 @@
 	fetchConfig().then((c) => (config = c));
 	wahoo.status().then((s) => (wahooStatus = s));
 
+	// Bumped whenever the push in flight stops describing what is on screen.
+	// A poll that outlives its generation must not write status: it would
+	// resurrect "Sent to Wahoo" for a route that has since been edited.
+	let wahooGeneration = 0;
+
 	async function sendToWahoo() {
 		if (!savedId) return;
+		const generation = wahooGeneration;
 		wahooPush = 'working';
 		wahooPushError = null;
 		try {
 			await wahoo.push(savedId);
-			await pollWahoo(savedId);
+			await pollWahoo(savedId, generation);
 		} catch (err) {
+			if (generation !== wahooGeneration) return;
 			wahooPush = 'error';
 			wahooPushError = err instanceof Error ? err.message : 'Push failed';
 		}
 	}
 
-	async function pollWahoo(id: string) {
+	async function pollWahoo(id: string, generation: number) {
 		for (let i = 0; i < 40; i++) {
 			await new Promise((resolve) => setTimeout(resolve, 3000));
-			if (savedId !== id) return;
+			if (savedId !== id || generation !== wahooGeneration) return;
 			const saved = await routes.get(id);
+			if (generation !== wahooGeneration) return;
 			if (saved.wahoo.status === 'synced') {
 				wahooPush = 'synced';
 				return;
@@ -90,9 +98,23 @@
 				return;
 			}
 		}
+		if (generation !== wahooGeneration) return;
 		wahooPush = 'error';
 		wahooPushError = 'Push is taking unusually long - check the library later';
 	}
+
+	// A Wahoo push describes one particular saved route. Clearing the map,
+	// opening a different route, or editing this one all make "Sent to Wahoo"
+	// a false claim about what is on the head unit - and a push still in
+	// flight when the route changes leaves the button disabled for good,
+	// because pollWahoo bails out silently once savedId has moved on.
+	$effect(() => {
+		void savedId;
+		void dirty;
+		wahooGeneration += 1;
+		wahooPush = 'idle';
+		wahooPushError = null;
+	});
 
 	// Published so the window-wide file drop in the layout can ask before
 	// navigating away from unsaved work.
@@ -408,6 +430,7 @@
 				onMapMove={(centre) => (mapCentre = centre)}
 				resolvePlaceName={config.search_enabled ? placeNameAt : undefined}
 				cycleNetworkAvailable={config.search_enabled}
+				cycleNetworkVersion={config.search_index_version}
 				{pois}
 				{hoveredPoiId}
 				onHoverPoi={(id) => (hoveredPoiId = id)}
