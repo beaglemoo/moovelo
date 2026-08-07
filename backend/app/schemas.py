@@ -31,6 +31,55 @@ class PlaceResult(BaseModel):
     distance_m: float | None = None
 
 
+# A real 50 km road route decodes to about 1,800 points, so this leaves
+# room for a very long one while keeping the request body bounded.
+MAX_ROUTE_POINTS = 20_000
+# Further than this and "along the route" stops meaning anything.
+MAX_POI_RADIUS_M = 5_000.0
+MAX_POI_RESULTS = 300
+
+
+class PoiQuery(BaseModel):
+    """POIs near a route line.
+
+    The line is sent rather than a route id so the planner can ask before
+    anything is saved - which is when "where is water on this ride" is
+    actually asked.
+    """
+
+    # [lon, lat], matching GeoJSON and the decoded polyline the frontend
+    # already holds.
+    line: list[tuple[float, float]] = Field(min_length=2, max_length=MAX_ROUTE_POINTS)
+    radius_m: float = Field(default=250.0, gt=0, le=MAX_POI_RADIUS_M)
+    # Empty means every category. Unknown names simply match nothing.
+    categories: list[str] = Field(default_factory=list, max_length=32)
+
+
+class PoiResult(BaseModel):
+    id: int
+    # Null for the unnamed majority - 232 of the 722 POIs within 250 m of a
+    # Tring to Oxford ride are unnamed bike parking - so the UI must render
+    # the category instead, never an empty row.
+    name: str | None
+    category: str
+    lat: float
+    lon: float
+    dist_from_route_m: float
+    # Metres from the start, measured along the route. What turns a list of
+    # nearby POIs into a plan for the ride.
+    dist_along_m: float
+    # opening_hours, website and the like, straight from OSM. Untrusted
+    # text: render it, never interpret it.
+    tags: dict[str, str]
+
+
+class PoisAlongRoute(BaseModel):
+    pois: list[PoiResult]
+    # True when MAX_POI_RESULTS cut the list short, so the UI can say so
+    # rather than quietly presenting a partial answer as a complete one.
+    truncated: bool
+
+
 class Waypoint(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)

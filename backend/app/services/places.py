@@ -6,11 +6,12 @@ one other - so none of these three is optional).
 """
 
 import unicodedata
+from collections.abc import Sequence
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.schemas import PlaceResult
+from app.schemas import MAX_POI_RESULTS, PlaceResult, PoiResult, PoisAlongRoute
 
 # Trigrams need three characters to mean anything, so shorter queries lean
 # entirely on the prefix branch. Below two characters there is nothing
@@ -190,4 +191,81 @@ async def reverse_geocode(db: AsyncSession, lat: float, lon: float) -> PlaceResu
         lat=row.lat,
         lon=row.lon,
         distance_m=row.distance_m,
+    )
+
+
+# The route arrives as a linestring literal rather than a stored row: the
+# question is asked while planning, before anything is saved.
+#
+# ix_pois_geog carries this. Against a real Tring to Oxford ride - 1,773
+# points, 50 km - the index offers 1,740 candidates from the line's bounding
+# box, the exact distance test keeps 722, and the whole thing takes 26 ms.
+# Without the geography column it would be a sequential scan of 285,000 POIs.
+#
+# ST_LineLocatePoint needs plain geometry, hence the geom/geog split, and it
+# runs only over the survivors. On a route that doubles back it reports the
+# first pass, which is the honest reading of "how far along".
+#
+# The category array is CAST explicitly: asyncpg infers parameter types from
+# context, and an empty list gives it nothing - "could not determine
+# polymorphic type because input has type unknown".
+_POIS_SQL = text(f"""
+    WITH r AS (
+        SELECT line AS geom, line::geography AS geog, ST_Length(line::geography) AS len
+        FROM (SELECT ST_SetSRID(ST_GeomFromText(:wkt), 4326) AS line) s
+    )
+    SELECT p.id, p.name, p.category, p.osm_tags,
+           ST_Y(p.geog::geometry) AS lat,
+           ST_X(p.geog::geometry) AS lon,
+           ST_Distance(p.geog, r.geog) AS dist_from_route_m,
+           ST_LineLocatePoint(r.geom, p.geog::geometry) * r.len AS dist_along_m
+    FROM pois p, r
+    WHERE ST_DWithin(p.geog, r.geog, :radius)
+      AND (cardinality(CAST(:categories AS text[])) = 0
+           OR p.category = ANY(CAST(:categories AS text[])))
+    ORDER BY dist_along_m
+    LIMIT {MAX_POI_RESULTS + 1}
+""")
+
+
+def linestring_wkt(line: Sequence[tuple[float, float]]) -> str:
+    """WKT from [lon, lat] pairs. Seven decimals is about a centimetre."""
+    return "LINESTRING(" + ",".join(f"{lon:.7f} {lat:.7f}" for lon, lat in line) + ")"
+
+
+async def pois_along_route(
+    db: AsyncSession,
+    line: Sequence[tuple[float, float]],
+    radius_m: float,
+    categories: Sequence[str],
+) -> PoisAlongRoute:
+    """Everything useful within `radius_m` of the line, ordered along it."""
+    rows = list(
+        await db.execute(
+            _POIS_SQL,
+            {
+                "wkt": linestring_wkt(line),
+                "radius": radius_m,
+                "categories": list(categories),
+            },
+        )
+    )
+    # One row over the limit was fetched purely to tell a full page from a
+    # truncated one, so the UI never presents a partial answer as complete.
+    truncated = len(rows) > MAX_POI_RESULTS
+    return PoisAlongRoute(
+        pois=[
+            PoiResult(
+                id=row.id,
+                name=row.name,
+                category=row.category,
+                lat=row.lat,
+                lon=row.lon,
+                dist_from_route_m=row.dist_from_route_m,
+                dist_along_m=row.dist_along_m,
+                tags={str(k): str(v) for k, v in (row.osm_tags or {}).items()},
+            )
+            for row in rows[:MAX_POI_RESULTS]
+        ],
+        truncated=truncated,
     )
