@@ -72,7 +72,7 @@ Each user optionally has a `user_settings` row (weight, flat-road speed,
 optional FTP) edited at `/settings`. `GET /api/settings` returns sane
 defaults without inserting a row, so a user who never opens the page
 never gets one; the first `PATCH` creates it. These feed the ride-time
-model, which is not yet built.
+model - see [Realistic ride time](#realistic-ride-time).
 
 ## The place index
 
@@ -462,6 +462,42 @@ new inbound `hoveredClimb` prop (a translucent band behind the line) and
 line, sliced from `routeLine` with `gradient.ts`'s own `coordsBetween`)
 share one `hoveredClimbIndex` in `+page.svelte` - the same
 props/hover-callback shape as the POI panel and map already use.
+## Realistic ride time
+
+`services/ride_time.py` turns Valhalla's flat routing duration into a
+per-rider estimate, walking consecutive `ElevationPoint`s and, for each
+segment, computing a speed from three inputs: `effective_flat_speed`
+(the rider's `flat_speed_kmh` setting, nudged by FTP - cube root, since
+aero power scales roughly with v^3, a one-sentence nudge rather than a
+physics model), `gradient_factor` (a piecewise-linear multiplier over the
+segment's grade %, capped at 1.35 downhill and floored at a deliberately
+discontinuous 0.20 at and above 12% - nothing about a climb gets
+meaningfully easier past that point), and `surface_factor` (one
+route-level multiplier, the length-weighted mean of per-surface-type
+factors over the route's whole `SurfaceBreakdown` - the breakdown is an
+aggregate over the ride, not tied to any position, so it cannot vary
+along the route the way gradient does). A floor of 2 km/h keeps a
+degenerate segment from producing a near-zero time.
+
+**Computed on read, never persisted.** `RouteResponse.ride_time` is a
+`list[RideTimePoint]` (`dist_m`, cumulative `time_s`) built fresh on every
+request that returns a route - `POST /api/route`, every saved-route read,
+`POST /api/routes/import`, `.../duplicate`, `.../reverse`, and
+`GET /api/shared/{token}` - from that route's own elevation and surface
+plus the viewer's current `user_settings` row (anonymous share viewers get
+the plain defaults, never the owner's). Nothing is added to the `routes`
+table and no migration was needed: `_snapshot_fields`/`_apply_snapshot`
+(the functions that decide what a save persists) were deliberately left
+untouched, so a settings change changes the displayed time on every
+already-saved route immediately, with no re-save and no backfill.
+
+**The one invariant that matters: `duration_s` is never touched.** It
+stays exactly what Valhalla returned, because it drives FIT course-point
+timing (`services/fit.py`) and the Wahoo push payload - both need the
+routing engine's own estimate for a head unit's cue timing to make sense,
+not a rider-specific guess. `ride_time` is purely additive and
+display-layer; nothing that reads `duration_s` was changed by this
+feature.
 
 ## Organising the library
 
@@ -537,7 +573,8 @@ backend/app/
 │   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface
 │   ├── places.py            # /api/places: search, reverse, pois-along-route
 │   ├── auth.py              # register/login/logout/me + OIDC flow
-│   ├── routes.py            # route CRUD, GPX/FIT export, share links
+│   ├── routes.py            # route CRUD, GPX/FIT export, share links, ride-time wiring
+│   ├── settings.py          # GET/PATCH /api/settings, get_or_default_settings
 │   ├── wahoo.py             # connect/callback/status/push
 │   └── admin.py             # /api/admin (admin accounts only)
 ├── alembic/                 # migrations, run on startup
@@ -545,6 +582,7 @@ backend/app/
     ├── presets.py           # the three costing bundles + rationale
     ├── polyline.py          # polyline6 decoder
     ├── valhalla.py          # httpx client, error mapping, elevation, ascent calc
+    ├── ride_time.py         # gradient/surface/FTP model, computed on read only
     ├── auth.py, oidc.py     # password hashing, sessions, OIDC client
     ├── gpx.py, fit.py       # exporters (FIT embeds maneuvers as course points)
     ├── importer.py          # GPX/TCX/FIT parsing for uploaded files
