@@ -7,6 +7,7 @@
 		wahoo,
 		type Preset,
 		type RouteResponse,
+		type RouteSource,
 		type WahooStatus,
 		type Waypoint
 	} from '$lib/api';
@@ -72,6 +73,22 @@
 		wahooPushError = 'Push is taking unusually long - check the library later';
 	}
 
+	// An imported route's line is the track that was uploaded; its waypoints
+	// are only the endpoints. Re-routing between them would throw the track
+	// away, so ask before the first edit rather than losing it silently.
+	let source: RouteSource = $state('planned');
+
+	function mayEdit(): boolean {
+		if (source !== 'imported') return true;
+		const ok = confirm(
+			'This route was imported from a file.\n\n' +
+				'Editing re-routes it between its start and end points, which discards the ' +
+				'imported track and its turn cues. Continue?'
+		);
+		if (ok) source = 'planned';
+		return ok;
+	}
+
 	// Open a saved route when arriving via /?route=<id>.
 	const routeParam = page.url.searchParams.get('route');
 	if (routeParam) {
@@ -80,6 +97,7 @@
 			.then((saved) => {
 				waypoints = saved.waypoints;
 				preset = saved.preset;
+				source = saved.source;
 				route = saved;
 				savedId = saved.id;
 				savedName = saved.name;
@@ -141,43 +159,51 @@
 	}
 
 	function addWaypoint(wp: Waypoint) {
+		if (!mayEdit()) return;
 		waypoints.push(wp);
 		reroute();
 	}
 
 	function moveWaypoint(index: number, wp: Waypoint) {
+		if (!mayEdit()) return;
 		waypoints[index] = wp;
 		reroute();
 	}
 
 	function insertVia(position: number, wp: Waypoint) {
+		if (!mayEdit()) return;
 		waypoints.splice(position, 0, wp);
 		reroute();
 	}
 
 	function removeWaypoint(index: number) {
+		if (!mayEdit()) return;
 		waypoints.splice(index, 1);
 		reroute();
 	}
 
 	function setStart(wp: Waypoint) {
+		if (!mayEdit()) return;
 		if (waypoints.length === 0) waypoints.push(wp);
 		else waypoints[0] = wp;
 		reroute();
 	}
 
 	function setEnd(wp: Waypoint) {
+		if (!mayEdit()) return;
 		if (waypoints.length < 2) waypoints.push(wp);
 		else waypoints[waypoints.length - 1] = wp;
 		reroute();
 	}
 
 	function undo() {
+		if (!mayEdit()) return;
 		waypoints.pop();
 		reroute();
 	}
 
 	function clear() {
+		source = 'planned';
 		waypoints = [];
 		route = null;
 		error = null;
