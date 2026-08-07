@@ -140,3 +140,49 @@ async def test_share_link_lifecycle(client: AsyncClient, snapshot: RouteResponse
     revoked = (await client.delete(f"/api/routes/{route_id}/share")).json()
     assert revoked["share_token"] is None
     assert (await client.get(f"/api/shared/{rotated['share_token']}")).status_code == 404
+
+
+async def test_route_metadata_round_trips(client: AsyncClient, snapshot: RouteResponse) -> None:
+    await register(client)
+    created = (await client.post("/api/routes", json=save_body(snapshot))).json()
+    assert created["tags"] == [] and created["is_favourite"] is False and created["notes"] is None
+
+    patched = (
+        await client.patch(
+            f"/api/routes/{created['id']}",
+            json={
+                "tags": ["gravel", "with the kids"],
+                "notes": "Cafe at 12km",
+                "is_favourite": True,
+            },
+        )
+    ).json()
+    assert patched["tags"] == ["gravel", "with the kids"]
+    assert patched["notes"] == "Cafe at 12km"
+    assert patched["is_favourite"] is True
+
+    summary = (await client.get("/api/routes")).json()[0]
+    assert summary["tags"] == ["gravel", "with the kids"]
+    assert summary["is_favourite"] is True
+
+
+async def test_tags_are_trimmed_and_deduplicated(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    await register(client)
+    created = (await client.post("/api/routes", json=save_body(snapshot))).json()
+    patched = (
+        await client.patch(
+            f"/api/routes/{created['id']}",
+            json={"tags": ["  gravel ", "gravel", "", "  ", "hilly   loop"]},
+        )
+    ).json()
+    assert patched["tags"] == ["gravel", "hilly loop"]
+
+
+async def test_notes_can_be_cleared(client: AsyncClient, snapshot: RouteResponse) -> None:
+    await register(client)
+    created = (await client.post("/api/routes", json=save_body(snapshot))).json()
+    await client.patch(f"/api/routes/{created['id']}", json={"notes": "temporary"})
+    cleared = (await client.patch(f"/api/routes/{created['id']}", json={"notes": ""})).json()
+    assert cleared["notes"] is None
