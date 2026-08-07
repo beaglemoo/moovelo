@@ -159,6 +159,11 @@ All configuration is via environment variables, documented in
 | `PASSWORD_AUTH_ENABLED` | `true` | Set `false` for SSO-only login (ignored unless OIDC is configured) |
 | `WAHOO_CLIENT_ID` / `WAHOO_CLIENT_SECRET` | unset | Enable Wahoo sync (see [Wahoo sync](#wahoo-sync)) |
 
+Rider settings (weight, flat-road speed, optional FTP) are the first thing
+in this project configured in-app rather than by environment variable -
+per-user, at `/settings`. They currently just record the values; the
+ride-time estimate that consumes them is a later release.
+
 ## Routing presets
 
 The three presets map to Valhalla bicycle costing-option bundles, chosen so

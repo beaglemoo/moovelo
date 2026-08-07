@@ -90,6 +90,25 @@ class PoisAlongRoute(BaseModel):
     truncated: bool
 
 
+DEFAULT_WEIGHT_KG = 78.0
+DEFAULT_FLAT_SPEED_KMH = 22.0
+
+
+class UserSettingsResponse(BaseModel):
+    weight_kg: float
+    flat_speed_kmh: float
+    ftp_watts: float | None = None
+
+
+class UserSettingsPatch(BaseModel):
+    weight_kg: float | None = Field(default=None, ge=30, le=200)
+    flat_speed_kmh: float | None = Field(default=None, ge=5, le=60)
+    # Nullable *and* optional: omitting the field leaves ftp_watts untouched,
+    # sending it as null clears a previously set value. exclude_unset is
+    # what tells these two apart.
+    ftp_watts: float | None = Field(default=None, ge=0, le=2000)
+
+
 class SurfaceBreakdown(BaseModel):
     """Aggregated Valhalla /trace_attributes edges over a route's own shape.
 
