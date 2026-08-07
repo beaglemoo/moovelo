@@ -105,6 +105,12 @@ as it does for planned routes, so ascent stays comparable across the
 library; the file's own elevation is used only when the routing tiles
 carry none.
 
+Routes carry free-form organisation: `tags` (a Postgres `text[]` with a
+GIN index, since filtering by tag is a containment query), `notes` and
+`is_favourite`, all edited through `PATCH /api/routes/{id}`. Tags are
+trimmed, de-duplicated and length-capped server-side so the library does
+not accumulate near-identical tags.
+
 Imported routes are marked `source = imported`. Their waypoints are only
 the endpoints, so re-routing one in the planner would discard the
 imported track: the planner asks before the first edit, and a route that

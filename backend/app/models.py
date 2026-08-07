@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any
 
 from geoalchemy2 import Geometry
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import ARRAY, Boolean, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -79,7 +79,14 @@ class Route(Base):
     wahoo_pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     # Public read-only share link token; null = not shared.
     share_token: Mapped[str | None] = mapped_column(String(64), unique=True, default=None)
+    # Free-form organisation. Tags rather than folders: a route can be both
+    # "gravel" and "with the kids".
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
+    notes: Mapped[str | None] = mapped_column(Text, default=None)
+    is_favourite: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+    __table_args__ = (Index("ix_routes_tags", "tags", postgresql_using="gin"),)

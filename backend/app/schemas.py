@@ -46,6 +46,9 @@ class RouteSaveRequest(BaseModel):
 
 class RoutePatchRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
+    tags: list[str] | None = Field(default=None, max_length=30)
+    notes: str | None = Field(default=None, max_length=5000)
+    is_favourite: bool | None = None
     waypoints: list[Waypoint] | None = Field(default=None, min_length=2)
     preset: Preset | None = None
     snapshot: RouteResponse | None = None
@@ -63,6 +66,8 @@ class RouteSummary(BaseModel):
     name: str
     preset: str
     source: str = "planned"
+    tags: list[str] = []
+    is_favourite: bool = False
     distance_m: float
     ascent_m: float
     updated_at: datetime
@@ -76,6 +81,8 @@ class RouteSummary(BaseModel):
             name=route.name,
             preset=route.preset,
             source=route.source,
+            tags=route.tags,
+            is_favourite=route.is_favourite,
             distance_m=route.distance_m,
             ascent_m=route.ascent_m,
             updated_at=route.updated_at,
@@ -94,6 +101,9 @@ class SavedRoute(RouteResponse):
     name: str
     preset: str
     source: str = "planned"
+    tags: list[str] = []
+    notes: str | None = None
+    is_favourite: bool = False
     waypoints: list[Waypoint]
     updated_at: datetime
     wahoo: WahooState = WahooState()

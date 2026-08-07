@@ -90,6 +90,8 @@ export interface RouteSummary {
 	name: string;
 	preset: Preset;
 	source: RouteSource;
+	tags: string[];
+	is_favourite: boolean;
 	distance_m: number;
 	ascent_m: number;
 	updated_at: string;
@@ -102,6 +104,9 @@ export interface SavedRoute extends RouteResponse {
 	name: string;
 	preset: Preset;
 	source: RouteSource;
+	tags: string[];
+	notes: string | null;
+	is_favourite: boolean;
 	waypoints: Waypoint[];
 	updated_at: string;
 	wahoo: WahooState;
@@ -158,6 +163,12 @@ export const auth = {
 	logout: () => request<{ status: string }>('/api/auth/logout', { method: 'POST' })
 };
 
+export interface RouteMetadata {
+	tags: string[];
+	notes: string | null;
+	is_favourite: boolean;
+}
+
 export interface RoutePayload {
 	name: string;
 	waypoints: Waypoint[];
@@ -170,7 +181,7 @@ export const routes = {
 	get: (id: string) => request<SavedRoute>(`/api/routes/${id}`),
 	create: (payload: RoutePayload) =>
 		request<SavedRoute>('/api/routes', { method: 'POST', body: JSON.stringify(payload) }),
-	update: (id: string, payload: Partial<RoutePayload>) =>
+	update: (id: string, payload: Partial<RoutePayload> & Partial<RouteMetadata>) =>
 		request<SavedRoute>(`/api/routes/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 	remove: (id: string) => request<void>(`/api/routes/${id}`, { method: 'DELETE' }),
 	importFile: (file: File, preset: Preset) => {
