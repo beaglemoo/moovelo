@@ -8,6 +8,7 @@
 		wahoo,
 		type AppConfig,
 		type PlaceResult,
+		type PoiResult,
 		type Preset,
 		type RouteResponse,
 		type RouteSource,
@@ -16,8 +17,10 @@
 	} from '$lib/api';
 	import { cumulativeDistances, pointAtDistance } from '$lib/geo';
 	import { decodePolyline6 } from '$lib/polyline';
+	import { categoriesFor, DEFAULT_POI_GROUPS } from '$lib/pois';
 	import ElevationProfile from '$lib/components/ElevationProfile.svelte';
 	import PlaceSearch from '$lib/components/PlaceSearch.svelte';
+	import PoiPanel from '$lib/components/PoiPanel.svelte';
 	import PresetSelector from '$lib/components/PresetSelector.svelte';
 	import MapView from '$lib/map/MapView.svelte';
 	import { unsaved } from '$lib/unsaved.svelte';
@@ -41,6 +44,15 @@
 	let saveDialogOpen = $state(false);
 	let saveNameInput = $state('');
 	let saving = $state(false);
+	// Points of interest. `poiGroups` survives across routes on purpose: the
+	// rider who wants water shown wants it shown on the next ride too.
+	let poiGroups: string[] = $state([...DEFAULT_POI_GROUPS]);
+	let pois: PoiResult[] = $state([]);
+	let poisTruncated = $state(false);
+	let poisLoading = $state(false);
+	let hoveredPoiId: number | null = $state(null);
+	let poiController: AbortController | null = null;
+
 	let wahooStatus: WahooStatus | null = $state(null);
 	let wahooPush: 'idle' | 'working' | 'synced' | 'error' = $state('idle');
 	let wahooPushError: string | null = $state(null);
@@ -154,6 +166,48 @@
 		return starts;
 	});
 	const routeDists = $derived(cumulativeDistances(routeLine));
+
+	// Far enough to catch a cafe just off the road, near enough that
+	// "on this ride" still means something.
+	const POI_RADIUS_M = 250;
+
+	// Refetch whenever the route or the chosen categories change. Requests
+	// supersede one another: dragging a waypoint re-plans repeatedly, and a
+	// stale answer landing last would describe a route that no longer exists.
+	$effect(() => {
+		const line = routeLine;
+		const groups = poiGroups;
+		const enabled = config?.search_enabled ?? false;
+		poiController?.abort();
+		if (!enabled || line.length < 2 || groups.length === 0) {
+			pois = [];
+			poisTruncated = false;
+			poisLoading = false;
+			return;
+		}
+		const controller = new AbortController();
+		poiController = controller;
+		poisLoading = true;
+		places
+			.poisAlongRoute(line, categoriesFor(groups), POI_RADIUS_M, controller.signal)
+			.then((result) => {
+				if (controller.signal.aborted) return;
+				pois = result.pois;
+				poisTruncated = result.truncated;
+			})
+			.catch(() => {
+				if (controller.signal.aborted) return;
+				pois = [];
+				poisTruncated = false;
+			})
+			.finally(() => {
+				if (!controller.signal.aborted) poisLoading = false;
+			});
+	});
+
+	function togglePoiGroup(key: string) {
+		poiGroups = poiGroups.includes(key) ? poiGroups.filter((k) => k !== key) : [...poiGroups, key];
+	}
 
 	async function reroute() {
 		abortController?.abort();
@@ -353,6 +407,9 @@
 				{flyTrigger}
 				onMapMove={(centre) => (mapCentre = centre)}
 				resolvePlaceName={config.search_enabled ? placeNameAt : undefined}
+				{pois}
+				{hoveredPoiId}
+				onHoverPoi={(id) => (hoveredPoiId = id)}
 				onAddWaypoint={addWaypoint}
 				onMoveWaypoint={moveWaypoint}
 				onInsertVia={insertVia}
@@ -448,7 +505,20 @@
 				<span>↗ {Math.round(route.ascent_m)} m</span>
 				<span>↘ {Math.round(route.descent_m)} m</span>
 			</div>
-			<ElevationProfile elevation={route.elevation} onHover={handleElevationHover} />
+			<div class="panel-body">
+				<ElevationProfile elevation={route.elevation} onHover={handleElevationHover} />
+				{#if config?.search_enabled}
+					<PoiPanel
+						{pois}
+						truncated={poisTruncated}
+						loading={poisLoading}
+						selected={poiGroups}
+						hoveredId={hoveredPoiId}
+						onToggleGroup={togglePoiGroup}
+						onHover={(id) => (hoveredPoiId = id)}
+					/>
+				{/if}
+			</div>
 		</div>
 	{/if}
 </div>
@@ -594,6 +664,28 @@
 		background: #fdf6e3;
 		border-top: 1px solid #eee8d5;
 		padding: 0.4rem 0.8rem 0.2rem;
+	}
+	/* Chart and POI list side by side on a desktop, stacked on a phone -
+	   the chart needs width, the list needs height, and neither wins on a
+	   narrow screen. */
+	.panel-body {
+		display: flex;
+		gap: 1rem;
+		align-items: flex-start;
+	}
+	.panel-body :global(.pois) {
+		flex: 0 0 21rem;
+		min-width: 0;
+	}
+	@media (max-width: 760px) {
+		.panel-body {
+			flex-direction: column;
+			gap: 0.2rem;
+		}
+		.panel-body :global(.pois) {
+			flex: none;
+			width: 100%;
+		}
 	}
 	.stats {
 		display: flex;
