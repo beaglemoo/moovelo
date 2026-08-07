@@ -65,6 +65,25 @@ class WahooAccount(Base):
     )
 
 
+class UserSettings(Base):
+    """Rider settings the ride-time model draws on: weight, flat-road speed,
+    and an optional FTP. Absent for a user who has never opened /settings -
+    the API serves defaults without inserting a row."""
+
+    __tablename__ = "user_settings"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    weight_kg: Mapped[float] = mapped_column(Float, default=78.0, server_default="78.0")
+    flat_speed_kmh: Mapped[float] = mapped_column(Float, default=22.0, server_default="22.0")
+    ftp_watts: Mapped[float | None] = mapped_column(Float, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Route(Base):
     __tablename__ = "routes"
 
