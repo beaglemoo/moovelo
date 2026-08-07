@@ -91,6 +91,11 @@ That yields roughly 73,000 places, 285,000 POIs and 5,500 cycle routes,
 adding about 150 MB to the database. The filter pass is the high-water
 mark: it reduces 1.6 GB to 45 MB, which is what keeps the parse cheap.
 
+An index built before v0.3.0 still works for search and POIs, but its
+cycle routes are stored unmerged and the network overlay will serve tiles
+several times larger than it needs to. Re-run the indexer once after
+upgrading to fix that; nothing else needs doing.
+
 ## Refreshing data (monthly)
 
 OSM data changes constantly; Geofabrik extracts are updated daily. To
