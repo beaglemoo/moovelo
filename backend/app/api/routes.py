@@ -1,7 +1,7 @@
 import re
 import secrets
 import uuid
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from geoalchemy2 import WKTElement
@@ -14,12 +14,14 @@ from app.schemas import (
     Preset,
     RouteLeg,
     RoutePatchRequest,
+    RouteRequest,
     RouteResponse,
     RouteSaveRequest,
     RouteSummary,
     SavedRoute,
     SharedRoute,
     WahooState,
+    Waypoint,
 )
 from app.services.fit import build_fit
 from app.services.geo import concat_shapes
@@ -27,12 +29,24 @@ from app.services.gpx import build_gpx
 from app.services.import_routes import import_route
 from app.services.importer import RouteImportError
 from app.services.polyline import decode_polyline6
+from app.services.valhalla import ValhallaClient
 
 router = APIRouter(prefix="/api/routes")
 
 
 def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "route"
+
+
+def _snapshot_fields(route: Route) -> dict[str, Any]:
+    return {
+        "legs": route.legs,
+        "elevation": route.elevation,
+        "distance_m": route.distance_m,
+        "duration_s": route.duration_s,
+        "ascent_m": route.ascent_m,
+        "descent_m": route.descent_m,
+    }
 
 
 def _geom_wkt(snapshot: RouteResponse) -> WKTElement:
@@ -229,6 +243,87 @@ async def update_route(
     await db.commit()
     await db.refresh(route)
     return _saved(route)
+
+
+def _suffixed(name: str, suffix: str) -> str:
+    """Append a suffix without overflowing the name column."""
+    room = 200 - len(suffix)
+    return f"{name[:room].rstrip()}{suffix}"
+
+
+def _copy_of(route: Route, name: str) -> Route:
+    """A new route carrying the same organisation but none of the sync state:
+    a copy has never been pushed to Wahoo and is not shared."""
+    return Route(
+        user_id=route.user_id,
+        name=name,
+        preset=route.preset,
+        source=route.source,
+        tags=list(route.tags),
+        notes=route.notes,
+    )
+
+
+@router.post("/{route_id}/duplicate", status_code=201)
+async def duplicate_route(route_id: uuid.UUID, db: DbDep, user: UserDep) -> SavedRoute:
+    """Copy a route as-is. The stored snapshot is reused rather than
+    re-routed, so a duplicate is identical even if the map data has moved
+    on since the original was planned."""
+    route = await get_owned_route(db, user, route_id)
+    copy = _copy_of(route, _suffixed(route.name, " (copy)"))
+    copy.legs = route.legs
+    copy.elevation = route.elevation
+    copy.distance_m = route.distance_m
+    copy.duration_s = route.duration_s
+    copy.ascent_m = route.ascent_m
+    copy.descent_m = route.descent_m
+    copy.geom = _geom_wkt(RouteResponse(**_snapshot_fields(route)))
+    copy.waypoints = route.waypoints
+    db.add(copy)
+    await db.commit()
+    await db.refresh(copy)
+    return _saved(copy)
+
+
+@router.post("/{route_id}/reverse", status_code=201)
+async def reverse_route(
+    request: Request, route_id: uuid.UUID, db: DbDep, user: UserDep
+) -> SavedRoute:
+    """Ride it the other way, as a new route.
+
+    Reversing re-routes rather than flipping the stored line, because one-way
+    streets and turn instructions are direction-dependent - a flipped
+    geometry would hand the rider cues for the journey they are not making.
+    Non-destructive: you usually want both directions in the library.
+    """
+    route = await get_owned_route(db, user, route_id)
+    valhalla: ValhallaClient = request.app.state.valhalla
+
+    if route.source == "imported":
+        # An imported route has no meaningful waypoints, so reverse the track
+        # itself and match it again in the new direction.
+        shape = concat_shapes([decode_polyline6(RouteLeg(**leg).geometry) for leg in route.legs])
+        shape.reverse()
+        snapshot = await valhalla.trace_route(shape, cast("Preset", route.preset))
+        waypoints = [
+            {"lat": shape[0][0], "lon": shape[0][1]},
+            {"lat": shape[-1][0], "lon": shape[-1][1]},
+        ]
+    else:
+        waypoints = list(reversed(route.waypoints))
+        snapshot = await valhalla.route(
+            RouteRequest(
+                waypoints=[Waypoint(**wp) for wp in waypoints], preset=cast("Preset", route.preset)
+            )
+        )
+
+    reversed_route = _copy_of(route, _suffixed(route.name, " (reversed)"))
+    reversed_route.waypoints = waypoints
+    _apply_snapshot(reversed_route, snapshot)
+    db.add(reversed_route)
+    await db.commit()
+    await db.refresh(reversed_route)
+    return _saved(reversed_route)
 
 
 @router.delete("/{route_id}", status_code=204)
