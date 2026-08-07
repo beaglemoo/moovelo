@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request
-from sqlalchemy import exists, select
+from sqlalchemy import select
 
 from app.api.deps import DbDep, UserDep
 from app.config import settings
@@ -17,13 +17,15 @@ async def health() -> dict[str, str]:
 
 @router.get("/config")
 async def config(db: DbDep) -> AppConfig:
-    # One row at most, so this is a cheap index probe on every page load
-    # rather than a count of a table the indexer may have filled with
-    # hundreds of thousands of places.
-    built = await db.scalar(select(exists(select(SearchIndexMeta.id).subquery())))
+    # One row at most, so this is a cheap probe on every page load rather
+    # than a count of a table the indexer may have filled with hundreds of
+    # thousands of places. Taking built_at rather than a bare EXISTS costs
+    # nothing and doubles as the tile cache key.
+    built_at = await db.scalar(select(SearchIndexMeta.built_at))
     return AppConfig(
         tile_url_cyclosm=settings.tile_url_cyclosm or None,
-        search_enabled=bool(built),
+        search_enabled=built_at is not None,
+        search_index_version=str(int(built_at.timestamp())) if built_at else None,
     )
 
 

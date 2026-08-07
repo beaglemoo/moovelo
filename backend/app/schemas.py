@@ -1,10 +1,13 @@
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
 Preset = Literal["road", "gravel", "quiet"]
+
+Latitude = Annotated[float, Field(ge=-90, le=90)]
+Longitude = Annotated[float, Field(ge=-180, le=180)]
 
 
 class AppConfig(BaseModel):
@@ -16,6 +19,11 @@ class AppConfig(BaseModel):
     # box, POI panel and network overlay all stay hidden rather than
     # offering features that would answer nothing.
     search_enabled: bool = False
+    # When the index was last built, as epoch seconds. Goes on the cycle
+    # network tile URL so a re-index changes the URL: the tiles carry a long
+    # max-age, and without this a browser would keep serving yesterday's
+    # network for a day after the indexer reran. None when unbuilt.
+    search_index_version: str | None = None
 
 
 class PlaceResult(BaseModel):
@@ -48,8 +56,10 @@ class PoiQuery(BaseModel):
     """
 
     # [lon, lat], matching GeoJSON and the decoded polyline the frontend
-    # already holds.
-    line: list[tuple[float, float]] = Field(min_length=2, max_length=MAX_ROUTE_POINTS)
+    # already holds. Bounded like Waypoint is: PostGIS accepts a latitude of
+    # 500 without complaint and returns a distance computed from it, so
+    # nonsense in comes back as plausible nonsense out rather than a 422.
+    line: list[tuple[Longitude, Latitude]] = Field(min_length=2, max_length=MAX_ROUTE_POINTS)
     radius_m: float = Field(default=250.0, gt=0, le=MAX_POI_RADIUS_M)
     # Empty means every category. Unknown names simply match nothing.
     categories: list[str] = Field(default_factory=list, max_length=32)

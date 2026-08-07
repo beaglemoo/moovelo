@@ -36,6 +36,9 @@
 		 * anything to draw. False leaves the source unadded and the toggle
 		 * hidden rather than fetching empty tiles forever. */
 		cycleNetworkAvailable?: boolean;
+		/** Index build stamp, appended to the tile URL. The tiles carry a
+		 * long max-age, so without it a re-index stays invisible for a day. */
+		cycleNetworkVersion?: string | null;
 		/** Water, coffee and the rest, drawn as a circle layer. */
 		pois?: PoiResult[];
 		hoveredPoiId?: number | null;
@@ -57,6 +60,7 @@
 		onMapMove,
 		resolvePlaceName,
 		cycleNetworkAvailable = false,
+		cycleNetworkVersion = null,
 		pois = [],
 		hoveredPoiId = null,
 		onHoverPoi,
@@ -187,7 +191,10 @@
 			if (cycleNetworkAvailable) {
 				map.addSource('cycle-network', {
 					type: 'vector',
-					tiles: [`${location.origin}/api/places/cycle-network/{z}/{x}/{y}.mvt`],
+					tiles: [
+						`${location.origin}/api/places/cycle-network/{z}/{x}/{y}.mvt` +
+							(cycleNetworkVersion ? `?v=${cycleNetworkVersion}` : '')
+					],
 					minzoom: 4,
 					maxzoom: 16
 				});
