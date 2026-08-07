@@ -94,6 +94,18 @@
 		wahooPushError = 'Push is taking unusually long - check the library later';
 	}
 
+	// A Wahoo push describes one particular saved route. Clearing the map,
+	// opening a different route, or editing this one all make "Sent to Wahoo"
+	// a false claim about what is on the head unit - and a push still in
+	// flight when the route changes leaves the button disabled for good,
+	// because pollWahoo bails out silently once savedId has moved on.
+	$effect(() => {
+		void savedId;
+		void dirty;
+		wahooPush = 'idle';
+		wahooPushError = null;
+	});
+
 	// Published so the window-wide file drop in the layout can ask before
 	// navigating away from unsaved work.
 	$effect(() => {
