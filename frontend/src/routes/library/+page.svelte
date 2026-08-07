@@ -109,6 +109,31 @@
 		renamingId = null;
 	}
 
+	async function toggleFavourite(item: RouteSummary) {
+		const updated = await routes.update(item.id, { is_favourite: !item.is_favourite });
+		items = items.map((r) => (r.id === item.id ? { ...r, is_favourite: updated.is_favourite } : r));
+	}
+
+	let taggingId: string | null = $state(null);
+	let tagValue = $state('');
+
+	function startTagging(item: RouteSummary) {
+		taggingId = item.id;
+		tagValue = item.tags.join(', ');
+	}
+
+	async function commitTags() {
+		if (!taggingId) return;
+		const id = taggingId;
+		taggingId = null;
+		const tags = tagValue
+			.split(',')
+			.map((t) => t.trim())
+			.filter(Boolean);
+		const updated = await routes.update(id, { tags });
+		items = items.map((r) => (r.id === id ? { ...r, tags: updated.tags } : r));
+	}
+
 	async function remove(item: RouteSummary) {
 		if (!confirm(`Delete "${item.name}"?`)) return;
 		await routes.remove(item.id);
@@ -190,6 +215,16 @@
 				{#each items as item (item.id)}
 					<tr>
 						<td>
+							<button
+								type="button"
+								class="star"
+								class:on={item.is_favourite}
+								aria-pressed={item.is_favourite}
+								title={item.is_favourite ? 'Remove from favourites' : 'Add to favourites'}
+								onclick={() => toggleFavourite(item)}
+							>
+								{item.is_favourite ? '★' : '☆'}
+							</button>
 							{#if renamingId === item.id}
 								<!-- svelte-ignore a11y_autofocus -->
 								<input
@@ -205,7 +240,33 @@
 								<button type="button" class="name" onclick={() => goto(`/?route=${item.id}`)}>
 									{item.name}
 								</button>
+								{#if item.source === 'imported'}
+									<span class="imported" title="Imported from a file">imported</span>
+								{/if}
 							{/if}
+							<div class="tags">
+								{#if taggingId === item.id}
+									<!-- svelte-ignore a11y_autofocus -->
+									<input
+										class="tag-input"
+										bind:value={tagValue}
+										autofocus
+										placeholder="comma, separated, tags"
+										onblur={commitTags}
+										onkeydown={(e) => {
+											if (e.key === 'Enter') commitTags();
+											if (e.key === 'Escape') taggingId = null;
+										}}
+									/>
+								{:else}
+									{#each item.tags as tag (tag)}
+										<span class="tag">{tag}</span>
+									{/each}
+									<button type="button" class="tag-edit" onclick={() => startTagging(item)}>
+										{item.tags.length ? 'edit tags' : '+ tag'}
+									</button>
+								{/if}
+							</div>
 						</td>
 						<td class="muted">{item.preset}</td>
 						<td>{km(item.distance_m)}</td>
@@ -251,6 +312,54 @@
 </div>
 
 <style>
+	.star {
+		border: none;
+		background: none;
+		cursor: pointer;
+		font-size: 1.05rem;
+		color: #b8b8b8;
+		padding: 0 0.2rem 0 0;
+		line-height: 1;
+	}
+	.star.on {
+		color: #e0a800;
+	}
+	.tags {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.3rem;
+		align-items: center;
+		margin-top: 0.2rem;
+	}
+	.tag {
+		background: #eef2f4;
+		border-radius: 10px;
+		padding: 0.05rem 0.5rem;
+		font-size: 0.75rem;
+		color: #37474f;
+	}
+	.tag-edit {
+		border: none;
+		background: none;
+		padding: 0;
+		font-size: 0.75rem;
+		color: #708090;
+		cursor: pointer;
+	}
+	.tag-input {
+		font-size: 0.78rem;
+		padding: 0.1rem 0.3rem;
+		width: 100%;
+		max-width: 18rem;
+	}
+	.imported {
+		font-size: 0.7rem;
+		background: #e8f0e8;
+		color: #33691e;
+		border-radius: 10px;
+		padding: 0.05rem 0.45rem;
+		margin-left: 0.35rem;
+	}
 	.import {
 		margin-left: auto;
 	}
