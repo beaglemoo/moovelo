@@ -37,6 +37,18 @@ export interface SurfaceBreakdown {
 	cycle_lane_m: number;
 }
 
+export interface Climb {
+	start_dist_m: number;
+	end_dist_m: number;
+	length_m: number;
+	gain_m: number;
+	avg_grade_pct: number;
+	max_grade_pct: number;
+	score: number;
+	/** HC, "1", "2", "3" or "4" - HC steepest/longest. */
+	category: string;
+}
+
 export interface RouteResponse {
 	legs: RouteLeg[];
 	distance_m: number;
@@ -47,6 +59,9 @@ export interface RouteResponse {
 	/** Null for snapshots stored before Phase 7, and for any route whose
 	 * edge_walk match failed - surface is decorative and never blocks a save. */
 	surface?: SurfaceBreakdown | null;
+	/** Ordered by start_dist_m. Empty for snapshots stored before climb
+	 * detection shipped, and for routes with no detected climbs. */
+	climbs: Climb[];
 }
 
 export interface AppConfig {

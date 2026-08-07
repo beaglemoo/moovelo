@@ -3,9 +3,9 @@
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import type { Feature, FeatureCollection, LineString } from 'geojson';
 	import { onMount } from 'svelte';
-	import type { PoiResult, Waypoint } from '$lib/api';
-	import { nearestVertexIndex } from '$lib/geo';
-	import { GRADIENT_BANDS, type GradientSegment } from '$lib/gradient';
+	import type { Climb, PoiResult, Waypoint } from '$lib/api';
+	import { cumulativeDistances, nearestVertexIndex } from '$lib/geo';
+	import { coordsBetween, GRADIENT_BANDS, type GradientSegment } from '$lib/gradient';
 	import { colourExpression } from '$lib/pois';
 
 	interface Props {
@@ -51,6 +51,10 @@
 		 * first map-to-app hover in the codebase - the elevation chart only
 		 * ever syncs the other way. */
 		onHoverPoi?: (id: number | null) => void;
+		/** Detected climbs, 0-10 per ride - few enough that only the hovered
+		 * one's sub-line is ever drawn, rather than a feature per climb. */
+		climbs?: Climb[];
+		hoveredClimbIndex?: number | null;
 	}
 
 	let {
@@ -70,6 +74,8 @@
 		pois = [],
 		hoveredPoiId = null,
 		onHoverPoi,
+		climbs = [],
+		hoveredClimbIndex = null,
 		onAddWaypoint,
 		onMoveWaypoint,
 		onInsertVia,
@@ -189,6 +195,18 @@
 		return match;
 	}
 
+	/** The route line's own coordinates between the hovered climb's start and
+	 * end distance, or empty when nothing is hovered - reusing gradient.ts's
+	 * `coordsBetween` rather than duplicating its interpolation. */
+	function climbHighlightGeoJSON(
+		climb: Climb | null,
+		line: [number, number][]
+	): Feature<LineString> {
+		if (!climb || line.length < 2) return lineGeoJSON([]);
+		const dists = cumulativeDistances(line);
+		return lineGeoJSON(coordsBetween(line, dists, climb.start_dist_m, climb.end_dist_m));
+	}
+
 	function poiGeoJSON(list: PoiResult[]): FeatureCollection {
 		return {
 			type: 'FeatureCollection',
@@ -282,6 +300,21 @@
 					}
 				});
 			}
+			// A casing under the coloured route line, drawn only for whichever
+			// climb ClimbsList is hovering - one source updated on hover, not a
+			// feature per climb, since a ride carries at most a handful.
+			map.addSource('climb-highlight', { type: 'geojson', data: lineGeoJSON([]) });
+			map.addLayer({
+				id: 'climb-highlight-line',
+				type: 'line',
+				source: 'climb-highlight',
+				layout: { 'line-cap': 'round', 'line-join': 'round' },
+				paint: {
+					'line-color': '#ffffff',
+					'line-width': 10,
+					'line-opacity': 0.85
+				}
+			});
 			// The visible line is driven by its own gradient-coloured source;
 			// `route` stays a plain LineString because dragging and hit-testing
 			// (route-hit below) don't care about gradient bands.
@@ -615,6 +648,13 @@
 	$effect(() => {
 		if (!map || !mapReady) return;
 		setSourceData(map, 'route-gradient', gradientGeoJSON(gradientSegments, routeLine));
+	});
+
+	// Sync the hovered-climb casing.
+	$effect(() => {
+		if (!map || !mapReady) return;
+		const climb = hoveredClimbIndex !== null ? (climbs[hoveredClimbIndex] ?? null) : null;
+		setSourceData(map, 'climb-highlight', climbHighlightGeoJSON(climb, routeLine));
 	});
 
 	// Sync the POI layer. Reading hoveredPoiId here as well as `pois` is

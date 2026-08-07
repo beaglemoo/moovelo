@@ -5,9 +5,13 @@
 	interface Props {
 		elevation: ElevationPoint[];
 		onHover: (distM: number | null) => void;
+		/** Set while a row in ClimbsList is hovered, so its distance range is
+		 * highlighted here too - the first inbound hover into this chart; the
+		 * outbound `onHover` above is untouched. */
+		hoveredClimb?: { start_dist_m: number; end_dist_m: number } | null;
 	}
 
-	let { elevation, onHover }: Props = $props();
+	let { elevation, onHover, hoveredClimb = null }: Props = $props();
 
 	const W = 800;
 	const H = 150;
@@ -111,6 +115,15 @@
 				{line.label}
 			</text>
 		{/each}
+		{#if hoveredClimb}
+			<rect
+				x={x(hoveredClimb.start_dist_m)}
+				y={PAD_TOP}
+				width={Math.max(x(hoveredClimb.end_dist_m) - x(hoveredClimb.start_dist_m), 0)}
+				height={H - PAD_TOP - PAD_BOTTOM}
+				class="climb-highlight"
+			/>
+		{/if}
 		<path d={areaPath} class="area" />
 		{#each gradientPaths as segment, i (i)}
 			<path d={segment.path} class="line" stroke={GRADIENT_BANDS[segment.band].colour} />
@@ -154,6 +167,9 @@
 	}
 	.area {
 		fill: #d3368222;
+	}
+	.climb-highlight {
+		fill: #dc322f22;
 	}
 	.line {
 		fill: none;

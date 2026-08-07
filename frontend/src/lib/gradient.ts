@@ -111,7 +111,13 @@ export function elevationRuns(
 	return mergeRuns(stepBands(elevation));
 }
 
-function coordsBetween(
+/**
+ * The route line coordinates between two distances along it, including the
+ * interpolated boundary points. Shared with the climb highlight on the map,
+ * which slices the same `routeLine`/`routeDists` pair by a climb's own
+ * start/end distance rather than a gradient run's.
+ */
+export function coordsBetween(
 	routeLine: [number, number][],
 	routeDists: number[],
 	distStart: number,
