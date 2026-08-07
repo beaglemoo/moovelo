@@ -20,6 +20,11 @@ cues.
   and share routes.
 - GPX and FIT export - the FIT files carry Valhalla's turn-by-turn
   maneuvers as course points, so a Wahoo ELEMNT shows cues on the ride.
+- Import GPX, TCX and FIT files - drop them anywhere in the app or use the
+  Import button in the library. Imported tracks are map-matched back onto
+  the road network, so a file that arrived with no instructions comes out
+  with turn-by-turn cues and can be pushed to a head unit. A track that
+  cannot be matched is kept as-is rather than rejected, and says so.
 - "Send to Wahoo": push routes to your Wahoo account over the Cloud API;
   they appear on the ELEMNT after its next WiFi sync. Queued in the
   background with per-route status; re-pushing updates the same course.
