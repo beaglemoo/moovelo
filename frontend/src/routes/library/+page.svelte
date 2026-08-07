@@ -157,6 +157,32 @@
 		allTags = await routes.tags();
 	}
 
+	let working: string | null = $state(null);
+
+	async function duplicate(item: RouteSummary) {
+		working = item.id;
+		try {
+			await routes.duplicate(item.id);
+			await refresh();
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Duplicate failed';
+		} finally {
+			working = null;
+		}
+	}
+
+	async function reverse(item: RouteSummary) {
+		working = item.id;
+		try {
+			await routes.reverse(item.id);
+			await refresh();
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Reverse failed';
+		} finally {
+			working = null;
+		}
+	}
+
 	async function remove(item: RouteSummary) {
 		if (!confirm(`Delete "${item.name}"?`)) return;
 		await routes.remove(item.id);
@@ -389,6 +415,17 @@
 								</button>
 							{/if}
 							<button type="button" onclick={() => startRename(item)}>Rename</button>
+							<button type="button" disabled={working === item.id} onclick={() => duplicate(item)}>
+								Duplicate
+							</button>
+							<button
+								type="button"
+								disabled={working === item.id}
+								title="Create a new route going the other way"
+								onclick={() => reverse(item)}
+							>
+								{working === item.id ? 'Working…' : 'Reverse'}
+							</button>
 							<button type="button" class="danger" onclick={() => remove(item)}>Delete</button>
 						</td>
 					</tr>

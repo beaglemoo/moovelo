@@ -201,6 +201,8 @@ export const routes = {
 	update: (id: string, payload: Partial<RoutePayload> & Partial<RouteMetadata>) =>
 		request<SavedRoute>(`/api/routes/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 	remove: (id: string) => request<void>(`/api/routes/${id}`, { method: 'DELETE' }),
+	duplicate: (id: string) => request<SavedRoute>(`/api/routes/${id}/duplicate`, { method: 'POST' }),
+	reverse: (id: string) => request<SavedRoute>(`/api/routes/${id}/reverse`, { method: 'POST' }),
 	importFile: (file: File, preset: Preset) => {
 		const form = new FormData();
 		form.append('file', file);
