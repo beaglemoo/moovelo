@@ -44,6 +44,18 @@ export interface AppConfig {
 
 const CONFIG_FALLBACK: AppConfig = { tile_url_cyclosm: null, search_enabled: false };
 
+export interface PlaceResult {
+	id: number;
+	name: string;
+	/** city | town | village | hamlet | suburb | locality | peak | station */
+	place_type: string;
+	lat: number;
+	lon: number;
+	/** Metres from the map centre, when one was sent. Shown because many
+	 * English places share a name, and distance is what tells them apart. */
+	distance_m: number | null;
+}
+
 export interface AuthStatus {
 	setup_required: boolean;
 	signups_enabled: boolean;
@@ -236,6 +248,26 @@ export const wahoo = {
 	push: (routeId: string) =>
 		request<RouteSummary>(`/api/wahoo/push/${routeId}`, { method: 'POST' }),
 	connectUrl: '/api/wahoo/connect'
+};
+
+export const places = {
+	/** Search the offline place index. Takes an AbortSignal because a
+	 * combobox supersedes its own request on every keystroke, so `request()`
+	 * - which has no way to pass one - is not usable here. */
+	search: async (
+		q: string,
+		near?: { lat: number; lon: number },
+		signal?: AbortSignal
+	): Promise<PlaceResult[]> => {
+		const params = new URLSearchParams({ q });
+		if (near) {
+			params.set('near_lat', String(near.lat));
+			params.set('near_lon', String(near.lon));
+		}
+		const response = await fetch(`/api/places/search?${params}`, { signal });
+		if (!response.ok) throw new ApiError(response.status, 'Place search failed');
+		return await response.json();
+	}
 };
 
 export async function fetchConfig(): Promise<AppConfig> {

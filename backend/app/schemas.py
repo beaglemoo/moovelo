@@ -18,6 +18,19 @@ class AppConfig(BaseModel):
     search_enabled: bool = False
 
 
+class PlaceResult(BaseModel):
+    id: int
+    name: str
+    # city / town / village / hamlet / suburb / locality / peak / station
+    place_type: str
+    lat: float
+    lon: float
+    # Straight-line metres from the `near` point, when one was given. The
+    # frontend shows it because 21,848 of England's places share a name
+    # with another, and distance is what tells two Newports apart.
+    distance_m: float | None = None
+
+
 class Waypoint(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)

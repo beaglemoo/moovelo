@@ -5,6 +5,8 @@
 		planRoute,
 		routes,
 		wahoo,
+		type AppConfig,
+		type PlaceResult,
 		type Preset,
 		type RouteResponse,
 		type RouteSource,
@@ -14,6 +16,7 @@
 	import { cumulativeDistances, pointAtDistance } from '$lib/geo';
 	import { decodePolyline6 } from '$lib/polyline';
 	import ElevationProfile from '$lib/components/ElevationProfile.svelte';
+	import PlaceSearch from '$lib/components/PlaceSearch.svelte';
 	import PresetSelector from '$lib/components/PresetSelector.svelte';
 	import MapView from '$lib/map/MapView.svelte';
 	import { unsaved } from '$lib/unsaved.svelte';
@@ -25,9 +28,12 @@
 	let loading = $state(false);
 	let error: string | null = $state(null);
 	let hoverPoint: [number, number] | null = $state(null);
-	let config: { tile_url_cyclosm: string | null } | null = $state(null);
+	let config: AppConfig | null = $state(null);
 
 	let fitTrigger = $state(0);
+	let flyTo: Waypoint | null = $state(null);
+	let flyTrigger = $state(0);
+	let mapCentre: Waypoint | null = $state(null);
 	let savedId: string | null = $state(null);
 	let savedName: string | null = $state(null);
 	let dirty = $state(false);
@@ -207,6 +213,16 @@
 		reroute();
 	}
 
+	function pickPlace(place: PlaceResult, action: 'from' | 'add' | 'to') {
+		const wp: Waypoint = { lat: place.lat, lon: place.lon };
+		// Always show where it is, even when the edit is refused.
+		flyTo = wp;
+		flyTrigger += 1;
+		if (action === 'from') setStart(wp);
+		else if (action === 'to') setEnd(wp);
+		else addWaypoint(wp);
+	}
+
 	function undo() {
 		if (!mayEdit()) return;
 		waypoints.pop();
@@ -309,6 +325,9 @@
 				{hoverPoint}
 				cyclosmTileUrl={config.tile_url_cyclosm}
 				{fitTrigger}
+				{flyTo}
+				{flyTrigger}
+				onMapMove={(centre) => (mapCentre = centre)}
 				onAddWaypoint={addWaypoint}
 				onMoveWaypoint={moveWaypoint}
 				onInsertVia={insertVia}
@@ -317,6 +336,11 @@
 				onSetEnd={setEnd}
 				onClear={clear}
 			/>
+		{/if}
+		{#if config?.search_enabled}
+			<div class="search-bar">
+				<PlaceSearch near={mapCentre} onPick={pickPlace} />
+			</div>
 		{/if}
 		<div class="toolbar">
 			<PresetSelector {preset} onChange={changePreset} />
@@ -415,6 +439,16 @@
 		flex: 1;
 		min-height: 0;
 	}
+	/* Its own row below the toolbar rather than centred beside it: the
+	   toolbar grows as buttons appear (Save, GPX, FIT, Wahoo, the route
+	   name), so anything sharing that line eventually collides with it. */
+	.search-bar {
+		position: absolute;
+		top: 52px;
+		left: 10px;
+		z-index: 6;
+	}
+
 	.toolbar {
 		position: absolute;
 		top: 10px;

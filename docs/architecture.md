@@ -117,6 +117,29 @@ Two type choices decide whether the indexes are usable at all:
   envelope, which is a constant, so the GiST index still serves the
   bounding-box filter. Transforming every row instead would not.
 
+### Search ranking
+
+`GET /api/places/search` blends three signals, weighted 0.55 / 0.30 /
+0.15:
+
+- **Text**: an exact match on the folded name scores 1.0, a prefix match
+  0.85, otherwise trigram similarity. The prefix branch is what makes
+  "trin" find Tring - trigrams need three characters to mean anything and
+  are noisy on short typeahead input.
+- **Importance**: assigned at index time from the `place=` value, nudged
+  by population where OSM carries it.
+- **Proximity**: distance from the map centre, halving every 20 km.
+
+All three carry weight because 21,848 of England's 73,084 places share a
+name with at least one other. Two Newports, both towns, are identical
+until you know where the map is pointing.
+
+The trigram branch uses the `%` operator rather than a `similarity()`
+comparison because only the operator can use the GIN index; its threshold
+is set with `SET LOCAL` so pooled connections are returned unchanged. The
+whole query runs in about 5 ms against the full index, with 34 rows
+reaching the sort.
+
 Names are matched with `pg_trgm` trigram indexes, which serve both
 `LIKE 'prefix%'` and the `%` similarity operator. `unaccent` is
 deliberately unused: it is `STABLE` rather than `IMMUTABLE`, so it cannot
@@ -238,6 +261,7 @@ backend/app/
 ├── schemas.py               # request/response models
 ├── api/
 │   ├── route.py             # /api/health, /api/config, /api/route
+│   ├── places.py            # /api/places/search
 │   ├── auth.py              # register/login/logout/me + OIDC flow
 │   ├── routes.py            # route CRUD, GPX/FIT export, share links
 │   ├── wahoo.py             # connect/callback/status/push
