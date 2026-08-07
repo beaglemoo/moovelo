@@ -2,11 +2,14 @@
 
 The parse takes minutes; the app is serving search the whole time. So
 nothing is written to the live tables until the very end. Rows stream by
-COPY into clones created with `LIKE ... INCLUDING ALL`, which copies
-whatever columns, defaults, constraints and indexes Alembic currently
-defines - so this file never hand-duplicates DDL that could drift from the
-migration. The swap is then a rename, which is a catalogue change holding
-its lock for milliseconds rather than the minutes the load took.
+COPY into clones created with `LIKE ... INCLUDING DEFAULTS`, which mirrors
+whatever columns and defaults Alembic currently defines - so this file never
+hand-duplicates DDL that could drift from the migration. Indexes are left
+off the clones on purpose; nothing queries a staging table.
+
+Only the final transaction touches the live tables, and it moves rows
+rather than renaming: see publish() for why the rename it originally did
+could not work.
 """
 
 import logging
@@ -258,7 +261,7 @@ def publish(
             cursor.execute(
                 sql.SQL("""
                     INSERT INTO {} ({})
-                    SELECT DISTINCT ON ({}) {} FROM {} ORDER BY {}
+                    SELECT DISTINCT ON ({}) {} FROM {} ORDER BY {}, ctid
                 """).format(
                     sql.Identifier(table),
                     columns,
