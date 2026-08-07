@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse, Response
 
 from app.api.admin import router as admin_router
 from app.api.auth import router as auth_router
+from app.api.places import router as places_router
 from app.api.route import router
 from app.api.routes import router as routes_router
 from app.api.routes import shared_router
@@ -69,6 +70,7 @@ if settings.cors_origins:
 
 app.include_router(router)
 app.include_router(auth_router)
+app.include_router(places_router)
 app.include_router(routes_router)
 app.include_router(shared_router)
 app.include_router(wahoo_router)
