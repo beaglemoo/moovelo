@@ -168,6 +168,13 @@ about extract coverage when no roads are found near a waypoint.
 - **Maneuvers pass through untouched**: FIT course points need Valhalla's
   original maneuver types, instructions, and shape indices; transforming
   them earlier would lose information.
+- **Roundabouts become a single turn**: FIT has no roundabout course
+  point. The FIT profile models roundabouts in its `turn_type` enum, but
+  no course-file message carries that field, so a course can only say
+  "turn right here". Valhalla's enter and exit maneuvers are folded into
+  one cue, typed by the heading change through the roundabout and named
+  "3rd exit onto Bulbourne Road" - Valhalla's own wording would truncate
+  at FIT's 32-character limit and lose the exit number.
 - **Snapshot-based persistence**: saved routes replay their stored
   response instead of re-routing, so a library route never silently
   changes when routing data is refreshed.
