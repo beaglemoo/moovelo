@@ -257,6 +257,10 @@
 	});
 
 	let surfaceController: AbortController | null = null;
+	// The in-flight surface fetch, awaited by the save paths: a reroute
+	// replaces `route` with a response whose surface is always null, so
+	// saving before this settles would silently erase a stored breakdown.
+	let surfacePending: Promise<void> | null = null;
 
 	// Refetch the surface breakdown whenever the route or preset changes.
 	// Written straight onto `route.surface` (rather than replacing `route`
@@ -270,11 +274,12 @@
 		surfaceController?.abort();
 		if (line.length < 2) {
 			if (route) route.surface = null;
+			surfacePending = null;
 			return;
 		}
 		const controller = new AbortController();
 		surfaceController = controller;
-		routeSurface(line, currentPreset, controller.signal)
+		surfacePending = routeSurface(line, currentPreset, controller.signal)
 			.then((result) => {
 				if (controller.signal.aborted || !route) return;
 				route.surface = result;
@@ -457,6 +462,9 @@
 		}
 		saving = true;
 		try {
+			// A save racing the surface fetch would persist the reroute
+			// response's null surface over a stored breakdown.
+			await surfacePending;
 			await routes.update(savedId, { waypoints, preset, snapshot: route });
 			dirty = false;
 		} catch (err) {
@@ -483,6 +491,7 @@
 		if (!route || !saveNameInput.trim()) return;
 		saving = true;
 		try {
+			await surfacePending;
 			const saved = await routes.create({
 				name: saveNameInput.trim(),
 				waypoints,
