@@ -48,6 +48,13 @@ COLUMNS: dict[str, tuple[str, ...]] = {
 
 MEMBER_TABLE = "cycle_way_members_stage"
 
+# What makes a row unique, used to deduplicate at publish time.
+NATURAL_KEY: dict[str, tuple[str, ...]] = {
+    "places": ("osm_type", "osm_id"),
+    "pois": ("osm_type", "osm_id"),
+    "cycle_ways": ("id",),
+}
+
 
 def _stage(table: str) -> str:
     return f"{table}_stage"
@@ -241,9 +248,24 @@ def publish(
         )
         for table in INDEXED_TABLES:
             columns = sql.SQL(", ").join(sql.Identifier(c) for c in COLUMNS[table])
+            key = sql.SQL(", ").join(sql.Identifier(c) for c in NATURAL_KEY[table])
+            # DISTINCT ON the natural key. The in-memory dedup in load() is
+            # per extract, and VALHALLA_TILE_URL accepts several - Geofabrik
+            # extracts overlap at their borders, so the same OSM node can
+            # arrive from two files and would collide with the unique index
+            # here, failing the whole build at the last step. Doing it in SQL
+            # covers every source of duplication at no memory cost.
             cursor.execute(
-                sql.SQL("INSERT INTO {} ({}) SELECT {} FROM {}").format(
-                    sql.Identifier(table), columns, columns, sql.Identifier(_stage(table))
+                sql.SQL("""
+                    INSERT INTO {} ({})
+                    SELECT DISTINCT ON ({}) {} FROM {} ORDER BY {}
+                """).format(
+                    sql.Identifier(table),
+                    columns,
+                    key,
+                    columns,
+                    sql.Identifier(_stage(table)),
+                    key,
                 )
             )
         cursor.execute("DELETE FROM search_index_meta")
