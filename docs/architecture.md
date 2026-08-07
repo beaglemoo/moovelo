@@ -88,6 +88,12 @@ falls back to POST.
 
 ## Share links
 
+A route can be shared read-only: `POST /api/routes/{id}/share` sets a
+random `share_token` on the row (rotating it invalidates old links,
+DELETE revokes). `GET /api/shared/{token}` and `.../export.gpx` are the
+only unauthenticated data endpoints, serving the snapshot and GPX by
+token only - no route ids, no owner information.
+
 ## Importing route files
 
 `POST /api/routes/import` takes a GPX, TCX or FIT upload.
@@ -104,6 +110,8 @@ with no cues rather than rejected. Elevation comes from Valhalla exactly
 as it does for planned routes, so ascent stays comparable across the
 library; the file's own elevation is used only when the routing tiles
 carry none.
+
+## Organising the library
 
 Routes carry free-form organisation: `tags` (a Postgres `text[]` with a
 GIN index, since filtering by tag is a containment query), `notes` and
@@ -131,11 +139,6 @@ the endpoints, so re-routing one in the planner would discard the
 imported track: the planner asks before the first edit, and a route that
 is re-routed stops being an import.
 
-A route can be shared read-only: `POST /api/routes/{id}/share` sets a
-random `share_token` on the row (rotating it invalidates old links,
-DELETE revokes). `GET /api/shared/{token}` and `.../export.gpx` are the
-only unauthenticated data endpoints, serving the snapshot and GPX by
-token only - no route ids, no owner information.
 
 ## Frontend structure
 
