@@ -525,8 +525,26 @@
 		menu = null;
 	}
 
+	// MapLibre's own keyboard handler pans and zooms with arrows and +/-,
+	// and it does so through easeTo - which fires movestart, not any of the
+	// gesture events the menu listens for. So the keys are handled here
+	// too, or a menu opened by right-click would sit at stale pixel
+	// coordinates over a map that has moved beneath it.
+	const PAN_KEYS = new Set([
+		'ArrowUp',
+		'ArrowDown',
+		'ArrowLeft',
+		'ArrowRight',
+		'PageUp',
+		'PageDown',
+		'+',
+		'=',
+		'-',
+		'_'
+	]);
+
 	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') menu = null;
+		if (event.key === 'Escape' || PAN_KEYS.has(event.key)) menu = null;
 	}
 
 	// Sync route geometry.
