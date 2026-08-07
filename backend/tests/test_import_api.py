@@ -6,6 +6,7 @@ import respx
 from httpx import AsyncClient
 
 from app.main import app
+from app.services.importer import MAX_FILE_BYTES
 from app.services.polyline import encode_polyline6
 from app.services.valhalla import ValhallaClient
 from tests.conftest import register
@@ -163,3 +164,22 @@ async def test_reverse_works_for_an_unmatched_import(client: AsyncClient) -> Non
 
     assert response.status_code == 201, response.text
     assert response.json()["name"].endswith("(reversed)")
+
+
+async def test_upload_larger_than_the_cap_is_refused(client: AsyncClient) -> None:
+    await register(client)
+    oversized = b"<gpx>" + b"x" * MAX_FILE_BYTES
+    response = await upload(client, oversized, "huge.gpx")
+    assert response.status_code == 413
+    assert "larger than" in response.json()["detail"]
+
+
+async def test_upload_exactly_at_the_cap_is_still_read(client: AsyncClient) -> None:
+    """The limit is a maximum, not an exclusive bound."""
+    await register(client)
+    padding = b" " * (MAX_FILE_BYTES - len(GPX) - len(b"<!--") - len(b"-->"))
+    exact = GPX + b"<!--" + padding + b"-->"
+    assert len(exact) == MAX_FILE_BYTES
+    # Rejected for content, never for size: it got past the cap and parsed.
+    response = await upload(client, exact, "exact.gpx")
+    assert response.status_code != 413

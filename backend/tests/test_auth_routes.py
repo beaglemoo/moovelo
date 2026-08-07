@@ -325,3 +325,22 @@ async def test_reverse_reroutes_rather_than_flipping_the_line(
     assert reversed_route["id"] != created["id"]
     # Non-destructive: the original is still there.
     assert len((await client.get("/api/routes")).json()) == 2
+
+
+async def test_search_treats_wildcards_as_literal_text(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    await register(client)
+    for name in ["50% gravel", "50 percent gravel", "under_score", "underXscore"]:
+        created = (await client.post("/api/routes", json=save_body(snapshot))).json()
+        await client.patch(f"/api/routes/{created['id']}", json={"name": name})
+
+    percent = (await client.get("/api/routes", params={"q": "50%"})).json()
+    assert [r["name"] for r in percent] == ["50% gravel"]
+
+    underscore = (await client.get("/api/routes", params={"q": "under_"})).json()
+    assert [r["name"] for r in underscore] == ["under_score"]
+
+    # A bare wildcard is a search for that character, not for everything.
+    assert (await client.get("/api/routes", params={"q": "%"})).json() != []
+    assert len((await client.get("/api/routes", params={"q": "%"})).json()) == 1
