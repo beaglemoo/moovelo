@@ -448,6 +448,7 @@ export async function routeWeather(
 	line: [number, number][],
 	startTime: Date,
 	durationS: number | null,
+	rideTime: RideTimePoint[] = [],
 	signal?: AbortSignal
 ): Promise<WeatherAlongRoute> {
 	const response = await fetch('/api/route/weather', {
@@ -456,7 +457,11 @@ export async function routeWeather(
 		body: JSON.stringify({
 			line,
 			start_time: startTime.toISOString(),
-			duration_s: durationS
+			duration_s: durationS,
+			// The gradient/surface-aware profile, when the route has one:
+			// without it the backend times wind samples off the flat
+			// duration and looks up the summit's wind for the wrong hour.
+			ride_time: rideTime.length ? rideTime : null
 		}),
 		signal
 	});

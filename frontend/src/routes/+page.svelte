@@ -326,6 +326,7 @@
 				line,
 				startTime,
 				route?.duration_s ?? null,
+				route?.ride_time ?? [],
 				controller.signal
 			);
 			if (controller.signal.aborted) return;
