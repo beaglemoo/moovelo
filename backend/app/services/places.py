@@ -286,8 +286,16 @@ _POIS_SQL = text(f"""
         SELECT near.*,
                count(*) OVER () AS candidate_count,
                ROW_NUMBER() OVER (
-                   PARTITION BY width_bucket(
-                       dist_along_m, 0, GREATEST(route_len, 1), {POI_BUCKETS}
+                   -- LEAST because width_bucket's top bucket is half-open:
+                   -- it answers 51, not 50, for anything at or past the end
+                   -- of the line, and ST_LineLocatePoint returns exactly 1.0
+                   -- for every POI whose nearest point is the final vertex.
+                   -- Left alone, the destination town sits in two partitions
+                   -- and draws twice the share of the town you rode through
+                   -- halfway along.
+                   PARTITION BY LEAST(
+                       width_bucket(dist_along_m, 0, GREATEST(route_len, 1), {POI_BUCKETS}),
+                       {POI_BUCKETS}
                    )
                    ORDER BY dist_from_route_m
                ) AS rank_in_bucket
