@@ -28,6 +28,9 @@
 		/** The map centre, so place search can prefer the area in view -
 		 * many English places share a name. */
 		onMapMove?: (centre: Waypoint) => void;
+		/** Name the point under the context menu. Left out when there is no
+		 * place index, and by the read-only share page, which has no menu. */
+		resolvePlaceName?: (wp: Waypoint) => Promise<string | null>;
 	}
 
 	let {
@@ -40,6 +43,7 @@
 		flyTo = null,
 		flyTrigger = 0,
 		onMapMove,
+		resolvePlaceName,
 		onAddWaypoint,
 		onMoveWaypoint,
 		onInsertVia,
@@ -57,6 +61,7 @@
 	}
 
 	let menu: ContextMenu | null = $state(null);
+	let menuPlace: string | null = $state(null);
 
 	type Basemap = 'cyclosm' | 'osm';
 	const BASEMAP_STORAGE_KEY = 'moovelo:basemap';
@@ -373,6 +378,24 @@
 		});
 	});
 
+	// Name whatever the menu is pointing at. One effect rather than a call at
+	// each of the four sites that open the menu (right-click and long-press,
+	// on the canvas and on a marker), and its cleanup discards a lookup whose
+	// menu has already gone - the name arrives after a round trip, by which
+	// time the menu may be somewhere else entirely.
+	$effect(() => {
+		const current = menu;
+		menuPlace = null;
+		if (!current || !resolvePlaceName) return;
+		let stale = false;
+		void resolvePlaceName(current.wp).then((name) => {
+			if (!stale) menuPlace = name;
+		});
+		return () => {
+			stale = true;
+		};
+	});
+
 	function menuAction(action: () => void) {
 		// Run the action before clearing the menu: the menu items capture
 		// template constants derived from `menu`, and nulling it first makes
@@ -450,6 +473,9 @@
 <div class="map" bind:this={container}></div>
 {#if menu}
 	<div class="context-menu" style="left: {menu.x}px; top: {menu.y}px" role="menu">
+		{#if menuPlace}
+			<div class="menu-place">{menuPlace}</div>
+		{/if}
 		{#if menu.waypointIndex !== null}
 			{@const idx = menu.waypointIndex}
 			<button type="button" role="menuitem" onclick={() => menuAction(() => onRemoveWaypoint(idx))}>
@@ -554,6 +580,15 @@
 	}
 	.context-menu button:hover {
 		background: #f0f0f0;
+	}
+	.menu-place {
+		padding: 0.35rem 0.7rem 0.4rem;
+		font-size: 0.8rem;
+		font-weight: 600;
+		color: #586e75;
+		border-bottom: 1px solid #e5e5e5;
+		margin-bottom: 3px;
+		overflow-wrap: anywhere;
 	}
 	.context-menu hr {
 		border: none;

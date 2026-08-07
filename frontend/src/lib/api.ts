@@ -267,6 +267,20 @@ export const places = {
 		const response = await fetch(`/api/places/search?${params}`, { signal });
 		if (!response.ok) throw new ApiError(response.status, 'Place search failed');
 		return await response.json();
+	},
+
+	/** Name a point from the offline index. Resolves to null when nothing is
+	 * near it, when the index is not built, and when the lookup fails - every
+	 * caller is decorating something that has to work without a name. */
+	reverse: async (lat: number, lon: number): Promise<PlaceResult | null> => {
+		const params = new URLSearchParams({ lat: String(lat), lon: String(lon) });
+		try {
+			const response = await fetch(`/api/places/reverse?${params}`);
+			if (!response.ok) return null;
+			return await response.json();
+		} catch {
+			return null;
+		}
 	}
 };
 
