@@ -67,7 +67,8 @@ cues.
   because 21,848 English places share a name with another.
 - Entirely self-hostable: routing (Valhalla), app, database, and
   optionally the map tiles run on your own hardware. The only external
-  service is Wahoo's cloud, and only if you use it.
+  services are Wahoo's cloud and an optional weather provider, and only
+  if you configure them.
 
 ## Route intelligence
 
@@ -85,14 +86,16 @@ cues.
   categorised (HC down to 4, road-cycling style) by a backend algorithm with
   its own smoothing pass over the noisy /height data. Climbs are listed
   beside the chart; hovering one highlights its stretch on both the chart
-  and the map. More route intelligence (realistic ride time) is planned.
+  and the map.
 - Realistic ride time: the planner's displayed time is a per-rider estimate
   over gradient and surface, not Valhalla's flat routing duration. Set your
   weight, flat-road speed and (optionally) FTP at /settings, and every
   route - including ones already saved - shows a time for you. Computed
   fresh on every read, so it never needs re-saving when your settings
-  change; the export/Wahoo-sync duration is untouched. More route
-  intelligence (gradient colouring, climb detection) is planned.
+  change; the export/Wahoo-sync duration is untouched.
+- Weather and wind along a route (optional, see
+  [Weather and wind](#weather-and-wind)): head/tailwind and speed at points
+  sampled along the ride, timed to when you expect to reach each one.
 
 ## Screenshots
 
@@ -169,6 +172,7 @@ All configuration is via environment variables, documented in
 | `OIDC_PROVIDER_NAME` | `Pocket ID` | Label on the SSO login button |
 | `PASSWORD_AUTH_ENABLED` | `true` | Set `false` for SSO-only login (ignored unless OIDC is configured) |
 | `WAHOO_CLIENT_ID` / `WAHOO_CLIENT_SECRET` | unset | Enable Wahoo sync (see [Wahoo sync](#wahoo-sync)) |
+| `WEATHER_API_URL` | unset | Enable the weather panel (see [Weather and wind](#weather-and-wind)) |
 
 Rider settings (weight, flat-road speed, optional FTP) are the first thing
 in this project configured in-app rather than by environment variable -
@@ -218,6 +222,20 @@ restart, and hit "Connect Wahoo" in the library.
 The full walkthrough - registration form gotchas, how the queue and
 statuses work, and troubleshooting - is in
 [docs/wahoo-sync.md](docs/wahoo-sync.md).
+
+## Weather and wind
+
+Set `WEATHER_API_URL` to an Open-Meteo-compatible forecast base URL (e.g.
+`https://api.open-meteo.com/v1/forecast`, no API key needed for personal
+use - or point it at a self-hosted mirror) and a "Show wind" panel appears
+under the elevation profile. Pick a start time and it samples wind roughly
+every 10 km along the route, timed to when you would reach each point, and
+shows speed plus a head/tailwind reading for each.
+
+Like Wahoo sync, this is off by default: unset, the panel is not shown at
+all, and it never makes a request on its own - only pressing "Show wind"
+does. See [docs/architecture.md](docs/architecture.md#weather-and-wind)
+for the sampling and wind maths.
 
 ## Documentation
 

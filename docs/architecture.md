@@ -17,6 +17,7 @@ flowchart LR
         SELF[Self-hosted CyclOSM<br/>optional]
         OIDC[OIDC provider<br/>optional]
         WAHOO[Wahoo Cloud API<br/>optional]
+        WEATHER[Open-Meteo-compatible API<br/>optional]
     end
 
     UI -->|/api/*| BE
@@ -24,6 +25,7 @@ flowchart LR
     BE --> PG
     BE -.->|token exchange| OIDC
     BE -.->|queued FIT pushes| WAHOO
+    BE -.->|wind, on "Show wind" only| WEATHER
     UI -->|raster tiles| PUB
     UI -.->|raster tiles when TILE_URL_CYCLOSM set| SELF
 ```
@@ -339,6 +341,57 @@ row (`queued -> pushing -> synced/error`), the UI polls it, and startup
 re-enqueues anything stranded mid-push by a restart. Retries honor 429
 Retry-After; a 401 triggers one token refresh; PUT on a vanished route
 falls back to POST.
+
+## Weather and wind
+
+Off by default (`WEATHER_API_URL` unset -> `settings.weather_enabled` is
+`False`), and gated twice: `AppConfig.weather_enabled` hides the panel on
+the frontend, and `POST /api/route/weather` itself 404s before doing
+anything else when the setting is unset - a client that ignores the config
+still cannot reach an unconfigured instance out to the network. On top of
+that, the frontend never calls the endpoint from an effect; it is wired to
+one button ("Show wind") so nothing goes out unless a rider explicitly asks.
+
+`services/weather.py` samples the route line roughly every
+`WEATHER_SAMPLE_SPACING_M` (10 km), capped at `MAX_WEATHER_SAMPLES` (20),
+always including the start - a route shorter than the spacing yields one
+sample. One batched GET carries every sample's `latitude`/`longitude` as
+comma-separated lists plus `hourly=wind_speed_10m,wind_direction_10m`,
+`wind_speed_unit=ms` and `timezone=UTC` (so the returned hourly series is
+unambiguously UTC, not shifted to the queried location's local time), with
+`start_date`/`end_date` covering the ride's estimated start through arrival.
+Open-Meteo answers a JSON list for multiple locations but a bare object for
+one - both shapes are handled, which matters because a short route is
+exactly the one-sample case.
+
+Each sample's arrival time comes from an optional `ride_time` profile
+(`{dist_m, time_s}` pairs, interpolated) or, failing that, proportionally
+from `duration_s`; the nearest hourly slot to that arrival is read off the
+matching location's series. Wind maths: travel bearing at each sample is
+the bearing toward the next sample (the last sample reuses the previous
+leg's bearing; a single-sample route falls back to the bearing of the whole
+route line, since it has no "next sample" at all). Wind direction is
+meteorological (where the wind blows *from*), so the relative angle is
+taken against the downwind direction (`wind_direction + 180`):
+`headwind_ms = -speed * cos(relative)` (positive slows you down, a tailwind
+is negative) and `crosswind_ms = speed * sin(relative)`.
+
+A plain dict keyed on the rounded start hour plus a hash of rounded sample
+coordinates caches results for `~30 min` (stdlib only, evicted lazily on
+access) - a rider nudging the start-time picker back and forth does not
+re-hit the provider each time.
+
+Failure handling mirrors surface breakdown's "degrade, don't 500" policy,
+but the trigger is different: Open-Meteo rejects a `start_date` outside its
+forecast window with a 400 and `{"reason": ..., "error": true}` body (this
+is expected, ordinary behaviour when someone asks about a ride next month,
+not a fault) - so both a 400 status and any `error: true` body degrade to
+`WeatherAlongRoute(segments=[], truncated=True)` rather than raising, and
+the panel says the start time is beyond the forecast window. Only a
+transport error or repeated 429/5xx (retried up to `MAX_ATTEMPTS=3` with
+Retry-After-seeded exponential backoff, capped at 60s, copying
+`services/wahoo.py`'s retry shape) raises `WeatherError`, which the endpoint
+maps to a 502.
 
 ## Share links
 

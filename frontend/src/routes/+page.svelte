@@ -5,6 +5,7 @@
 		places,
 		planRoute,
 		routeSurface,
+		routeWeather,
 		routes,
 		wahoo,
 		type AppConfig,
@@ -14,7 +15,8 @@
 		type RouteResponse,
 		type RouteSource,
 		type WahooStatus,
-		type Waypoint
+		type Waypoint,
+		type WindSegment
 	} from '$lib/api';
 	import { cumulativeDistances, pointAtDistance } from '$lib/geo';
 	import { gradientSegments as computeGradientSegments } from '$lib/gradient';
@@ -26,6 +28,7 @@
 	import PoiPanel from '$lib/components/PoiPanel.svelte';
 	import PresetSelector from '$lib/components/PresetSelector.svelte';
 	import SurfaceBar from '$lib/components/SurfaceBar.svelte';
+	import WeatherPanel from '$lib/components/WeatherPanel.svelte';
 	import MapView from '$lib/map/MapView.svelte';
 	import { unsaved } from '$lib/unsaved.svelte';
 	import { onDestroy } from 'svelte';
@@ -59,6 +62,16 @@
 	// Shared by ClimbsList (row hover), ElevationProfile (highlight band) and
 	// MapView (highlight casing) - one index rather than three copies of it.
 	let hoveredClimbIndex: number | null = $state(null);
+
+	// Wind along the route. Unlike POIs and surface, this never fetches from
+	// an effect - it is the one call in the app that reaches an external
+	// service, so it only ever runs from the "Show wind" button.
+	let weatherStartTime = $state(nextFullHourLocal());
+	let windSegments: WindSegment[] = $state([]);
+	let windTruncated = $state(false);
+	let windLoading = $state(false);
+	let windError: string | null = $state(null);
+	let windController: AbortController | null = null;
 
 	let wahooStatus: WahooStatus | null = $state(null);
 	let wahooPush: 'idle' | 'working' | 'synced' | 'error' = $state('idle');
@@ -274,6 +287,53 @@
 
 	function togglePoiGroup(key: string) {
 		poiGroups = poiGroups.includes(key) ? poiGroups.filter((k) => k !== key) : [...poiGroups, key];
+	}
+
+	// A stale wind result describing a route the rider has since dragged
+	// somewhere else is worse than no result - clear it, but never refetch:
+	// that stays behind the "Show wind" button.
+	$effect(() => {
+		void routeLine;
+		windController?.abort();
+		windSegments = [];
+		windTruncated = false;
+		windError = null;
+	});
+
+	function nextFullHourLocal(): string {
+		const now = new Date();
+		const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1);
+		const pad = (n: number) => String(n).padStart(2, '0');
+		return `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}T${pad(next.getHours())}:${pad(next.getMinutes())}`;
+	}
+
+	async function showWind() {
+		const line = routeLine;
+		if (line.length < 2 || !weatherStartTime) return;
+		windController?.abort();
+		const controller = new AbortController();
+		windController = controller;
+		windLoading = true;
+		windError = null;
+		try {
+			const startTime = new Date(weatherStartTime);
+			const result = await routeWeather(
+				line,
+				startTime,
+				route?.duration_s ?? null,
+				controller.signal
+			);
+			if (controller.signal.aborted) return;
+			windSegments = result.segments;
+			windTruncated = result.truncated;
+		} catch (err) {
+			if (controller.signal.aborted) return;
+			windSegments = [];
+			windTruncated = false;
+			windError = err instanceof Error ? err.message : 'Weather lookup failed';
+		} finally {
+			if (!controller.signal.aborted) windLoading = false;
+		}
 	}
 
 	async function reroute() {
@@ -613,6 +673,17 @@
 						onHover={(id) => (hoveredPoiId = id)}
 					/>
 				{/if}
+				{#if config?.weather_enabled}
+					<WeatherPanel
+						startTime={weatherStartTime}
+						onStartTimeChange={(value) => (weatherStartTime = value)}
+						loading={windLoading}
+						error={windError}
+						segments={windSegments}
+						truncated={windTruncated}
+						onShowWind={showWind}
+					/>
+				{/if}
 			</div>
 		</div>
 	{/if}
@@ -769,7 +840,8 @@
 		align-items: flex-start;
 	}
 	.panel-body :global(.pois),
-	.panel-body :global(.climbs) {
+	.panel-body :global(.climbs),
+	.panel-body :global(.weather) {
 		flex: 0 0 21rem;
 		min-width: 0;
 	}
@@ -779,7 +851,8 @@
 			gap: 0.2rem;
 		}
 		.panel-body :global(.pois),
-		.panel-body :global(.climbs) {
+		.panel-body :global(.climbs),
+		.panel-body :global(.weather) {
 			flex: none;
 			width: 100%;
 		}

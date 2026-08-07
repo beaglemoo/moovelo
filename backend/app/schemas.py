@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Preset = Literal["road", "gravel", "quiet"]
 
@@ -24,6 +24,9 @@ class AppConfig(BaseModel):
     # max-age, and without this a browser would keep serving yesterday's
     # network for a day after the indexer reran. None when unbuilt.
     search_index_version: str | None = None
+    # False unless WEATHER_API_URL is set. Gates the weather panel entirely -
+    # nothing reaches outside the LAN unless this is configured.
+    weather_enabled: bool = False
 
 
 class PlaceResult(BaseModel):
@@ -149,11 +152,13 @@ class RideTimePoint(BaseModel):
 
     Computed on read from `services/ride_time.py`; never persisted, and
     entirely separate from `duration_s`, which is Valhalla's own estimate
-    and drives FIT course-point timing and the Wahoo push payload.
+    and drives FIT course-point timing and the Wahoo push payload. Also
+    accepted as client input by the weather endpoint (to time wind samples
+    to each point's arrival), hence the non-negative bounds.
     """
 
-    dist_m: float
-    time_s: float
+    dist_m: float = Field(ge=0)
+    time_s: float = Field(ge=0)
 
 
 class RouteLeg(BaseModel):
@@ -281,3 +286,46 @@ class SharedRoute(RouteResponse):
     name: str
     preset: str
     updated_at: datetime
+
+
+class WeatherQuery(BaseModel):
+    """A route line to sample for wind, sent rather than a route id so the
+    planner can ask before anything is saved - matching RouteSurfaceQuery
+    and PoiQuery."""
+
+    # [lon, lat], matching GeoJSON and RouteSurfaceQuery.line.
+    line: list[tuple[Longitude, Latitude]] = Field(min_length=2, max_length=MAX_ROUTE_POINTS)
+    start_time: datetime
+    # Optional {dist_m, time_s} profile (e.g. from the elevation-aware
+    # ride-time model); falls back to a proportional estimate from
+    # duration_s when absent.
+    ride_time: list[RideTimePoint] | None = None
+    duration_s: float | None = Field(default=None, ge=0)
+
+    @field_validator("start_time")
+    @classmethod
+    def _start_time_must_be_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("start_time must include a timezone offset")
+        return value
+
+
+class WindSegment(BaseModel):
+    lat: float
+    lon: float
+    dist_along_m: float
+    arrival_iso: str
+    wind_speed_ms: float
+    wind_direction_deg: float
+    # Positive slows you down, negative helps - a plain tailwind reads as a
+    # negative number rather than a separate sign flag.
+    headwind_ms: float
+    crosswind_ms: float
+
+
+class WeatherAlongRoute(BaseModel):
+    segments: list[WindSegment]
+    # True when the start time fell outside the forecast provider's window,
+    # or the request otherwise degraded rather than raising - the planner
+    # says so instead of presenting an empty result as "no wind".
+    truncated: bool

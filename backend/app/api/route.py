@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -15,8 +15,11 @@ from app.schemas import (
     RouteRequest,
     RouteResponse,
     SurfaceBreakdown,
+    WeatherAlongRoute,
+    WeatherQuery,
 )
 from app.services.valhalla import ValhallaClient
+from app.services.weather import WeatherError, weather_along_route
 
 router = APIRouter(prefix="/api")
 
@@ -37,6 +40,7 @@ async def config(db: DbDep) -> AppConfig:
         tile_url_cyclosm=settings.tile_url_cyclosm or None,
         search_enabled=built_at is not None,
         search_index_version=str(int(built_at.timestamp())) if built_at else None,
+        weather_enabled=settings.weather_enabled,
     )
 
 
@@ -67,3 +71,21 @@ async def route_surface(
     # are (lat, lon), matching PoiQuery's handling of the same ordering.
     shape = [(lat, lon) for lon, lat in body.line]
     return await client.trace_attributes(shape, body.preset)
+
+
+@router.post("/route/weather")
+async def route_weather(body: WeatherQuery, _user: UserDep) -> WeatherAlongRoute:
+    """Wind sampled along a route line for a chosen start time.
+
+    Gated first, before anything else runs: an unconfigured instance must
+    never make an outbound request, and 404 (rather than a 200 with an
+    empty result) is what lets the frontend hide the feature entirely.
+    """
+    if not settings.weather_enabled:
+        raise HTTPException(status_code=404, detail="Weather is not configured.")
+    # [lon, lat] in, (lat, lon) out - matching RouteSurfaceQuery and PoiQuery.
+    shape = [(lat, lon) for lon, lat in body.line]
+    try:
+        return await weather_along_route(shape, body.start_time, body.ride_time, body.duration_s)
+    except WeatherError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

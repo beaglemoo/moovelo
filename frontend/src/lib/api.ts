@@ -85,12 +85,16 @@ export interface AppConfig {
 	 * cycle-network tile URL so a re-index is not hidden behind a day of
 	 * browser cache. */
 	search_index_version: string | null;
+	/** False unless WEATHER_API_URL is set on the backend. Gates the weather
+	 * panel entirely - nothing reaches outside the LAN unless configured. */
+	weather_enabled: boolean;
 }
 
 const CONFIG_FALLBACK: AppConfig = {
 	tile_url_cyclosm: null,
 	search_enabled: false,
-	search_index_version: null
+	search_index_version: null,
+	weather_enabled: false
 };
 
 export interface PlaceResult {
@@ -123,6 +127,27 @@ export interface PoiResult {
 
 export interface PoisAlongRoute {
 	pois: PoiResult[];
+	truncated: boolean;
+}
+
+export interface WindSegment {
+	lat: number;
+	lon: number;
+	dist_along_m: number;
+	arrival_iso: string;
+	wind_speed_ms: number;
+	wind_direction_deg: number;
+	/** Positive slows you down, negative helps - a tailwind reads as a
+	 * negative headwind rather than a separate sign flag. */
+	headwind_ms: number;
+	crosswind_ms: number;
+}
+
+export interface WeatherAlongRoute {
+	segments: WindSegment[];
+	/** True when the start time fell outside the forecast provider's window
+	 * (or the request otherwise degraded) - shown rather than presenting an
+	 * empty result as "no wind". */
 	truncated: boolean;
 }
 
@@ -412,6 +437,39 @@ export async function routeSurface(
 		signal
 	});
 	if (!response.ok) return null;
+	return await response.json();
+}
+
+/** Wind sampled along a route line for a chosen start time. Only ever
+ * called on an explicit user action (the "Show wind" button) - never from
+ * an effect - because it is the one call in the app that reaches an
+ * external service. */
+export async function routeWeather(
+	line: [number, number][],
+	startTime: Date,
+	durationS: number | null,
+	signal?: AbortSignal
+): Promise<WeatherAlongRoute> {
+	const response = await fetch('/api/route/weather', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			line,
+			start_time: startTime.toISOString(),
+			duration_s: durationS
+		}),
+		signal
+	});
+	if (!response.ok) {
+		let detail = `Weather lookup failed (${response.status})`;
+		try {
+			const body = await response.json();
+			if (typeof body.detail === 'string') detail = body.detail;
+		} catch {
+			// keep the generic message
+		}
+		throw new ApiError(response.status, detail);
+	}
 	return await response.json();
 }
 

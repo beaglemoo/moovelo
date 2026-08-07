@@ -42,5 +42,14 @@ class Settings(BaseSettings):
     def wahoo_enabled(self) -> bool:
         return bool(self.wahoo_client_id and self.wahoo_client_secret)
 
+    # Open-Meteo-compatible forecast base URL, e.g.
+    # https://api.open-meteo.com/v1/forecast. Empty hides the weather panel
+    # entirely - nothing reaches outside the LAN unless this is set.
+    weather_api_url: str = ""
+
+    @property
+    def weather_enabled(self) -> bool:
+        return bool(self.weather_api_url)
+
 
 settings = Settings()
