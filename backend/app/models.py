@@ -2,8 +2,21 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from geoalchemy2 import Geometry
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, func
+from geoalchemy2 import Geography, Geometry
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+    text,
+)
 
 # The dialect ARRAY, not sqlalchemy.ARRAY: only this one implements the
 # containment operator that tag filtering needs.
@@ -93,3 +106,118 @@ class Route(Base):
     )
 
     __table_args__ = (Index("ix_routes_tags", "tags", postgresql_using="gin"),)
+
+
+# The four tables below are written only by the indexer sidecar, which is a
+# separate process on its own compose profile. The app reads them and never
+# writes them, so they carry no timestamps and no ownership.
+
+
+class Place(Base):
+    """A named settlement or feature: what place search resolves against."""
+
+    __tablename__ = "places"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    osm_type: Mapped[str] = mapped_column(String(1))
+    osm_id: Mapped[int] = mapped_column(BigInteger)
+    name: Mapped[str] = mapped_column(Text)
+    # Accent-folded and casefolded by the indexer. The trigram index lives
+    # here rather than on name, because unaccent() is STABLE and so cannot
+    # be indexed directly.
+    name_norm: Mapped[str] = mapped_column(Text)
+    place_type: Mapped[str] = mapped_column(Text)
+    county: Mapped[str | None] = mapped_column(Text, default=None)
+    population: Mapped[int | None] = mapped_column(Integer, default=None)
+    # Ranking weight from place_type and population, computed at index time.
+    importance: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    geog: Mapped[Any] = mapped_column(
+        Geography(geometry_type="POINT", srid=4326, spatial_index=False)
+    )
+
+    __table_args__ = (
+        Index("ix_places_osm", "osm_type", "osm_id", unique=True),
+        Index(
+            "ix_places_name_trgm",
+            "name_norm",
+            postgresql_using="gin",
+            postgresql_ops={"name_norm": "gin_trgm_ops"},
+        ),
+        Index("ix_places_geog", "geog", postgresql_using="gist"),
+    )
+
+
+class Poi(Base):
+    """Somewhere useful on a ride: water, coffee, a bike shop, a viewpoint."""
+
+    __tablename__ = "pois"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    osm_type: Mapped[str] = mapped_column(String(1))
+    osm_id: Mapped[int] = mapped_column(BigInteger)
+    # Nullable because the unnamed ones - a drinking fountain, a repair
+    # stand - are exactly the POIs worth finding.
+    name: Mapped[str | None] = mapped_column(Text, default=None)
+    name_norm: Mapped[str | None] = mapped_column(Text, default=None)
+    category: Mapped[str] = mapped_column(Text)
+    osm_tags: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    geog: Mapped[Any] = mapped_column(
+        Geography(geometry_type="POINT", srid=4326, spatial_index=False)
+    )
+
+    __table_args__ = (
+        Index("ix_pois_osm", "osm_type", "osm_id", unique=True),
+        Index("ix_pois_geog", "geog", postgresql_using="gist"),
+        Index("ix_pois_category", "category"),
+        # Partial, so the unnamed majority costs nothing to index.
+        Index(
+            "ix_pois_name_trgm",
+            "name_norm",
+            postgresql_using="gin",
+            postgresql_ops={"name_norm": "gin_trgm_ops"},
+            postgresql_where=text("name_norm IS NOT NULL"),
+        ),
+    )
+
+
+class CycleWay(Base):
+    """One signed cycle route: an OSM route relation, not a single way.
+
+    Keyed on the relation so the overlay can label a line "NCN 6" rather
+    than drawing anonymous segments.
+    """
+
+    __tablename__ = "cycle_ways"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    ref: Mapped[str | None] = mapped_column(Text, default=None)
+    name: Mapped[str | None] = mapped_column(Text, default=None)
+    network: Mapped[str] = mapped_column(Text)
+    operator: Mapped[str | None] = mapped_column(Text, default=None)
+    geom: Mapped[Any] = mapped_column(
+        Geometry(geometry_type="MULTILINESTRING", srid=4326, spatial_index=False)
+    )
+
+    __table_args__ = (
+        Index("ix_cycle_ways_geom", "geom", postgresql_using="gist"),
+        Index("ix_cycle_ways_network", "network"),
+    )
+
+
+class SearchIndexMeta(Base):
+    """When the index was last built, and from what.
+
+    A single row, enforced by the type: the app asks "has the index been
+    built" and there is only ever one answer.
+    """
+
+    __tablename__ = "search_index_meta"
+
+    id: Mapped[bool] = mapped_column(Boolean, primary_key=True, default=True, server_default="true")
+    built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source_files: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    place_count: Mapped[int] = mapped_column(Integer)
+    poi_count: Mapped[int] = mapped_column(Integer)
+    cycle_way_count: Mapped[int] = mapped_column(Integer)
+
+    __table_args__ = (CheckConstraint("id", name="ck_search_index_meta_singleton"),)

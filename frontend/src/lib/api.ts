@@ -37,7 +37,12 @@ export interface RouteResponse {
 
 export interface AppConfig {
 	tile_url_cyclosm: string | null;
+	/** False until the place index has been built, which is opt-in. Gates
+	 * the search box, the POI panel and the cycle-network overlay. */
+	search_enabled: boolean;
 }
+
+const CONFIG_FALLBACK: AppConfig = { tile_url_cyclosm: null, search_enabled: false };
 
 export interface AuthStatus {
 	setup_required: boolean;
@@ -236,10 +241,10 @@ export const wahoo = {
 export async function fetchConfig(): Promise<AppConfig> {
 	try {
 		const response = await fetch('/api/config');
-		if (!response.ok) return { tile_url_cyclosm: null };
+		if (!response.ok) return CONFIG_FALLBACK;
 		return await response.json();
 	} catch {
-		return { tile_url_cyclosm: null };
+		return CONFIG_FALLBACK;
 	}
 }
 

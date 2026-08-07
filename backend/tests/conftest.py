@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.db import get_db
 from app.main import app
@@ -68,10 +68,8 @@ def snapshot() -> RouteResponse:
 
 
 @pytest.fixture
-async def client(
-    snapshot: RouteResponse, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[AsyncClient]:
-    """App client backed by a throwaway Postgres database (skips if absent)."""
+async def db_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """A throwaway Postgres database for one test (skips if absent)."""
     admin_engine = create_async_engine(ADMIN_URL, isolation_level="AUTOCOMMIT")
     dbname = f"bikegps_test_{uuid.uuid4().hex[:8]}"
     try:
@@ -84,26 +82,54 @@ async def client(
     engine = create_async_engine(f"postgresql+asyncpg://bikegps:bikegps@{TEST_DB_HOST}/{dbname}")
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
+        # Mirrors migration 0006. The schema here is built by create_all
+        # rather than by Alembic, so extensions the migrations enable have
+        # to be repeated - and a missing pg_trgm surfaces as an unrelated
+        # -looking "operator does not exist: text % text" on the place
+        # index tables.
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    yield async_sessionmaker(engine, expire_on_commit=False)
+
+    await engine.dispose()
+    async with admin_engine.connect() as conn:
+        await conn.execute(text(f'DROP DATABASE "{dbname}" WITH (FORCE)'))
+    await admin_engine.dispose()
+
+
+@pytest.fixture
+async def db(db_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[AsyncSession]:
+    """A session on the same throwaway database the client fixture uses.
+
+    Request one alongside `client` to seed rows the API has no endpoint
+    for - the place index tables are written only by the indexer sidecar.
+    """
+    async with db_factory() as session:
+        yield session
+
+
+@pytest.fixture
+async def client(
+    db_factory: async_sessionmaker[AsyncSession],
+    snapshot: RouteResponse,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[AsyncClient]:
+    """App client backed by a throwaway Postgres database (skips if absent)."""
 
     async def override_get_db() -> AsyncIterator[Any]:
-        async with factory() as session:
+        async with db_factory() as session:
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
     # The Wahoo queue worker opens its own sessions outside the request
     # dependency; point it at the same throwaway database.
-    monkeypatch.setattr("app.services.wahoo_queue.session_factory", factory)
+    monkeypatch.setattr("app.services.wahoo_queue.session_factory", db_factory)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as http:
         yield http
 
     app.dependency_overrides.clear()
-    await engine.dispose()
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'DROP DATABASE "{dbname}" WITH (FORCE)'))
-    await admin_engine.dispose()
 
 
 async def register(http: AsyncClient, email: str = "admin@example.com") -> None:

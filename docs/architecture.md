@@ -68,6 +68,41 @@ cookie, email matching) works with any generic provider;
 ignored unless OIDC is configured, so it can never lock you out. Admin
 accounts get a minimal `/admin` page (users, stats, config overview).
 
+## The place index
+
+`places`, `pois` and `cycle_ways` hold settlements, useful stops and
+signed cycle routes parsed out of the same OpenStreetMap extract Valhalla
+already downloads. Nothing external is involved: no Nominatim, no
+Overpass, no outbound calls.
+
+These four tables are the only ones the app never writes. An opt-in
+indexer sidecar fills them; the backend reads them. `search_index_meta`
+holds a single row - enforced by a boolean primary key with a `CHECK` -
+recording when the index was last built and from what. `GET /api/config`
+reports its existence as `search_enabled`, and the frontend hides the
+search box, the POI panel and the cycle-network overlay when it is false,
+so a default install is unchanged rather than offering features that
+would answer nothing.
+
+Two type choices decide whether the indexes are usable at all:
+
+- **Points are `geography`, not `geometry`.** `ST_DWithin` and
+  `ST_Distance` then work in meters and stay index-backed. The same query
+  against a geometry column returns degrees - for Tring to Ivinghoe
+  Beacon, 0.071 rather than 5900 - which is plausible enough to pass
+  unnoticed while being wrong by five orders of magnitude.
+- **Cycle routes are `geometry` in 4326**, matching `routes.geom`. Vector
+  tiles need web mercator, but the tile query transforms the tile
+  envelope, which is a constant, so the GiST index still serves the
+  bounding-box filter. Transforming every row instead would not.
+
+Names are matched with `pg_trgm` trigram indexes, which serve both
+`LIKE 'prefix%'` and the `%` similarity operator. `unaccent` is
+deliberately unused: it is `STABLE` rather than `IMMUTABLE`, so it cannot
+appear in a generated column or an index without a wrapper function. The
+indexer folds accents in Python into a `name_norm` column instead, and
+the trigram indexes live on that.
+
 ## Wahoo sync
 
 `services/wahoo.py` implements OAuth against api.wahooligan.com (tokens
@@ -177,7 +212,8 @@ backend/app/
 ├── main.py                  # app factory, lifespan (valhalla client, wahoo worker), SPA static
 ├── config.py                # pydantic-settings, all env-driven
 ├── db.py                    # async engine + session factory
-├── models.py                # User, Session, Route, WahooAccount
+├── models.py                # User, Session, Route, WahooAccount,
+│                            #   Place, Poi, CycleWay, SearchIndexMeta
 ├── schemas.py               # request/response models
 ├── api/
 │   ├── route.py             # /api/health, /api/config, /api/route

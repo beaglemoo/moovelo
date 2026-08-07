@@ -7,6 +7,17 @@ from pydantic import BaseModel, Field
 Preset = Literal["road", "gravel", "quiet"]
 
 
+class AppConfig(BaseModel):
+    """What the frontend needs to know before it renders anything."""
+
+    tile_url_cyclosm: str | None = None
+    # False until the place index has been built. The indexer is opt-in, so
+    # a default install has no places, POIs or cycle routes - and the search
+    # box, POI panel and network overlay all stay hidden rather than
+    # offering features that would answer nothing.
+    search_enabled: bool = False
+
+
 class Waypoint(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
