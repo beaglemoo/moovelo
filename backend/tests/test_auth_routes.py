@@ -186,3 +186,61 @@ async def test_notes_can_be_cleared(client: AsyncClient, snapshot: RouteResponse
     await client.patch(f"/api/routes/{created['id']}", json={"notes": "temporary"})
     cleared = (await client.patch(f"/api/routes/{created['id']}", json={"notes": ""})).json()
     assert cleared["notes"] is None
+
+
+async def _seed_library(client: AsyncClient, snapshot: RouteResponse) -> None:
+    """Three routes with different names, tags and favourites."""
+    for name, tags, favourite, notes in [
+        ("Canal loop", ["gravel"], True, "Cafe at 12km"),
+        ("Hill repeats", ["road", "hilly"], False, None),
+        ("Towpath spin", ["gravel", "flat"], False, "Good with the kids"),
+    ]:
+        created = (await client.post("/api/routes", json=save_body(snapshot))).json()
+        await client.patch(
+            f"/api/routes/{created['id']}",
+            json={"name": name, "tags": tags, "is_favourite": favourite, "notes": notes or ""},
+        )
+
+
+async def test_library_search_matches_names_and_notes(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    await register(client)
+    await _seed_library(client, snapshot)
+
+    by_name = (await client.get("/api/routes", params={"q": "hill"})).json()
+    assert [r["name"] for r in by_name] == ["Hill repeats"]
+
+    # Recording "cafe at 12km" is only useful if it can be found again.
+    by_note = (await client.get("/api/routes", params={"q": "cafe"})).json()
+    assert [r["name"] for r in by_note] == ["Canal loop"]
+
+
+async def test_library_filters_by_tag_and_favourite(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    await register(client)
+    await _seed_library(client, snapshot)
+
+    gravel = (await client.get("/api/routes", params={"tag": "gravel"})).json()
+    assert sorted(r["name"] for r in gravel) == ["Canal loop", "Towpath spin"]
+
+    favourites = (await client.get("/api/routes", params={"favourite": "true"})).json()
+    assert [r["name"] for r in favourites] == ["Canal loop"]
+
+
+async def test_library_sorts_by_name(client: AsyncClient, snapshot: RouteResponse) -> None:
+    await register(client)
+    await _seed_library(client, snapshot)
+
+    ascending = (await client.get("/api/routes", params={"sort": "name", "order": "asc"})).json()
+    assert [r["name"] for r in ascending] == ["Canal loop", "Hill repeats", "Towpath spin"]
+
+    descending = (await client.get("/api/routes", params={"sort": "name", "order": "desc"})).json()
+    assert [r["name"] for r in descending] == ["Towpath spin", "Hill repeats", "Canal loop"]
+
+
+async def test_library_lists_every_tag_used(client: AsyncClient, snapshot: RouteResponse) -> None:
+    await register(client)
+    await _seed_library(client, snapshot)
+    assert (await client.get("/api/routes/tags")).json() == ["flat", "gravel", "hilly", "road"]
