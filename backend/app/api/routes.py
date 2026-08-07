@@ -6,12 +6,17 @@ from typing import Annotated, Any, Literal, cast
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from geoalchemy2 import WKTElement
 from sqlalchemy import func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DbDep, UserDep
+from app.api.settings import get_or_default_settings
 from app.models import Route
 from app.schemas import (
+    DEFAULT_FLAT_SPEED_KMH,
+    DEFAULT_WEIGHT_KG,
     ElevationPoint,
     Preset,
+    RideTimePoint,
     RouteLeg,
     RoutePatchRequest,
     RouteRequest,
@@ -21,6 +26,7 @@ from app.schemas import (
     SavedRoute,
     SharedRoute,
     SurfaceBreakdown,
+    UserSettingsResponse,
     WahooState,
     Waypoint,
 )
@@ -30,6 +36,7 @@ from app.services.gpx import build_gpx
 from app.services.import_routes import import_route, match_or_keep
 from app.services.importer import MAX_FILE_BYTES, RouteImportError
 from app.services.polyline import decode_polyline6
+from app.services.ride_time import compute_ride_time
 from app.services.valhalla import ValhallaClient
 
 router = APIRouter(prefix="/api/routes")
@@ -72,6 +79,42 @@ def _apply_snapshot(route: Route, snapshot: RouteResponse) -> None:
     route.geom = _geom_wkt(snapshot)
 
 
+# Anonymous viewers (shared links) get the ride-time model's plain
+# defaults - there is no rider settings row to look up for someone who
+# never logged in, and it would not be the owner's business anyway.
+_DEFAULT_SETTINGS = UserSettingsResponse(
+    weight_kg=DEFAULT_WEIGHT_KG, flat_speed_kmh=DEFAULT_FLAT_SPEED_KMH, ftp_watts=None
+)
+
+
+async def _settings_for(db: AsyncSession, user_id: uuid.UUID | None) -> UserSettingsResponse:
+    if user_id is None:
+        return _DEFAULT_SETTINGS
+    return await get_or_default_settings(db, user_id)
+
+
+async def with_ride_time(
+    snapshot: RouteResponse, db: AsyncSession, user_id: uuid.UUID | None
+) -> RouteResponse:
+    """A snapshot fresh off Valhalla, with `ride_time` computed for the
+    viewer's rider settings. Never touches `duration_s`."""
+    settings = await _settings_for(db, user_id)
+    ride_time = compute_ride_time(snapshot.elevation, snapshot.surface, settings)
+    return snapshot.model_copy(update={"ride_time": ride_time})
+
+
+async def _ride_time_for(
+    route: Route, db: AsyncSession, user_id: uuid.UUID | None
+) -> list[RideTimePoint]:
+    """Same computation as `with_ride_time`, over a stored `Route` row
+    rather than a fresh `RouteResponse` - used everywhere a saved or
+    shared route is read."""
+    settings = await _settings_for(db, user_id)
+    elevation = [ElevationPoint(**p) for p in route.elevation]
+    surface = SurfaceBreakdown(**route.surface) if route.surface else None
+    return compute_ride_time(elevation, surface, settings)
+
+
 async def get_owned_route(db: DbDep, user: UserDep, route_id: uuid.UUID) -> Route:
     route = (
         await db.execute(select(Route).where(Route.id == route_id, Route.user_id == user.id))
@@ -81,7 +124,7 @@ async def get_owned_route(db: DbDep, user: UserDep, route_id: uuid.UUID) -> Rout
     return route
 
 
-def _saved(route: Route) -> SavedRoute:
+async def _saved(route: Route, db: AsyncSession, user_id: uuid.UUID) -> SavedRoute:
     return SavedRoute(
         id=route.id,
         name=route.name,
@@ -99,6 +142,7 @@ def _saved(route: Route) -> SavedRoute:
         descent_m=route.descent_m,
         surface=cast("SurfaceBreakdown | None", route.surface),
         climbs=route.climbs,
+        ride_time=await _ride_time_for(route, db, user_id),
         updated_at=route.updated_at,
         wahoo=WahooState(
             status=route.wahoo_status,
@@ -194,7 +238,7 @@ async def import_route_file(
     db.add(route)
     await db.commit()
     await db.refresh(route)
-    return _saved(route)
+    return await _saved(route, db, user.id)
 
 
 async def _read_capped(file: UploadFile) -> bytes:
@@ -241,12 +285,12 @@ async def save_route(body: RouteSaveRequest, db: DbDep, user: UserDep) -> SavedR
     db.add(route)
     await db.commit()
     await db.refresh(route)
-    return _saved(route)
+    return await _saved(route, db, user.id)
 
 
 @router.get("/{route_id}")
 async def get_route(route_id: uuid.UUID, db: DbDep, user: UserDep) -> SavedRoute:
-    return _saved(await get_owned_route(db, user, route_id))
+    return await _saved(await get_owned_route(db, user, route_id), db, user.id)
 
 
 @router.patch("/{route_id}")
@@ -273,7 +317,7 @@ async def update_route(
         _apply_snapshot(route, body.snapshot)
     await db.commit()
     await db.refresh(route)
-    return _saved(route)
+    return await _saved(route, db, user.id)
 
 
 def _suffixed(name: str, suffix: str) -> str:
@@ -308,7 +352,7 @@ async def duplicate_route(route_id: uuid.UUID, db: DbDep, user: UserDep) -> Save
     db.add(copy)
     await db.commit()
     await db.refresh(copy)
-    return _saved(copy)
+    return await _saved(copy, db, user.id)
 
 
 @router.post("/{route_id}/reverse", status_code=201)
@@ -359,7 +403,7 @@ async def reverse_route(
     db.add(reversed_route)
     await db.commit()
     await db.refresh(reversed_route)
-    return _saved(reversed_route)
+    return await _saved(reversed_route, db, user.id)
 
 
 @router.delete("/{route_id}", status_code=204)
@@ -403,7 +447,7 @@ async def share_route(route_id: uuid.UUID, db: DbDep, user: UserDep) -> SavedRou
     route.share_token = secrets.token_urlsafe(16)
     await db.commit()
     await db.refresh(route)
-    return _saved(route)
+    return await _saved(route, db, user.id)
 
 
 @router.delete("/{route_id}/share")
@@ -412,7 +456,7 @@ async def revoke_share(route_id: uuid.UUID, db: DbDep, user: UserDep) -> SavedRo
     route.share_token = None
     await db.commit()
     await db.refresh(route)
-    return _saved(route)
+    return await _saved(route, db, user.id)
 
 
 # --- Public share endpoints (token is the only credential) -----------------
@@ -430,6 +474,9 @@ async def _shared_route(db: DbDep, token: str) -> Route:
 @shared_router.get("/{token}")
 async def get_shared(token: str, db: DbDep) -> SharedRoute:
     route = await _shared_route(db, token)
+    # An anonymous viewer has no rider settings of their own, and it would
+    # not be the owner's business anyway: always the ride-time defaults.
+    ride_time = await _ride_time_for(route, db, None)
     return SharedRoute(
         name=route.name,
         preset=route.preset,
@@ -441,6 +488,7 @@ async def get_shared(token: str, db: DbDep) -> SharedRoute:
         descent_m=route.descent_m,
         surface=cast("SurfaceBreakdown | None", route.surface),
         climbs=route.climbs,
+        ride_time=ride_time,
         updated_at=route.updated_at,
     )
 
