@@ -418,6 +418,51 @@ hit-testing (`route-hit`); when a route has no elevation, the gradient
 source falls back to one unbanded feature so the line renders in the plain
 colour rather than disappearing.
 
+## Climb detection
+
+`backend/app/services/climbs.py`'s `detect_climbs` is a pure function of
+`elevation`, called inline in `ValhallaClient.route`/`trace_route` right
+after `_elevation_profile`, and in `services/import_routes.py` wherever the
+elevation fallback profile is built - so a route's `climbs` always describe
+whatever elevation the snapshot actually carries. It lives in the backend,
+unlike gradient banding, because it needs its own smoothing: the raw
+`/height` profile (and imported-file elevation) is noisy enough sample to
+sample that an unsmoothed grade series segments an ordinary ride into
+dozens of spurious sub-500 m "climbs". `gradient.ts`'s point-to-point bands
+and `valhalla.py`'s `ascent_descent` stay deliberately unsmoothed - fine
+for a coarse visual or a cumulative total - but climb boundaries need
+better than that, and doing the smoothing once here gives it real pytest
+coverage instead of re-deriving it per client.
+
+The elevation array is at most 500 points however long the route, so it is
+first resampled onto a uniform 25 m grid (`RESAMPLE_STEP_M`) by linear
+interpolation, then smoothed with a centred 150 m moving average
+(`SMOOTH_WINDOW_M`) - wide enough to iron out `/height`'s noise, narrow
+enough not to blur a real climb's start and end by more than a grid cell or
+two. Consecutive samples with grade >= 3% (`CLIMB_MIN_GRADE_PCT`) form raw
+climbing runs; a dip between two runs is merged into one climb (a roller,
+not the end of it) only when it is both short (< 500 m, `MERGE_MAX_GAP_M`)
+and shallow (< 15 m lost, `MERGE_MAX_GAP_LOSS_M`) - either threshold alone
+would either merge a real valley between two climbs or split a climb at
+every cattle grid. Survivors shorter than 500 m or gaining under 20 m
+(`MIN_CLIMB_LENGTH_M`/`MIN_CLIMB_GAIN_M`) are dropped; each remaining climb
+is scored `length_m * avg_grade_pct**2 / 1000` and categorised HC/1/2/3/4
+by `CATEGORY_THRESHOLDS`, checked highest-first. Those two minimums alone do
+not guarantee a climb scores anything worth keeping - a climb sitting right
+on both of them (500 m at exactly 20 m gain) scores only 8 - so a candidate
+that passes them but still scores under category 4's floor of 20 is
+discarded as an explicit final filter.
+
+`RouteResponse.climbs` defaults to `[]`, and the `routes.climbs` column is
+`NOT NULL DEFAULT '[]'` (migration 0009) - unlike `surface`, there is no
+"match failed" state to represent with `None`, since `detect_climbs` always
+returns a list. The frontend's `ClimbsList` panel and `ElevationProfile`'s
+new inbound `hoveredClimb` prop (a translucent band behind the line) and
+`MapView`'s `climb-highlight` source (a casing under the gradient-coloured
+line, sliced from `routeLine` with `gradient.ts`'s own `coordsBetween`)
+share one `hoveredClimbIndex` in `+page.svelte` - the same
+props/hover-callback shape as the POI panel and map already use.
+
 ## Organising the library
 
 Routes carry free-form organisation: `tags` (a Postgres `text[]` with a
