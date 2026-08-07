@@ -57,6 +57,65 @@ MANEUVER_TYPE_MAP: dict[int, CoursePoint] = {
 
 SKIPPED_MANEUVER_TYPES = {0, 1, 2, 3}
 
+ROUNDABOUT_ENTER = 26
+ROUNDABOUT_EXIT = 27
+
+
+def _bearing_delta(before: Any, after: Any) -> float | None:
+    """Heading change in degrees, positive for a right turn."""
+    if before is None or after is None:
+        return None
+    return ((float(after) - float(before) + 180.0) % 360.0) - 180.0
+
+
+def _turn_point(delta: float) -> CoursePoint:
+    magnitude = abs(delta)
+    if magnitude < 20:
+        return CoursePoint.STRAIGHT
+    if magnitude < 45:
+        return CoursePoint.SLIGHT_RIGHT if delta > 0 else CoursePoint.SLIGHT_LEFT
+    if magnitude < 135:
+        return CoursePoint.RIGHT if delta > 0 else CoursePoint.LEFT
+    return CoursePoint.SHARP_RIGHT if delta > 0 else CoursePoint.SHARP_LEFT
+
+
+def _roundabout_point(enter: dict[str, Any], exit_maneuver: dict[str, Any] | None) -> CoursePoint:
+    """The direction actually travelled through a roundabout.
+
+    FIT has no roundabout course point. The FIT profile does model
+    roundabouts - in its `turn_type` enum - but no course-file message
+    carries that field, so a course can only say "turn right here". Valhalla
+    splits a roundabout into an enter and an exit maneuver; comparing the
+    heading going in with the heading coming out gives the turn a rider
+    actually makes, which beats emitting two featureless generic points.
+    """
+    source = exit_maneuver if exit_maneuver is not None else enter
+    delta = _bearing_delta(enter.get("bearing_before"), source.get("bearing_after"))
+    return CoursePoint.GENERIC if delta is None else _turn_point(delta)
+
+
+def _ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        return f"{n}th"
+    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
+
+
+def _roundabout_name(enter: dict[str, Any], exit_maneuver: dict[str, Any] | None) -> str:
+    """A name for a roundabout that survives the 32-character FIT limit.
+
+    Valhalla's own instruction ("Enter the roundabout and take the 3rd exit
+    onto Bulbourne Road/B488.") truncates to "Enter the roundabout and take th"
+    - losing the exit number, which is the one thing the rider needs.
+    """
+    count = enter.get("roundabout_exit_count")
+    if not count:
+        return str(enter.get("instruction", ""))
+    streets = (exit_maneuver or {}).get("begin_street_names") or (exit_maneuver or {}).get(
+        "street_names"
+    )
+    exit_label = f"{_ordinal(int(count))} exit"
+    return f"{exit_label} onto {streets[0]}" if streets else exit_label
+
 
 def _course_points(
     legs: list[RouteLeg],
@@ -70,10 +129,31 @@ def _course_points(
     messages: list[CoursePointMessage] = []
     leg_offset = 0
     for leg, shape in zip(legs, shapes, strict=True):
-        for maneuver in leg.maneuvers:
+        folded_exit = False
+        for position, maneuver in enumerate(leg.maneuvers):
             m_type = int(maneuver.get("type", 0))
             if m_type in SKIPPED_MANEUVER_TYPES:
                 continue
+            # The exit of a roundabout we already emitted as a single turn.
+            if m_type == ROUNDABOUT_EXIT and folded_exit:
+                folded_exit = False
+                continue
+            folded_exit = False
+            if m_type == ROUNDABOUT_ENTER:
+                exit_maneuver = next(
+                    (
+                        m
+                        for m in leg.maneuvers[position + 1 :]
+                        if int(m.get("type", 0)) == ROUNDABOUT_EXIT
+                    ),
+                    None,
+                )
+                folded_exit = exit_maneuver is not None
+                point_type = _roundabout_point(maneuver, exit_maneuver)
+                label = _roundabout_name(maneuver, exit_maneuver)
+            else:
+                point_type = MANEUVER_TYPE_MAP.get(m_type, CoursePoint.GENERIC)
+                label = str(maneuver.get("instruction", ""))
             begin_index: int = maneuver.get("begin_shape_index", 0)
             # Legs share boundary vertices, so the concatenated index for a
             # leg-local shape index is offset by len(shape)-1 per prior leg.
@@ -83,9 +163,8 @@ def _course_points(
             point.position_lat = merged[index][0]
             point.position_long = merged[index][1]
             point.distance = dists[index]
-            point.type = MANEUVER_TYPE_MAP.get(m_type, CoursePoint.GENERIC)
-            instruction = str(maneuver.get("instruction", ""))[:COURSE_POINT_NAME_MAX]
-            point.course_point_name = instruction
+            point.type = point_type
+            point.course_point_name = label[:COURSE_POINT_NAME_MAX]
             messages.append(point)
         leg_offset += max(len(shape) - 1, 0)
     return messages
