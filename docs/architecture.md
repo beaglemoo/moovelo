@@ -76,7 +76,28 @@ already downloads. Nothing external is involved: no Nominatim, no
 Overpass, no outbound calls.
 
 These four tables are the only ones the app never writes. An opt-in
-indexer sidecar fills them; the backend reads them. `search_index_meta`
+indexer sidecar (`indexer/`, compose profile `index`) fills them; the
+backend reads them. It mounts the `valhalla_tiles` volume read-only and
+works in three stages:
+
+1. **`osmium tags-filter`** streams the extract down to just the tagged
+   objects and the nodes and members they reference - 1.6 GB to 45 MB for
+   England, in about nine seconds. This is what keeps the rest cheap:
+   parsing the whole extract with node-location caching would be the
+   largest memory consumer on the machine. (The `-R` flag looks like it
+   would help and does the opposite - it *omits* referenced objects,
+   which would leave every way without coordinates.)
+2. **Two pyosmium passes.** The first reads relations only and flattens
+   cycle superroutes, because a route relation can have other relations
+   as members and a child is not guaranteed to appear before its parent.
+   The second resolves geometry and streams rows out.
+3. **COPY into staging, then one publishing transaction.** The minutes of
+   work happen outside any lock; only the row move is inside it. Each
+   COPY needs its own connection - a `COPY IN` occupies its connection
+   for the whole transfer, so three on one connection deadlock silently.
+
+A full England rebuild takes about 37 seconds and answers every request
+throughout. `search_index_meta`
 holds a single row - enforced by a boolean primary key with a `CHECK` -
 recording when the index was last built and from what. `GET /api/config`
 reports its existence as `search_enabled`, and the frontend hides the
@@ -230,6 +251,19 @@ backend/app/
     ├── gpx.py, fit.py       # exporters (FIT embeds maneuvers as course points)
     ├── importer.py          # GPX/TCX/FIT parsing for uploaded files
     └── wahoo.py, wahoo_queue.py  # Wahoo client + background push worker
+```
+
+The indexer is a sibling of `backend/`, with its own dependencies and
+lockfile, because it shares nothing with the ASGI stack:
+
+```
+indexer/indexer/
+├── prefilter.py             # osmium tags-filter pre-pass
+├── categories.py            # tag -> category tables; also derives the filter
+├── extract.py               # the two pyosmium passes
+├── geometry.py              # way centroids, accent folding
+├── db.py                    # COPY into staging, then publish
+└── build.py                 # entrypoint
 ```
 
 Error mapping: Valhalla connection failures surface as 503 ("routing
