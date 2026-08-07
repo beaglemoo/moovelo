@@ -20,7 +20,7 @@ flowchart LR
     end
 
     UI -->|/api/*| BE
-    BE -->|/route, /height| VH
+    BE -->|/route, /height, /trace_attributes| VH
     BE --> PG
     BE -.->|token exchange| OIDC
     BE -.->|queued FIT pushes| WAHOO
@@ -359,6 +359,45 @@ as it does for planned routes, so ascent stays comparable across the
 library; the file's own elevation is used only when the routing tiles
 carry none.
 
+## Surface breakdown
+
+`services/valhalla.py`'s `trace_attributes` calls Valhalla `/trace_attributes`
+with `shape_match: edge_walk` over a route's own decoded shape, requesting
+`edge.length`, `edge.surface`, `edge.road_class`, `edge.use` and
+`edge.cycle_lane`. The edges are aggregated into metres per bucket
+(`SurfaceBreakdown`: `surface_m`, `road_class_m`, `use_m`, `cycle_lane_m`,
+`total_m`) - metres rather than fractions, so chunks sum and the frontend
+derives percentages. Bucket keys are Valhalla's own enum strings, including
+ones absent from its documented enum (`service_road`, `parking_aisle`), so
+these are plain dicts rather than a closed set. `cycle_lane_m` is kept
+separate from `use_m` deliberately: surface mix and marked cycling
+infrastructure measure different things.
+
+Chunking reuses `TRACE_MAX_POINTS` but, unlike `trace_route`'s chunks, does
+not share a boundary point between chunks - only aggregate metres are
+accumulated here, nothing needs to stitch back into continuous geometry, so
+a clean split is simpler and correct.
+
+Failure handling is the deliberate opposite of `trace_route`'s: any failure -
+a 4xx or the 503 an unreachable engine maps to - degrades to `None` rather
+than propagating. `edge_walk` requires the shape to already lie exactly on
+the routing graph, so an unmatched imported track fails it by design; surface
+is decorative and never touches FIT or export, so there is nothing here worth
+retrying for.
+
+`POST /api/route/surface` exposes this for the planner, taking a line rather
+than a route id (like `/api/places/pois-along-route`) so it can be asked
+about before anything is saved. The frontend refetches it in its own effect
+whenever the route or preset changes and writes the result straight onto
+`route.surface` - a targeted property write rather than replacing the whole
+`route` object, so the effect does not retrigger its own `routeLine`
+dependency. `import_route` and `POST /api/routes/{id}/reverse` compute it
+once against their final snapshot's shape and attach it the same way, since
+neither goes through the planner's own fetch. Saved snapshots carry
+`surface: SurfaceBreakdown | null`; the `None` default is what keeps routes
+saved before this existed - and any route whose edge_walk match failed -
+parsing without a migration of their own.
+
 ## Organising the library
 
 Routes carry free-form organisation: `tags` (a Postgres `text[]` with a
@@ -406,7 +445,8 @@ frontend/src/
     ├── map/MapView.svelte       # MapLibre init, layers, interactions, basemap toggle
     └── components/
         ├── PresetSelector.svelte
-        └── ElevationProfile.svelte   # custom SVG chart, no chart library
+        ├── ElevationProfile.svelte   # custom SVG chart, no chart library
+        └── SurfaceBar.svelte         # paved/gravel/path stacked bar + cycleway %
 ```
 
 State lives in `+page.svelte` with Svelte 5 runes; `MapView` receives
@@ -429,7 +469,7 @@ backend/app/
 │                            #   Place, Poi, CycleWay, SearchIndexMeta
 ├── schemas.py               # request/response models
 ├── api/
-│   ├── route.py             # /api/health, /api/config, /api/route
+│   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface
 │   ├── places.py            # /api/places: search, reverse, pois-along-route
 │   ├── auth.py              # register/login/logout/me + OIDC flow
 │   ├── routes.py            # route CRUD, GPX/FIT export, share links

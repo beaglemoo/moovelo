@@ -69,6 +69,17 @@ cues.
   optionally the map tiles run on your own hardware. The only external
   service is Wahoo's cloud, and only if you use it.
 
+## Route intelligence
+
+- Surface breakdown: a stacked bar showing what a route is made of - paved,
+  gravel, path - plus the share on marked cycling infrastructure, from
+  Valhalla's own per-edge data over the route's exact line. The honest
+  answer to "will my road bike cope". Decorative rather than authoritative:
+  it never blocks saving, exporting or pushing a route, and degrades
+  quietly when the line cannot be matched back onto the road network. More
+  route intelligence (gradient colouring, climb detection, realistic ride
+  time) is planned.
+
 ## Screenshots
 
 Planning a route in the Peak District (CyclOSM basemap, elevation profile):
