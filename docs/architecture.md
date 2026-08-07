@@ -178,12 +178,66 @@ Null is a normal answer - no index, or nowhere near anywhere - so both
 callers decorate something that still works without a name. The frontend
 never passes the lookup at all when `search_enabled` is false.
 
+### POIs along a route
+
+`POST /api/places/pois-along-route` answers "where is water and coffee on
+this ride". Two choices carry it:
+
+- **The line goes in the request, not a route id.** The question gets
+  asked while planning, before anything is saved, so a GET keyed on a
+  stored route would miss the moment it matters. A real 50 km route is
+  about 1,800 points - roughly 40 KB of JSON - so this is cheap; the cap
+  is 20,000 points.
+- **Ordered by distance *along* the route, not distance *from* it.** A
+  list of nearby POIs is not a plan for a ride; a list in the order you
+  will pass them is. `ST_LineLocatePoint` gives the fraction along, which
+  the geography length turns into metres. On a route that doubles back it
+  reports the first pass.
+
+`ix_pois_geog` is what makes it work, and it is worth being precise about
+which index: the roadmap originally said this item would finally exercise
+`ix_routes_geom`, and it does not. The route is a literal in the query,
+not a stored row. Against a Tring to Oxford ride the POI index offers
+1,740 candidates from the line's bounding box, the exact `ST_DWithin`
+test keeps 722, and the whole query takes 26 ms. `ST_LineLocatePoint`
+needs plain geometry - hence the geom/geog split in the CTE - and runs
+only over the survivors.
+
+Results are capped at 300 with a `truncated` flag, so a partial answer
+never arrives looking like a complete one.
+
+#### Why the categories are grouped
+
+The indexer writes 16 flat categories; the panel shows eight chips and
+defaults to four. That is measured rather than guessed. The same 50 km
+ride passes 722 POIs within 250 m:
+
+| bike_parking | food | cafe | pub | ... | water | bike_repair | picnic |
+|---|---|---|---|---|---|---|---|
+| 232 | 167 | 123 | 68 | | 1 | 1 | 1 |
+
+Only one of those 232 bike parking stands has a name. Show everything at
+once and the rare things people actually go looking for - water, a repair
+stand - are unfindable, so `bike_parking` is left out of the UI entirely
+and the default is water, coffee, toilets and bike.
+
+OSM names and opening hours are rendered as text, never as markup. They
+are untrusted input, and Phase 9's prompt-injection rule starts here.
+
+### Trigrams and accents
+
 Names are matched with `pg_trgm` trigram indexes, which serve both
 `LIKE 'prefix%'` and the `%` similarity operator. `unaccent` is
 deliberately unused: it is `STABLE` rather than `IMMUTABLE`, so it cannot
 appear in a generated column or an index without a wrapper function. The
 indexer folds accents in Python into a `name_norm` column instead, and
 the trigram indexes live on that.
+
+Two asyncpg lessons are worth not relearning, both in
+`services/places.py`: a bare `:lat` inside `CASE WHEN :lat IS NULL`
+cannot be typed ("could not determine data type of parameter $1"), and an
+empty array parameter cannot either ("could not determine polymorphic
+type because input has type unknown"). Both need an explicit `CAST`.
 
 ## Wahoo sync
 
@@ -299,7 +353,7 @@ backend/app/
 ├── schemas.py               # request/response models
 ├── api/
 │   ├── route.py             # /api/health, /api/config, /api/route
-│   ├── places.py            # /api/places/search, /api/places/reverse
+│   ├── places.py            # /api/places: search, reverse, pois-along-route
 │   ├── auth.py              # register/login/logout/me + OIDC flow
 │   ├── routes.py            # route CRUD, GPX/FIT export, share links
 │   ├── wahoo.py             # connect/callback/status/push

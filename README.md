@@ -54,6 +54,9 @@ cues.
 - With that index built, the planner gains a search box, place names on
   the map's right-click menu, and a save dialog that opens on "Tring to
   Ivinghoe Beacon" instead of today's date.
+- Water, coffee, toilets and bike shops along a route, listed in the
+  order you will pass them and shown on the map, with opening hours where
+  OpenStreetMap has them.
 - Search for a place from the planner once that index exists: type a few
   letters, arrow through the results, and start, extend or end a route
   from any of them. Typos are forgiven ("birmingam" finds Birmingham) and
