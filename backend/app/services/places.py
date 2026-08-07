@@ -228,6 +228,66 @@ _POIS_SQL = text(f"""
 """)
 
 
+# Vector tiles rather than a bbox GeoJSON endpoint: England's signed network
+# is 5,545 relations and 43,897 km, so a refetch on every pan would be
+# multi-megabyte with simplification pushed onto the browser. MVT is clipped,
+# quantised and cacheable per tile.
+#
+# Which networks appear depends on zoom, the way a paper map drops detail
+# rather than drawing everything at every scale. All four at street level;
+# no local routes when looking at a county; national and international only
+# when looking at the country.
+MIN_CYCLE_ZOOM = 4
+MAX_CYCLE_ZOOM = 16
+
+# Every tile coordinate is cast. asyncpg infers parameter types from
+# context, and the `2 ^ :z` below would otherwise type :z as double
+# precision for the whole statement - which fails with "function
+# st_tileenvelope(double precision, unknown, unknown) does not exist".
+_Z = "CAST(:z AS integer)"
+_ENVELOPE = f"ST_TileEnvelope({_Z}, CAST(:x AS integer), CAST(:y AS integer))"
+
+_NETWORK_BY_ZOOM = f"""
+    CASE WHEN {_Z} >= 11 THEN true
+         WHEN {_Z} >= 8 THEN network IN ('icn', 'ncn', 'rcn')
+         ELSE network IN ('icn', 'ncn') END
+"""
+
+# Web mercator spans 40,075,016.7 m, and a tile carries 4,096 units, so this
+# is one tile unit in metres - simplifying below what the tile can express
+# costs nothing visible. The indexer runs ST_LineMerge before storing, which
+# is what lets this actually bite.
+_TOLERANCE = "40075016.7 / (2 ^ CAST(:z AS double precision) * 4096)"
+
+# ST_Transform is applied to the tile envelope, not to every row: the
+# envelope is a constant, so ix_cycle_ways_geom still serves the bounding-box
+# filter. Transforming each row instead would disable it.
+_TILE_SQL = text(f"""
+    SELECT ST_AsMVT(tile, 'cycle_ways', 4096, 'geom') AS mvt
+    FROM (
+        SELECT id, ref, name, network,
+               ST_AsMVTGeom(
+                   ST_Simplify(ST_Transform(geom, 3857), {_TOLERANCE}),
+                   {_ENVELOPE}, 4096, 64, true
+               ) AS geom
+        FROM cycle_ways
+        WHERE geom && ST_Transform({_ENVELOPE}, 4326)
+          AND ({_NETWORK_BY_ZOOM})
+    ) AS tile
+    WHERE tile.geom IS NOT NULL
+""")
+
+
+async def cycle_network_tile(db: AsyncSession, z: int, x: int, y: int) -> bytes:
+    """One vector tile of the signed cycle network.
+
+    An empty tile is a normal answer - most of the world has no NCN - and
+    MapLibre handles zero-length bodies fine, so this never 404s.
+    """
+    mvt = await db.scalar(_TILE_SQL, {"z": z, "x": x, "y": y})
+    return bytes(mvt) if mvt else b""
+
+
 def linestring_wkt(line: Sequence[tuple[float, float]]) -> str:
     """WKT from [lon, lat] pairs. Seven decimals is about a centimetre."""
     return "LINESTRING(" + ",".join(f"{lon:.7f} {lat:.7f}" for lon, lat in line) + ")"
