@@ -407,6 +407,7 @@
 				{flyTrigger}
 				onMapMove={(centre) => (mapCentre = centre)}
 				resolvePlaceName={config.search_enabled ? placeNameAt : undefined}
+				cycleNetworkAvailable={config.search_enabled}
 				{pois}
 				{hoveredPoiId}
 				onHoverPoi={(id) => (hoveredPoiId = id)}
