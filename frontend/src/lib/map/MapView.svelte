@@ -13,6 +13,11 @@
 		hoverPoint: [number, number] | null;
 		cyclosmTileUrl: string | null;
 		fitTrigger: number;
+		/** Pan here when this counter changes, e.g. after picking a search
+		 * result that is off screen. Optional: the read-only share page
+		 * shows a map with no search attached to it. */
+		flyTo?: Waypoint | null;
+		flyTrigger?: number;
 		onAddWaypoint: (wp: Waypoint) => void;
 		onMoveWaypoint: (index: number, wp: Waypoint) => void;
 		onInsertVia: (position: number, wp: Waypoint) => void;
@@ -20,6 +25,9 @@
 		onSetStart: (wp: Waypoint) => void;
 		onSetEnd: (wp: Waypoint) => void;
 		onClear: () => void;
+		/** The map centre, so place search can prefer the area in view -
+		 * many English places share a name. */
+		onMapMove?: (centre: Waypoint) => void;
 	}
 
 	let {
@@ -29,6 +37,9 @@
 		hoverPoint,
 		cyclosmTileUrl,
 		fitTrigger,
+		flyTo = null,
+		flyTrigger = 0,
+		onMapMove,
 		onAddWaypoint,
 		onMoveWaypoint,
 		onInsertVia,
@@ -123,6 +134,12 @@
 			new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true } }),
 			'top-right'
 		);
+
+		map.on('moveend', () => {
+			if (!map) return;
+			const centre = map.getCenter();
+			onMapMove?.({ lat: centre.lat, lon: centre.lng });
+		});
 
 		map.on('load', () => {
 			if (!map) return;
@@ -395,6 +412,20 @@
 			],
 			{ padding: 60, animate: false }
 		);
+	});
+
+	// Pan to a picked search result, which may be well off screen.
+	$effect(() => {
+		const trigger = flyTrigger;
+		const target = flyTo;
+		if (trigger === 0 || !map || !mapReady || !target) return;
+		map.flyTo({
+			center: [target.lon, target.lat],
+			// Zoom in if the map is showing the whole country, but never
+			// zoom out from wherever the rider already is.
+			zoom: Math.max(map.getZoom(), 12),
+			duration: 800
+		});
 	});
 
 	// Sync basemap layer visibility.
