@@ -3,8 +3,9 @@
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import type { Feature, FeatureCollection, LineString } from 'geojson';
 	import { onMount } from 'svelte';
-	import type { Waypoint } from '$lib/api';
+	import type { PoiResult, Waypoint } from '$lib/api';
 	import { nearestVertexIndex } from '$lib/geo';
+	import { colourExpression } from '$lib/pois';
 
 	interface Props {
 		waypoints: Waypoint[];
@@ -31,6 +32,13 @@
 		/** Name the point under the context menu. Left out when there is no
 		 * place index, and by the read-only share page, which has no menu. */
 		resolvePlaceName?: (wp: Waypoint) => Promise<string | null>;
+		/** Water, coffee and the rest, drawn as a circle layer. */
+		pois?: PoiResult[];
+		hoveredPoiId?: number | null;
+		/** Hovering a marker highlights its row in the panel. This is the
+		 * first map-to-app hover in the codebase - the elevation chart only
+		 * ever syncs the other way. */
+		onHoverPoi?: (id: number | null) => void;
 	}
 
 	let {
@@ -44,6 +52,9 @@
 		flyTrigger = 0,
 		onMapMove,
 		resolvePlaceName,
+		pois = [],
+		hoveredPoiId = null,
+		onHoverPoi,
 		onAddWaypoint,
 		onMoveWaypoint,
 		onInsertVia,
@@ -117,6 +128,20 @@
 		return { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } };
 	}
 
+	function poiGeoJSON(list: PoiResult[]): FeatureCollection {
+		return {
+			type: 'FeatureCollection',
+			features: list.map((poi) => ({
+				type: 'Feature',
+				id: poi.id,
+				// `hovered` rides along in the data rather than in a filter, so
+				// emphasis is a paint expression and needs no second layer.
+				properties: { id: poi.id, category: poi.category, hovered: poi.id === hoveredPoiId },
+				geometry: { type: 'Point', coordinates: [poi.lon, poi.lat] }
+			}))
+		};
+	}
+
 	function pointGeoJSON(point: [number, number] | null): FeatureCollection {
 		return {
 			type: 'FeatureCollection',
@@ -173,6 +198,21 @@
 					'circle-color': '#ffffff',
 					'circle-stroke-color': '#d33682',
 					'circle-stroke-width': 3
+				}
+			});
+			// POIs are a GL layer rather than maplibregl.Marker elements: a
+			// 50 km ride passes hundreds of them, unlike the handful of
+			// draggable waypoints, and that many DOM nodes would crawl.
+			map.addSource('pois', { type: 'geojson', data: poiGeoJSON([]) });
+			map.addLayer({
+				id: 'poi-points',
+				type: 'circle',
+				source: 'pois',
+				paint: {
+					'circle-radius': ['case', ['get', 'hovered'], 8, 5],
+					'circle-color': colourExpression() as maplibregl.ExpressionSpecification,
+					'circle-stroke-color': '#ffffff',
+					'circle-stroke-width': ['case', ['get', 'hovered'], 3, 1.5]
 				}
 			});
 			map.addSource('hover-point', { type: 'geojson', data: pointGeoJSON(null) });
@@ -256,6 +296,18 @@
 
 		m.on('mouseenter', 'route-hit', () => (m.getCanvas().style.cursor = 'grab'));
 		m.on('mouseleave', 'route-hit', () => (m.getCanvas().style.cursor = ''));
+
+		// Mirrors the cursor handlers above, but reports outward so the panel
+		// can highlight the matching row.
+		m.on('mousemove', 'poi-points', (e) => {
+			m.getCanvas().style.cursor = 'pointer';
+			const id = e.features?.[0]?.properties?.id;
+			if (typeof id === 'number') onHoverPoi?.(id);
+		});
+		m.on('mouseleave', 'poi-points', () => {
+			m.getCanvas().style.cursor = '';
+			onHoverPoi?.(null);
+		});
 
 		const startDrag = (
 			grab: maplibregl.LngLat,
@@ -412,6 +464,15 @@
 	$effect(() => {
 		if (!map || !mapReady) return;
 		setSourceData(map, 'route', lineGeoJSON(routeLine));
+	});
+
+	// Sync the POI layer. Reading hoveredPoiId here as well as `pois` is
+	// deliberate: the hovered flag lives in the feature data, so a hover
+	// change has to rewrite the source for the paint expression to see it.
+	$effect(() => {
+		if (!map || !mapReady) return;
+		void hoveredPoiId;
+		setSourceData(map, 'pois', poiGeoJSON(pois));
 	});
 
 	// Sync elevation-chart hover marker.
