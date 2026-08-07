@@ -1,9 +1,30 @@
 """Integration tests for auth and route CRUD against a throwaway Postgres."""
 
+import json
+
+import respx
 from httpx import AsyncClient
 
+from app.main import app
 from app.schemas import RouteResponse
+from app.services.polyline import encode_polyline6
+from app.services.valhalla import ValhallaClient
 from tests.conftest import register
+
+REVERSED_TRIP = {
+    "trip": {
+        "summary": {"length": 1.93, "time": 470.0},
+        "legs": [
+            {
+                "shape": encode_polyline6([(53.785, -1.575), (53.7996, -1.5491)]),
+                "maneuvers": [
+                    {"type": 1, "instruction": "Ride northeast.", "begin_shape_index": 0},
+                    {"type": 4, "instruction": "You have arrived.", "begin_shape_index": 1},
+                ],
+            }
+        ],
+    }
+}
 
 WAYPOINTS = [{"lat": 53.7996, "lon": -1.5491}, {"lat": 53.785, "lon": -1.575}]
 
@@ -244,3 +265,63 @@ async def test_library_lists_every_tag_used(client: AsyncClient, snapshot: Route
     await register(client)
     await _seed_library(client, snapshot)
     assert (await client.get("/api/routes/tags")).json() == ["flat", "gravel", "hilly", "road"]
+
+
+async def test_duplicate_copies_organisation_but_not_sync_state(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    await register(client)
+    created = (await client.post("/api/routes", json=save_body(snapshot))).json()
+    await client.patch(
+        f"/api/routes/{created['id']}", json={"tags": ["gravel"], "notes": "Cafe at 12km"}
+    )
+    await client.post(f"/api/routes/{created['id']}/share")
+
+    copy = (await client.post(f"/api/routes/{created['id']}/duplicate")).json()
+
+    assert copy["id"] != created["id"]
+    assert copy["name"] == "Canal loop (copy)"
+    assert copy["tags"] == ["gravel"]
+    assert copy["notes"] == "Cafe at 12km"
+    # A copy has never been pushed to Wahoo and is not shared.
+    assert copy["share_token"] is None
+    assert copy["wahoo"]["status"] == "none"
+    # The stored snapshot is reused, so the copy is identical.
+    assert copy["legs"] == created["legs"]
+    assert copy["distance_m"] == created["distance_m"]
+
+
+async def test_duplicate_name_stays_within_the_column(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    await register(client)
+    created = (await client.post("/api/routes", json=save_body(snapshot))).json()
+    await client.patch(f"/api/routes/{created['id']}", json={"name": "x" * 200})
+    copy = (await client.post(f"/api/routes/{created['id']}/duplicate")).json()
+    assert len(copy["name"]) == 200
+    assert copy["name"].endswith(" (copy)")
+
+
+@respx.mock
+async def test_reverse_reroutes_rather_than_flipping_the_line(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    app.state.valhalla = ValhallaClient(base_url="http://valhalla.test")
+    route_mock = respx.post("http://valhalla.test/route").respond(json=REVERSED_TRIP)
+    respx.post("http://valhalla.test/height").respond(json={"range_height": [[0, 60.0]]})
+    await register(client)
+    created = (await client.post("/api/routes", json=save_body(snapshot))).json()
+
+    reversed_route = (await client.post(f"/api/routes/{created['id']}/reverse")).json()
+
+    # One-ways and turn instructions are direction-dependent, so the route is
+    # planned again in the new direction rather than having its line flipped.
+    sent = json.loads(route_mock.calls.last.request.content)
+    assert [(loc["lat"], loc["lon"]) for loc in sent["locations"]] == [
+        (WAYPOINTS[1]["lat"], WAYPOINTS[1]["lon"]),
+        (WAYPOINTS[0]["lat"], WAYPOINTS[0]["lon"]),
+    ]
+    assert reversed_route["name"] == "Canal loop (reversed)"
+    assert reversed_route["id"] != created["id"]
+    # Non-destructive: the original is still there.
+    assert len((await client.get("/api/routes")).json()) == 2
