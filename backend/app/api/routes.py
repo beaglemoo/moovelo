@@ -161,6 +161,9 @@ async def update_route(
         route.name = body.name
     if body.waypoints is not None:
         route.waypoints = [wp.model_dump() for wp in body.waypoints]
+        # Once re-routed between its endpoints, the imported track is gone and
+        # the route is an ordinary planned one.
+        route.source = "planned"
     if body.preset is not None:
         route.preset = body.preset
     if body.snapshot is not None:
