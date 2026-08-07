@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A hand-written stand-in for a filtered extract, around Tring.
+
+  OSM XML rather than a binary .pbf on purpose: pyosmium reads both, and
+  this way the fixture stays readable and reviewable in a diff.
+
+  It deliberately carries every case the extractor has to get right:
+    - a town with a population, and a hamlet sharing its name
+    - a peak and a railway station, which are places but not place=*
+    - an unnamed drinking fountain, the common POI case
+    - a supermarket mapped as a closed way, which needs a centroid
+    - a cafe on a way whose nodes are missing, as at an extract boundary
+    - a cycle route relation whose members include another relation
+-->
+<osm version="0.6" generator="handwritten">
+
+  <!-- Places -->
+  <node id="1" lat="51.7955" lon="-0.6580">
+    <tag k="place" v="town"/>
+    <tag k="name" v="Tring"/>
+    <tag k="population" v="11,730"/>
+  </node>
+  <node id="2" lat="51.8010" lon="-0.6340">
+    <tag k="place" v="hamlet"/>
+    <tag k="name" v="Tring Station"/>
+  </node>
+  <node id="3" lat="51.8410" lon="-0.6030">
+    <tag k="natural" v="peak"/>
+    <tag k="name" v="Ivinghoe Beacon"/>
+  </node>
+  <node id="4" lat="51.8005" lon="-0.6335">
+    <tag k="railway" v="station"/>
+    <tag k="name" v="Tring"/>
+  </node>
+  <!-- An accented name, to prove normalisation folds it. -->
+  <node id="5" lat="53.2800" lon="-4.3200">
+    <tag k="place" v="village"/>
+    <tag k="name" v="Ynys Môn"/>
+  </node>
+  <!-- A place with no name at all is not searchable, so it is dropped. -->
+  <node id="6" lat="51.7900" lon="-0.6500">
+    <tag k="place" v="locality"/>
+  </node>
+
+  <!-- POIs -->
+  <node id="20" lat="51.7960" lon="-0.6575">
+    <tag k="amenity" v="cafe"/>
+    <tag k="name" v="Cafe Verde"/>
+    <tag k="opening_hours" v="Mo-Sa 08:00-17:00"/>
+    <tag k="cuisine" v="coffee_shop"/>
+    <tag k="fax" v="ignored"/>
+  </node>
+  <node id="21" lat="51.7952" lon="-0.6590">
+    <tag k="amenity" v="drinking_water"/>
+  </node>
+  <node id="22" lat="51.7948" lon="-0.6585">
+    <tag k="shop" v="bicycle"/>
+    <tag k="name" v="Tring Cycles"/>
+  </node>
+
+  <!-- A supermarket mapped as a building outline, not a point. The ring is
+       an L shape, so averaging the vertices and taking the true centroid
+       give different answers. -->
+  <node id="30" lat="51.7940" lon="-0.6600"/>
+  <node id="31" lat="51.7940" lon="-0.6560"/>
+  <node id="32" lat="51.7930" lon="-0.6560"/>
+  <node id="33" lat="51.7930" lon="-0.6590"/>
+  <node id="34" lat="51.7920" lon="-0.6590"/>
+  <node id="35" lat="51.7920" lon="-0.6600"/>
+  <way id="40">
+    <nd ref="30"/><nd ref="31"/><nd ref="32"/><nd ref="33"/>
+    <nd ref="34"/><nd ref="35"/><nd ref="30"/>
+    <tag k="shop" v="supermarket"/>
+    <tag k="name" v="Tring Market"/>
+  </way>
+
+  <!-- A cafe on a way clipped by the extract boundary: node 998 is
+       referenced but absent, so this has no usable geometry. -->
+  <way id="41">
+    <nd ref="30"/><nd ref="998"/>
+    <tag k="amenity" v="cafe"/>
+    <tag k="name" v="Edge Cafe"/>
+  </way>
+
+  <!-- Cycle network. Relation 60 is a superroute: it owns way 50 directly
+       and way 51 only through child relation 61. -->
+  <node id="50" lat="51.7955" lon="-0.6580"/>
+  <node id="51" lat="51.8010" lon="-0.6340"/>
+  <node id="52" lat="51.8410" lon="-0.6030"/>
+  <way id="50"><nd ref="50"/><nd ref="51"/></way>
+  <way id="51"><nd ref="51"/><nd ref="52"/></way>
+  <relation id="61">
+    <member type="way" ref="51" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="bicycle"/>
+    <tag k="network" v="ncn"/>
+    <tag k="ref" v="57"/>
+  </relation>
+  <relation id="60">
+    <member type="way" ref="50" role=""/>
+    <member type="relation" ref="61" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="bicycle"/>
+    <tag k="network" v="ncn"/>
+    <tag k="ref" v="6"/>
+    <tag k="name" v="National Route 6"/>
+  </relation>
+  <!-- A walking route must not be picked up by the bicycle filter. -->
+  <relation id="62">
+    <member type="way" ref="50" role=""/>
+    <tag k="type" v="route"/>
+    <tag k="route" v="foot"/>
+    <tag k="network" v="nwn"/>
+  </relation>
+</osm>
