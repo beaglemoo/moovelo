@@ -203,6 +203,34 @@ async def test_a_dense_start_does_not_eat_the_whole_answer(
     assert found["truncated"] is True
 
 
+async def test_a_clustered_route_still_returns_everything_that_fits(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The correction to the correction.
+
+    Spreading the cap along the route was first done with a flat quota per
+    bucket, which was worse than the problem it fixed: real POIs cluster
+    into a handful of buckets, so a ride out of Oxford with 275 candidates -
+    comfortably under the 300 cap - returned 24 of them and still reported
+    truncation, because the quota in the 43 empty buckets was never
+    redistributed. Nothing under the cap should ever be dropped.
+    """
+    await register(client)
+    # 250 POIs packed into a short stretch, well under MAX_POI_RESULTS.
+    await seed(
+        db,
+        *(
+            poi(i, "cafe", WEST + (i % 25) * 0.000_02, LAT, name=f"Clustered {i}")
+            for i in range(250)
+        ),
+    )
+
+    found = await find(client)
+
+    assert len(found["pois"]) == 250
+    assert found["truncated"] is False
+
+
 async def test_distance_along_is_not_measured_in_degrees(
     client: AsyncClient, db: AsyncSession
 ) -> None:

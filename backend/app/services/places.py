@@ -232,8 +232,16 @@ async def reverse_geocode(db: AsyncSession, lat: float, lon: float) -> PlaceResu
 # 20,311 m. The one test that existed used a purely east-west line, the
 # single geometry where the distortion vanishes.
 #
-# On a route that doubles back it reports the first pass, which is the
-# honest reading of "how far along".
+# Mercator is not exact: its scale varies with latitude, so a route
+# spanning degrees of it drifts. A straight 312 km run from 53N to 55.8N
+# puts its own midpoint at fraction 0.4915 rather than 0.5 - about 2.6 km,
+# or 0.8%. That is fine for "the cafe is 20 km in" and would not be for
+# navigation; it is not used for navigation.
+#
+# On a route that passes near itself - an out-and-back, or a loop whose
+# legs run close - ST_LineLocatePoint returns the nearest pass, not the
+# earlier one, so a POI between two legs can be reported against whichever
+# is marginally closer.
 #
 # The category array is CAST explicitly: asyncpg infers parameter types from
 # context, and an empty list gives it nothing - "could not determine
@@ -243,11 +251,17 @@ async def reverse_geocode(db: AsyncSession, lat: float, lon: float) -> PlaceResu
 # density is wildly uneven - a ride out of Oxford had 498 POIs within 500 m,
 # and the first 301 by distance-along all fell inside the opening 233 m, so
 # the answer described 0.6% of a 38 km ride while reporting only
-# "truncated". Bucketing by position and keeping the nearest few per bucket
-# guarantees the whole ride is represented; the window count reports how
-# many were dropped.
+# "truncated".
+#
+# Candidates are bucketed by position and taken round-robin: the nearest in
+# every bucket first, then the second nearest in every bucket, and so on
+# until the budget runs out. A flat per-bucket quota was tried first and was
+# worse than the problem - real POIs cluster into a handful of buckets, so a
+# ride out of Oxford with 275 candidates (comfortably under the cap)
+# returned 24 and still claimed truncation, because the quota in the 43
+# empty buckets was never redistributed. Round-robin spends the whole budget
+# while still reaching the far end of the ride.
 POI_BUCKETS = 50
-POI_PER_BUCKET = MAX_POI_RESULTS // POI_BUCKETS
 
 _POIS_SQL = text(f"""
     WITH r AS (
@@ -278,13 +292,15 @@ _POIS_SQL = text(f"""
                    ORDER BY dist_from_route_m
                ) AS rank_in_bucket
         FROM near
+    ),
+    picked AS (
+        SELECT id, name, category, osm_tags, lat, lon,
+               dist_from_route_m, dist_along_m, candidate_count
+        FROM ranked
+        ORDER BY rank_in_bucket, dist_from_route_m
+        LIMIT {MAX_POI_RESULTS}
     )
-    SELECT id, name, category, osm_tags, lat, lon,
-           dist_from_route_m, dist_along_m, candidate_count
-    FROM ranked
-    WHERE rank_in_bucket <= {POI_PER_BUCKET}
-    ORDER BY dist_along_m
-    LIMIT {MAX_POI_RESULTS}
+    SELECT * FROM picked ORDER BY dist_along_m
 """)
 
 
