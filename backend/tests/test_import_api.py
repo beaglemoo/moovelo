@@ -183,3 +183,18 @@ async def test_upload_exactly_at_the_cap_is_still_read(client: AsyncClient) -> N
     # Rejected for content, never for size: it got past the cap and parsed.
     response = await upload(client, exact, "exact.gpx")
     assert response.status_code != 413
+
+
+async def test_oversized_upload_is_refused_before_the_body_is_parsed(
+    client: AsyncClient,
+) -> None:
+    """FastAPI spools the whole multipart body while resolving UploadFile, so
+    only a middleware can refuse it early enough to matter."""
+    await register(client)
+    response = await client.post(
+        "/api/routes/import",
+        headers={"content-type": "multipart/form-data; boundary=x", "content-length": "2000000000"},
+        content=b"",
+    )
+    assert response.status_code == 413
+    assert "larger than" in response.json()["detail"]

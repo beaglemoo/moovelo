@@ -242,3 +242,22 @@ async def test_an_unreachable_engine_still_fails_the_whole_trace() -> None:
     with pytest.raises(HTTPException) as exc:
         await ValhallaClient(base_url=BASE).trace_route(SHAPE, "road")
     assert exc.value.status_code == 503
+
+
+@respx.mock
+async def test_a_failed_final_chunk_still_leaves_an_arrival_cue() -> None:
+    """Destinations are stripped from every chunk but the last that matched,
+    so a route whose final stretch could not be matched still ends properly."""
+    responses = [
+        httpx.Response(200, json=TRIP_RESPONSE),
+        httpx.Response(200, json=TRIP_RESPONSE),
+        httpx.Response(400, json={"error": "No suitable edges near location"}),
+    ]
+    respx.post(f"{BASE}/trace_route").mock(side_effect=responses)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+
+    long_track = [(53.7996 + i * 0.001, -1.5491) for i in range(2500)]
+    result = await ValhallaClient(base_url=BASE).trace_route(long_track, "road")
+
+    arrivals = [m for leg in result.legs for m in leg.maneuvers if int(m.get("type", 0)) == 4]
+    assert len(arrivals) == 1

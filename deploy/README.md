@@ -15,9 +15,16 @@ Minimal snippet (Caddy handles TLS automatically):
 
 ```caddyfile
 bike.example.com {
+    request_body {
+        max_size 21MB
+    }
     reverse_proxy <docker-host>:17777
 }
 ```
+
+`request_body` is worth setting: route import accepts files up to 20 MB,
+and the app refuses anything larger, but rejecting it at the proxy stops
+an oversized upload being carried across the network at all.
 
 If you also run a self-hosted tile server (see
 [docs/self-hosted-tiles.md](../docs/self-hosted-tiles.md)), give it a TLS
