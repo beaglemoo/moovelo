@@ -66,6 +66,9 @@ def _saved(route: Route) -> SavedRoute:
         name=route.name,
         preset=route.preset,
         source=route.source,
+        tags=route.tags,
+        notes=route.notes,
+        is_favourite=route.is_favourite,
         waypoints=route.waypoints,
         legs=route.legs,
         elevation=route.elevation,
@@ -127,6 +130,16 @@ async def import_route_file(
     return _saved(route)
 
 
+def _clean_tags(tags: list[str]) -> list[str]:
+    """Trimmed, de-duplicated, order preserved, empties dropped."""
+    seen: dict[str, None] = {}
+    for tag in tags:
+        cleaned = " ".join(tag.split())[:40]
+        if cleaned:
+            seen.setdefault(cleaned, None)
+    return list(seen)
+
+
 def _name_from_filename(filename: str | None) -> str:
     stem = (filename or "").rsplit("/", 1)[-1].rsplit(".", 1)[0]
     return " ".join(stem.replace("_", " ").replace("-", " ").split())[:200] or "Imported route"
@@ -159,6 +172,12 @@ async def update_route(
     route = await get_owned_route(db, user, route_id)
     if body.name is not None:
         route.name = body.name
+    if body.tags is not None:
+        route.tags = _clean_tags(body.tags)
+    if body.notes is not None:
+        route.notes = body.notes or None
+    if body.is_favourite is not None:
+        route.is_favourite = body.is_favourite
     if body.waypoints is not None:
         route.waypoints = [wp.model_dump() for wp in body.waypoints]
         # Once re-routed between its endpoints, the imported track is gone and
