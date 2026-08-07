@@ -128,7 +128,7 @@ Two type choices decide whether the indexes are usable at all:
   are noisy on short typeahead input.
 - **Importance**: assigned at index time from the `place=` value, nudged
   by population where OSM carries it.
-- **Proximity**: distance from the map centre, halving every 20 km.
+- **Proximity**: distance from the map centre, halving every 80 km.
 
 All three carry weight because 21,848 of England's 73,084 places share a
 name with at least one other. Two Newports, both towns, are identical
@@ -139,6 +139,33 @@ comparison because only the operator can use the GIN index; its threshold
 is set with `SET LOCAL` so pooled connections are returned unchanged. The
 whole query runs in about 5 ms against the full index, with 34 rows
 reaching the sort.
+
+#### Why the half-life is 80 km
+
+It was 20 km first, chosen by reasoning about how "local" search ought to
+feel. That is the wrong way to think about it. `1/(1 + d/H)` saturates at
+both ends - far below H everything scores near 1, far above it everything
+scores near 0 - and in both cases proximity stops separating anything,
+leaving importance to hand the query to whichever same-named place is
+grandest. The term discriminates over distances comparable to H, so H
+should match the distances actually being compared, and "which of
+England's several Newports did you mean" is a 50-200 km question.
+
+Measured over the 60 most duplicated settlement names from four map
+centres, by the median distance of the top result:
+
+| half-life | 5 km | 20 km | 40 km | 80 km | 160 km | 400 km |
+|---|---|---|---|---|---|---|
+| median top result | 154 km | 109 km | 92 km | **80 km** | 91 km | 110 km |
+
+A clean U with its minimum around 80 km - and note both tails, which is
+the saturation showing up from either side. Raising it changed nothing
+across 30 unambiguous city queries ("birmingham", "oxford", ...) from two
+centres, so the improvement is not bought by burying obvious answers.
+
+The suite passed this fourfold change without noticing, which is its own
+finding; `test_proximity_still_separates_places_hundreds_of_km_apart` now
+pins it, and fails at the old value.
 
 ### Reverse geocoding
 

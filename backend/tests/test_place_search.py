@@ -135,6 +135,33 @@ async def test_the_nearer_of_two_identical_places_wins(
     assert near_tring[0]["lat"] == TRING[0]
 
 
+async def test_proximity_still_separates_places_hundreds_of_km_apart(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Pins the proximity half-life against being set too small.
+
+    `1/(1 + d/H)` saturates: far beyond H every candidate scores near zero
+    and proximity stops separating anything, leaving importance to hand the
+    query to whichever same-named place happens to be grandest. The village
+    up the road then loses to a suburb three counties away.
+
+    This is the case that caught it. The suite passed a fourfold change to
+    the constant without noticing, which is why it exists.
+    """
+    await register(client)
+    await seed(
+        db,
+        # 20 km up the road.
+        place(1, "Marston", "village", (51.9755, -0.6580), 0.40),
+        # 300 km away, and a whole tier more important.
+        place(2, "Marston", "town", (54.4935, -0.6580), 0.65),
+    )
+
+    first = (await search(client, "marston", near_lat=TRING[0], near_lon=TRING[1]))[0]
+
+    assert first["place_type"] == "village"
+
+
 async def test_distance_is_reported_only_when_a_centre_is_given(
     client: AsyncClient, db: AsyncSession
 ) -> None:
