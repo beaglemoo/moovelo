@@ -17,9 +17,13 @@ from fit_tool.fit_file import FitFile
 from fit_tool.profile.messages.course_message import CourseMessage
 from fit_tool.profile.messages.record_message import RecordMessage
 
-from app.services.geo import Point
+from app.schemas import ElevationPoint
+from app.services.geo import Point, cumulative_distances
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
+# Matches the resolution the routing engine samples its own profiles at, so a
+# fallback profile charts the same as a normal one.
+MAX_ELEVATION_SAMPLES = 500
 MAX_POINTS = 100_000
 NAME_MAX = 200
 
@@ -75,6 +79,44 @@ def parse_route_file(filename: str, data: bytes) -> ImportedTrack:
             f"File has {len(track.points)} points, more than the {MAX_POINTS} allowed."
         )
     return track
+
+
+def elevation_profile(
+    track: ImportedTrack, total_distance_m: float | None = None
+) -> list[ElevationPoint]:
+    """Profile built from the file's own elevation, as a fallback.
+
+    Imported routes normally take elevation from the routing engine, exactly
+    as planned routes do, so every route in the library reports ascent from
+    the same source and stays comparable. This is for when the engine has
+    none - tiles built without elevation data.
+
+    Scaled onto `total_distance_m` when given: map matching moves the geometry
+    onto the road network, so the matched route is rarely the same length as
+    the recorded track and the profile has to line up with it.
+    """
+    dists = cumulative_distances(track.shape)
+    samples = [
+        (dist, point.ele)
+        for dist, point in zip(dists, track.points, strict=True)
+        if point.ele is not None
+    ]
+    if len(samples) < 2 or dists[-1] <= 0:
+        return []
+
+    scale = total_distance_m / dists[-1] if total_distance_m else 1.0
+    return [
+        ElevationPoint(dist_m=dist * scale, elev_m=ele)
+        for dist, ele in _evenly_sampled(samples, MAX_ELEVATION_SAMPLES)
+    ]
+
+
+def _evenly_sampled(samples: list[tuple[float, float]], limit: int) -> list[tuple[float, float]]:
+    """Thin to `limit` samples, keeping the first and last."""
+    if len(samples) <= limit:
+        return samples
+    step = (len(samples) - 1) / (limit - 1)
+    return [samples[round(i * step)] for i in range(limit)]
 
 
 def detect_format(filename: str, data: bytes) -> str:
