@@ -285,6 +285,18 @@ export const admin = {
 	deleteUser: (id: string) => request<void>(`/api/admin/users/${id}`, { method: 'DELETE' })
 };
 
+export interface UserSettings {
+	weight_kg: number;
+	flat_speed_kmh: number;
+	ftp_watts: number | null;
+}
+
+export const settings = {
+	get: () => request<UserSettings>('/api/settings'),
+	update: (patch: Partial<UserSettings>) =>
+		request<UserSettings>('/api/settings', { method: 'PATCH', body: JSON.stringify(patch) })
+};
+
 export const wahoo = {
 	status: () => request<WahooStatus>('/api/wahoo/status'),
 	disconnect: () => request<{ status: string }>('/api/wahoo/disconnect', { method: 'POST' }),
