@@ -1,0 +1,31 @@
+[project]
+name = "moovelo-indexer"
+version = "0.1.0"
+description = "Parses the OSM extract Valhalla downloads into the place index"
+requires-python = ">=3.12"
+dependencies = [
+    "osmium>=4.3",
+    "psycopg[binary]>=3.2",
+    "pydantic-settings>=2.6",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+strict = true
+packages = ["indexer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
