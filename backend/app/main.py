@@ -15,6 +15,7 @@ from app.api.places import router as places_router
 from app.api.route import router
 from app.api.routes import router as routes_router
 from app.api.routes import shared_router
+from app.api.settings import router as settings_router
 from app.api.wahoo import router as wahoo_router
 from app.config import settings
 from app.services.importer import MAX_FILE_BYTES
@@ -73,6 +74,7 @@ app.include_router(auth_router)
 app.include_router(places_router)
 app.include_router(routes_router)
 app.include_router(shared_router)
+app.include_router(settings_router)
 app.include_router(wahoo_router)
 app.include_router(admin_router)
 
