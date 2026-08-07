@@ -24,8 +24,9 @@ cues.
   Duplicate a route, or reverse one to ride it the other way - reversing
   re-routes rather than flipping the line, so one-ways and turn cues stay
   correct.
-- GPX and FIT export - the FIT files carry Valhalla's turn-by-turn
-  maneuvers as course points, so a Wahoo ELEMNT shows cues on the ride.
+- GPX and FIT export from either the planner or the library - the FIT
+  files carry Valhalla's turn-by-turn maneuvers as course points, so a
+  Wahoo ELEMNT shows cues on the ride.
 - Import GPX, TCX and FIT files - drop them anywhere in the app or use the
   Import button in the library. Imported tracks are map-matched back onto
   the road network, so a file that arrived with no instructions comes out
