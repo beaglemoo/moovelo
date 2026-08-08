@@ -495,3 +495,26 @@ class LoopCandidate(BaseModel):
 
 class LoopCandidatesResponse(BaseModel):
     candidates: list[LoopCandidate]
+
+
+class AlternatesQuery(BaseModel):
+    """Query for POST /api/route/alternates.
+
+    Bounded to exactly 2 waypoints: Valhalla's `alternates` option is
+    documented (and, in practice, only reliable) for a single origin/
+    destination pair - a multipoint route has no well-defined "alternative"
+    per leg. Rejecting anything else here produces a 422 before the request
+    ever reaches Valhalla, rather than a confusing partial or ignored result
+    from it.
+    """
+
+    waypoints: list[Waypoint] = Field(min_length=2, max_length=2)
+    preset: Preset = "road"
+    # Overrides `preset` entirely when set - see resolve_costing.
+    costing_options: BicycleCostingOptions | None = None
+    count: int = Field(default=2, ge=1, le=3)
+
+
+class AlternatesResponse(BaseModel):
+    primary: RouteResponse
+    alternates: list[RouteResponse]
