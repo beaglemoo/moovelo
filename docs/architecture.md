@@ -614,6 +614,46 @@ Valhalla's isochrone about a per-rider speed curve (it has no hook for one)
 or reimplementing reachability search on top of the ride-time model ourselves
 - both bigger than this feature - so the isochrone is presented as what it
 is: Valhalla's own answer, not the planner's.
+
+## Avoids
+
+"Not that road": right-clicking a point on the route line itself (rather
+than anywhere on the map, like the isochrone and loop entries) offers
+"Avoid this road", which adds that point to `RouteRequest.exclude_locations`
+and re-plans. Valhalla snaps each point to its nearest road and excludes it
+from path computation - `ValhallaClient.route()` forwards the list to
+`/route` unchanged when it is set, and omits the key entirely otherwise.
+`RouteRequest.exclude_locations` is capped at 10 entries
+(`Field(max_length=10)`), well under Valhalla's own service limit (11
+accepted in testing against the dev instance) - this is a rider-facing
+"not that road" list, not a bulk avoidance tool.
+
+The map only offers the entry when the right-click landed on the
+`route-hit` layer (`queryRenderedFeatures` at the click point) - avoiding a
+road means nothing off the route, so the menu does not offer it there.
+Avoided points are drawn as their own small circle layer (`avoid-points`),
+independent of the context menu that added them, and listed as removable
+chips near the toolbar.
+
+**Session-only, deliberately**: `avoids` is planner state exactly like
+`waypoints` - part of `PlannerSnapshot` (see the undo/redo design decision
+below), reset by `clear()` and by loading a saved route - but it is never
+written to `routes.exclude_locations` or any other persisted column. An
+avoid is a *routing input*, and the route's saved geometry already reflects
+whatever avoids shaped it while planning; storing the list separately would
+only matter if the rider wanted the route re-planned later with the same
+exclusions restored (e.g. after a road reopens), which nothing today asks
+for. If that need shows up, persisting is a one-column, additive change -
+nothing about the session-only design forecloses it.
+
+**`exclude_polygons` deliberately deferred, not started**: Valhalla also
+accepts excluded areas, not just points, for "avoid this whole
+neighbourhood". Out of scope for this pass - `RouteRequest` carries no
+field, placeholder, or comment for it - because a point-only "not that
+road" already answers the common case (a closed bridge, a road with bad
+surface) without a polygon-drawing UI, which is a materially bigger
+feature.
+
 ## Loop generator
 
 `services/loop.py` builds "N km loop from here" out of routing primitives
@@ -860,7 +900,7 @@ about extract coverage when no roads are found near a waypoint.
   a climb should hurt the score" is a one-line change, not a hunt through
   the search itself.
 - **Undo/redo replays inputs, not outputs**: `history.svelte.ts` snapshots
-  waypoints/preset/costing/source before each mutation and undo/redo
+  waypoints/preset/costing/source/avoidLocations before each mutation and undo/redo
   restores a snapshot by setting those inputs and calling `reroute()` -
   the same path an ordinary edit takes. `PlannerSnapshot.routeOverride` is
   the one deliberate exception, for actions that replace the route

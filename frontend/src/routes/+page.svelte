@@ -138,6 +138,10 @@
 	// snapshot - compared by value in the invalidation effect below, so
 	// populating `alternates` itself never trips that effect's own guard.
 	let alternatesFetchedFor: Waypoint[] | null = null;
+	// Points to route around ("not that road"), from the map's context menu.
+	// Session-only planner memory - never persisted with a saved route, since
+	// the saved geometry already reflects whatever avoids shaped it.
+	let avoids: Waypoint[] = $state([]);
 
 	let wahooStatus: WahooStatus | null = $state(null);
 	let wahooPush: 'idle' | 'working' | 'synced' | 'error' = $state('idle');
@@ -230,7 +234,14 @@
 	// The inputs a mutator changes, captured before the mutation lands -
 	// history.push deep-copies this itself, so the caller does not need to.
 	function currentSnapshot(): PlannerSnapshot {
-		return { waypoints, preset, costingOptions: customCostingOptions, source, routeOverride: null };
+		return {
+			waypoints,
+			preset,
+			costingOptions: customCostingOptions,
+			source,
+			avoidLocations: avoids,
+			routeOverride: null
+		};
 	}
 
 	// Restores a history entry. Time travel bypasses mayEdit() - it is not a
@@ -241,6 +252,7 @@
 		preset = snap.preset;
 		customCostingOptions = snap.costingOptions ? { ...snap.costingOptions } : null;
 		source = snap.source;
+		avoids = snap.avoidLocations.map((wp) => ({ ...wp }));
 		if (snap.routeOverride) {
 			route = snap.routeOverride;
 			dirty = true;
@@ -260,6 +272,9 @@
 				preset = saved.preset === 'custom' ? 'road' : saved.preset;
 				customCostingOptions = saved.costing_options;
 				source = saved.source;
+				// Session-only: a loaded route's geometry already reflects
+				// whatever avoids shaped it, and none carried over from before.
+				avoids = [];
 				route = saved;
 				savedId = saved.id;
 				savedName = saved.name;
@@ -548,7 +563,13 @@
 		loading = true;
 		error = null;
 		try {
-			route = await planRoute(waypoints, preset, customCostingOptions, abortController.signal);
+			route = await planRoute(
+				waypoints,
+				preset,
+				customCostingOptions,
+				avoids.length ? avoids : null,
+				abortController.signal
+			);
 			loading = false;
 			dirty = true;
 			editGeneration += 1;
@@ -597,6 +618,24 @@
 		history.push(currentSnapshot());
 		const [wp] = waypoints.splice(from, 1);
 		waypoints.splice(to, 0, wp);
+		reroute();
+	}
+
+	// Gated by mayEdit() like every other mutator: an avoid only means
+	// anything alongside waypoints to route between, and adding one to an
+	// imported route's planner state is exactly the "re-route this" edit
+	// mayEdit() exists to confirm.
+	function addAvoid(wp: Waypoint) {
+		if (!mayEdit()) return;
+		history.push(currentSnapshot());
+		avoids.push(wp);
+		reroute();
+	}
+
+	function removeAvoid(index: number) {
+		if (!mayEdit()) return;
+		history.push(currentSnapshot());
+		avoids.splice(index, 1);
 		reroute();
 	}
 
@@ -660,6 +699,7 @@
 		history.push(currentSnapshot());
 		source = 'planned';
 		waypoints = [];
+		avoids = [];
 		route = null;
 		error = null;
 		savedId = null;
@@ -962,6 +1002,8 @@
 				alternateLines={alternatePreviews}
 				{hoveredAlternateIndex}
 				onAlternateClick={useAlternate}
+				{avoids}
+				onAvoid={addAvoid}
 				onAddWaypoint={addWaypoint}
 				onMoveWaypoint={moveWaypoint}
 				onInsertVia={insertVia}
@@ -1080,6 +1122,23 @@
 				<button type="button" onclick={hideIsochrone}>Hide isochrone</button>
 			{/if}
 		</div>
+		{#if avoids.length > 0}
+			<div class="avoids" role="group" aria-label="Avoided roads">
+				{#each avoids as avoid, i (i)}
+					<span class="avoid-chip" title={`Near ${avoid.lat.toFixed(4)}, ${avoid.lon.toFixed(4)}`}>
+						Avoid {i + 1}
+						<button
+							type="button"
+							class="avoid-remove"
+							onclick={() => removeAvoid(i)}
+							aria-label={`Remove avoid ${i + 1}`}
+						>
+							×
+						</button>
+					</span>
+				{/each}
+			</div>
+		{/if}
 		{#if isochronePromptOpen}
 			<div class="isochrone-prompt">
 				<label>
@@ -1262,6 +1321,38 @@
 		font-size: 0.9rem;
 		color: #073642;
 		box-shadow: 0 1px 4px #0002;
+	}
+	/* Below the toolbar and the search bar (which shares its top offset when
+	   search is enabled), so the two rows never overlap. */
+	.avoids {
+		position: absolute;
+		top: 96px;
+		left: 10px;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		z-index: 5;
+	}
+	.avoid-chip {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		background: #fffffff0;
+		border: 1px solid #dc322f;
+		border-radius: 8px;
+		padding: 0.25rem 0.3rem 0.25rem 0.6rem;
+		font-size: 0.8rem;
+		color: #073642;
+		box-shadow: 0 1px 4px #0002;
+	}
+	.avoid-remove {
+		border: none;
+		background: transparent;
+		color: #dc322f;
+		font-size: 0.95rem;
+		line-height: 1;
+		padding: 0.1rem 0.3rem;
+		cursor: pointer;
 	}
 	.dialog-backdrop {
 		position: absolute;

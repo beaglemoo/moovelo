@@ -184,6 +184,12 @@ class RouteRequest(BaseModel):
     # When set, overrides `preset` entirely - see services/presets.py's
     # resolve_costing, the one place that decision is made.
     costing_options: BicycleCostingOptions | None = None
+    # Points to route around, each snapped to its nearest road which is
+    # then excluded from path computation (Valhalla's `exclude_locations`).
+    # Capped well under Valhalla's own service limit (11 accepted in
+    # testing) - this is a rider-facing "not that road" list, not a bulk
+    # avoidance tool.
+    exclude_locations: list[Waypoint] | None = Field(default=None, max_length=10)
 
 
 class ElevationPoint(BaseModel):

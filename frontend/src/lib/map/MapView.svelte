@@ -84,6 +84,14 @@
 		hoveredAlternateIndex?: number | null;
 		/** Clicking a ghost line adopts that alternate. */
 		onAlternateClick?: (index: number) => void;
+		/** Points fed to Valhalla's exclude_locations - drawn as small markers
+		 * of their own so an avoided road stays visible once the menu that
+		 * added it is gone. */
+		avoids?: Waypoint[];
+		/** "Avoid this road" on the context menu, offered only when the
+		 * right-click landed on the route line itself. Left out by the
+		 * read-only share page, which has no menu. */
+		onAvoid?: (wp: Waypoint) => void;
 	}
 
 	let {
@@ -115,6 +123,8 @@
 		alternateLines = null,
 		hoveredAlternateIndex = null,
 		onAlternateClick,
+		avoids = [],
+		onAvoid,
 		onAddWaypoint,
 		onMoveWaypoint,
 		onInsertVia,
@@ -129,6 +139,10 @@
 		y: number;
 		wp: Waypoint;
 		waypointIndex: number | null;
+		/** Whether the click that opened this menu landed on the route line -
+		 * gates "Avoid this road", which means nothing off it. Always false
+		 * for a marker's own menu. */
+		onRoute: boolean;
 	}
 
 	let menu: ContextMenu | null = $state(null);
@@ -300,6 +314,17 @@
 			features: point
 				? [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: point } }]
 				: []
+		};
+	}
+
+	function avoidsGeoJSON(list: Waypoint[]): FeatureCollection {
+		return {
+			type: 'FeatureCollection',
+			features: list.map((wp) => ({
+				type: 'Feature',
+				properties: {},
+				geometry: { type: 'Point', coordinates: [wp.lon, wp.lat] }
+			}))
 		};
 	}
 
@@ -521,6 +546,20 @@
 					'circle-stroke-width': 3
 				}
 			});
+			// Points fed to Valhalla's exclude_locations, marked on the map so
+			// they stay visible once the context menu that added them is gone.
+			map.addSource('avoid-points', { type: 'geojson', data: avoidsGeoJSON([]) });
+			map.addLayer({
+				id: 'avoid-points',
+				type: 'circle',
+				source: 'avoid-points',
+				paint: {
+					'circle-radius': 5,
+					'circle-color': '#ffffff',
+					'circle-stroke-color': '#dc322f',
+					'circle-stroke-width': 3
+				}
+			});
 			// POIs are a GL layer rather than maplibregl.Marker elements: a
 			// 50 km ride passes hundreds of them, unlike the handful of
 			// draggable waypoints, and that many DOM nodes would crawl.
@@ -582,11 +621,13 @@
 
 		m.on('contextmenu', (e) => {
 			e.preventDefault();
+			const onRoute = m.queryRenderedFeatures(e.point, { layers: ['route-hit'] }).length > 0;
 			menu = {
 				x: e.point.x,
 				y: e.point.y,
 				wp: { lat: e.lngLat.lat, lon: e.lngLat.lng },
-				waypointIndex: null
+				waypointIndex: null,
+				onRoute
 			};
 		});
 
@@ -606,11 +647,13 @@
 			pressTimer = setTimeout(() => {
 				pressTimer = null;
 				longPressFired = true;
+				const onRoute = m.queryRenderedFeatures(point, { layers: ['route-hit'] }).length > 0;
 				menu = {
 					x: point.x,
 					y: point.y,
 					wp: { lat: lngLat.lat, lon: lngLat.lng },
-					waypointIndex: null
+					waypointIndex: null,
+					onRoute
 				};
 			}, 600);
 		});
@@ -739,7 +782,8 @@
 					x: event.clientX - rect.left,
 					y: event.clientY - rect.top,
 					wp,
-					waypointIndex: i
+					waypointIndex: i,
+					onRoute: false
 				};
 			});
 			// Long-press on a marker opens its menu on touch devices.
@@ -763,7 +807,8 @@
 							x: touch.clientX - rect.left,
 							y: touch.clientY - rect.top,
 							wp,
-							waypointIndex: i
+							waypointIndex: i,
+							onRoute: false
 						};
 					}, 600);
 				},
@@ -912,6 +957,12 @@
 		);
 	});
 
+	// Sync avoided-road markers.
+	$effect(() => {
+		if (!map || !mapReady) return;
+		setSourceData(map, 'avoid-points', avoidsGeoJSON(avoids));
+	});
+
 	// Fit the viewport to the route when asked (e.g. after loading a saved one).
 	$effect(() => {
 		// Read all reactive dependencies before any early return.
@@ -1020,6 +1071,12 @@
 			{#if onLoop}
 				<button type="button" role="menuitem" onclick={() => menuAction(() => onLoop(wp))}>
 					Loop from here
+				</button>
+			{/if}
+			{#if menu.onRoute && onAvoid}
+				<hr />
+				<button type="button" role="menuitem" onclick={() => menuAction(() => onAvoid(wp))}>
+					Avoid this road
 				</button>
 			{/if}
 			{#if waypoints.length > 0}

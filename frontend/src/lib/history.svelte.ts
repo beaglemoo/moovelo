@@ -7,6 +7,10 @@ export interface PlannerSnapshot {
 	preset: Preset;
 	costingOptions: BicycleCostingOptions | null;
 	source: RouteSource;
+	/** Points to route around - see reroute()'s exclude_locations. Session-
+	 * only, same as the rest of this snapshot: not persisted with a saved
+	 * route. */
+	avoidLocations: Waypoint[];
 	/** Null for every ordinary edit. Set only by actions that replace the
 	 * route OUTPUT without changing any input (none today; adopting an
 	 * alternate route will be the first) - replaying inputs through
@@ -25,6 +29,7 @@ function cloneSnapshot(snap: PlannerSnapshot): PlannerSnapshot {
 		preset: snap.preset,
 		costingOptions: snap.costingOptions ? { ...snap.costingOptions } : null,
 		source: snap.source,
+		avoidLocations: snap.avoidLocations.map((wp) => ({ ...wp })),
 		routeOverride: snap.routeOverride
 	};
 }

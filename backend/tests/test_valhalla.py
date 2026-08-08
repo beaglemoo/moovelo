@@ -115,6 +115,35 @@ async def test_route_with_custom_costing_sends_the_custom_bundle() -> None:
 
 
 @respx.mock
+async def test_route_forwards_exclude_locations_when_set() -> None:
+    route_mock = respx.post(f"{BASE}/route").respond(json=TRIP_RESPONSE)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+
+    client = ValhallaClient(base_url=BASE)
+    request = RouteRequest(
+        waypoints=[Waypoint(lat=53.7996, lon=-1.5491), Waypoint(lat=53.7950, lon=-1.5600)],
+        preset="road",
+        exclude_locations=[Waypoint(lat=53.7970, lon=-1.5550)],
+    )
+    await client.route(request)
+
+    sent = json.loads(route_mock.calls[0].request.content)
+    assert sent["exclude_locations"] == [{"lat": 53.7970, "lon": -1.5550}]
+
+
+@respx.mock
+async def test_route_omits_exclude_locations_key_when_unset() -> None:
+    route_mock = respx.post(f"{BASE}/route").respond(json=TRIP_RESPONSE)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+
+    client = ValhallaClient(base_url=BASE)
+    await client.route(make_request())
+
+    sent = json.loads(route_mock.calls[0].request.content)
+    assert "exclude_locations" not in sent
+
+
+@respx.mock
 async def test_route_valhalla_error_maps_to_422() -> None:
     respx.post(f"{BASE}/route").respond(
         status_code=400, json={"error": "No path could be found for input"}
