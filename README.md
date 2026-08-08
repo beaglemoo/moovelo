@@ -75,6 +75,9 @@ with turn-by-turn cues.
   from any of them. Typos are forgiven ("birmingam" finds Birmingham) and
   results prefer the part of the map you are looking at, which matters
   because 21,848 English places share a name with another.
+- Isochrones: right-click any point on the map for "Isochrone from here" and
+  see how far you can get in N minutes, drawn as a polygon overlay. Entirely
+  self-hosted via Valhalla's own `/isochrone` - no third-party service.
 - Entirely self-hostable: routing (Valhalla), app, database, and
   optionally the map tiles run on your own hardware. The only external
   services are Wahoo's cloud and an optional weather provider, and only
