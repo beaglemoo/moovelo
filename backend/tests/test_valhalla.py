@@ -6,7 +6,7 @@ import pytest
 import respx
 from fastapi import HTTPException
 
-from app.schemas import ElevationPoint, RouteRequest, Waypoint
+from app.schemas import BicycleCostingOptions, ElevationPoint, RouteRequest, Waypoint
 from app.services.geo import evenly_sampled, haversine, resample_by_distance
 from app.services.polyline import encode_polyline6
 from app.services.presets import PRESETS
@@ -71,6 +71,34 @@ async def test_route_success() -> None:
     assert sent["costing"] == "bicycle"
     assert sent["costing_options"]["bicycle"]["bicycle_type"] == "Cross"
     assert [loc["type"] for loc in sent["locations"]] == ["break", "break"]
+
+
+CUSTOM_OPTIONS = BicycleCostingOptions(
+    bicycle_type="Mountain",
+    cycling_speed=14,
+    use_roads=0.1,
+    use_hills=0.9,
+    avoid_bad_surfaces=0.0,
+)
+
+
+@respx.mock
+async def test_route_with_custom_costing_sends_the_custom_bundle() -> None:
+    route_mock = respx.post(f"{BASE}/route").respond(json=TRIP_RESPONSE)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+
+    client = ValhallaClient(base_url=BASE)
+    request = RouteRequest(
+        waypoints=[Waypoint(lat=53.7996, lon=-1.5491), Waypoint(lat=53.7950, lon=-1.5600)],
+        preset="road",
+        costing_options=CUSTOM_OPTIONS,
+    )
+    await client.route(request)
+
+    sent = json.loads(route_mock.calls[0].request.content)
+    # The custom bundle wins over "road" entirely - not merged with it.
+    assert sent["costing_options"]["bicycle"] == CUSTOM_OPTIONS.model_dump()
+    assert sent["costing_options"]["bicycle"] != PRESETS["road"]
 
 
 @respx.mock
@@ -543,3 +571,16 @@ async def test_trace_attributes_all_legs_too_short_returns_none() -> None:
     client = ValhallaClient(base_url=BASE)
     result = await client.trace_attributes([[(53.7996, -1.5491)]], "road")
     assert result is None
+
+
+@respx.mock
+async def test_trace_attributes_with_custom_costing_sends_the_custom_bundle() -> None:
+    mock = respx.post(f"{BASE}/trace_attributes").respond(json=TRACE_ATTRS_REAL)
+
+    client = ValhallaClient(base_url=BASE)
+    result = await client.trace_attributes([SHAPE], "road", CUSTOM_OPTIONS)
+
+    assert result is not None
+    sent = json.loads(mock.calls[0].request.content)
+    assert sent["costing_options"]["bicycle"] == CUSTOM_OPTIONS.model_dump()
+    assert sent["costing_options"]["bicycle"] != PRESETS["road"]

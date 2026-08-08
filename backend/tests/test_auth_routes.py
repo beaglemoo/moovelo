@@ -353,3 +353,79 @@ async def test_search_treats_wildcards_as_literal_text(
     # A bare wildcard is a search for that character, not for everything.
     assert (await client.get("/api/routes", params={"q": "%"})).json() != []
     assert len((await client.get("/api/routes", params={"q": "%"})).json()) == 1
+
+
+CUSTOM_OPTIONS = {
+    "bicycle_type": "Mountain",
+    "cycling_speed": 14,
+    "use_roads": 0.1,
+    "use_hills": 0.9,
+    "avoid_bad_surfaces": 0.0,
+}
+
+
+def custom_save_body(snapshot: RouteResponse, name: str = "Custom ride") -> dict[str, object]:
+    return {
+        "name": name,
+        "waypoints": WAYPOINTS,
+        "preset": "custom",
+        "costing_options": CUSTOM_OPTIONS,
+        "snapshot": snapshot.model_dump(),
+    }
+
+
+async def test_saving_with_custom_costing_persists_and_is_echoed_back(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    await register(client)
+    created = (await client.post("/api/routes", json=custom_save_body(snapshot))).json()
+    assert created["preset"] == "custom"
+    assert created["costing_options"] == CUSTOM_OPTIONS
+
+    reloaded = (await client.get(f"/api/routes/{created['id']}")).json()
+    assert reloaded["preset"] == "custom"
+    assert reloaded["costing_options"] == CUSTOM_OPTIONS
+
+
+async def test_switching_back_to_a_named_preset_clears_stored_costing_options(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    await register(client)
+    created = (await client.post("/api/routes", json=custom_save_body(snapshot))).json()
+
+    patched = await client.patch(
+        f"/api/routes/{created['id']}",
+        json={"preset": "road", "waypoints": WAYPOINTS, "snapshot": snapshot.model_dump()},
+    )
+    assert patched.json()["preset"] == "road"
+    assert patched.json()["costing_options"] is None
+
+
+@respx.mock
+async def test_reverse_of_a_custom_costed_route_sends_the_custom_bundle(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    """The regression this PR hinges on: once "custom" is a stored preset
+    value, reversing such a route must not KeyError on PRESETS["custom"] -
+    and the reversed route must actually be planned with the stored custom
+    bundle, not silently fall back to a named preset."""
+    app.state.valhalla = ValhallaClient(base_url="http://valhalla.test")
+    route_mock = respx.post("http://valhalla.test/route").respond(json=REVERSED_TRIP)
+    respx.post("http://valhalla.test/height").respond(json={"range_height": [[0, 60.0]]})
+    attrs_mock = respx.post("http://valhalla.test/trace_attributes").respond(
+        json=TRACE_ATTRS_RESPONSE
+    )
+    await register(client)
+    created = (await client.post("/api/routes", json=custom_save_body(snapshot))).json()
+
+    reversed_response = await client.post(f"/api/routes/{created['id']}/reverse")
+
+    assert reversed_response.status_code == 201, reversed_response.text
+    reversed_route = reversed_response.json()
+    assert reversed_route["preset"] == "custom"
+    assert reversed_route["costing_options"] == CUSTOM_OPTIONS
+
+    route_sent = json.loads(route_mock.calls.last.request.content)
+    assert route_sent["costing_options"]["bicycle"] == CUSTOM_OPTIONS
+    attrs_sent = json.loads(attrs_mock.calls.last.request.content)
+    assert attrs_sent["costing_options"]["bicycle"] == CUSTOM_OPTIONS

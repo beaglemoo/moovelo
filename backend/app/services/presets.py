@@ -14,7 +14,7 @@ Option semantics (Valhalla docs):
   preferred surface, 0 = only penalise truly unrideable surfaces.
 """
 
-from app.schemas import Preset
+from app.schemas import BicycleCostingOptions, Preset
 
 BicycleOptions = dict[str, str | float | int]
 
@@ -51,3 +51,14 @@ PRESETS: dict[Preset, BicycleOptions] = {
         "avoid_bad_surfaces": 0.4,
     },
 }
+
+
+def resolve_costing(preset: Preset, custom: BicycleCostingOptions | None) -> BicycleOptions:
+    """What actually goes to Valhalla for one request.
+
+    The single place this decision is made: a custom bundle always wins
+    when given, otherwise the named preset's own bundle - so route(),
+    trace_attributes() and anything added later all agree on the same rule
+    rather than each re-implementing "custom overrides preset".
+    """
+    return custom.model_dump() if custom else PRESETS[preset]

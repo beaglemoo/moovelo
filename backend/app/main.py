@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse, Response
 
 from app.api.admin import router as admin_router
 from app.api.auth import router as auth_router
+from app.api.custom_presets import router as custom_presets_router
 from app.api.places import router as places_router
 from app.api.route import router
 from app.api.routes import router as routes_router
@@ -77,6 +78,7 @@ app.include_router(shared_router)
 app.include_router(settings_router)
 app.include_router(wahoo_router)
 app.include_router(admin_router)
+app.include_router(custom_presets_router)
 
 
 class SPAStaticFiles(StaticFiles):

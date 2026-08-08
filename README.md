@@ -20,7 +20,10 @@ with turn-by-turn cues.
   context menu (route from here, add waypoint, route to here, remove).
 - Three bicycle presets - road, gravel, quiet - implemented as Valhalla
   costing bundles with genuinely different routing behavior (see
-  [Routing presets](#routing-presets)).
+  [Routing presets](#routing-presets)). A "Custom…" pill exposes the same
+  costing options as sliders (bike type, speed, road preference, hills,
+  surface avoidance), per user, with your own named presets saved and
+  reused across routes.
 - Elevation profile under the map with total ascent/descent and a hover
   marker synced to the route.
 - Personal route library backed by Postgres/PostGIS: save, rename, reload,
@@ -201,7 +204,11 @@ they produce visibly different routes (exact values and rationale in
 
 The API accepts the preset name per request, and the option bundles are
 plain dictionaries - any single option can become a user-facing slider
-later without an API change.
+later without an API change. The "Custom…" pill does exactly that: bike
+type, cycling speed, and the three 0-1 sliders above are all directly
+editable, and a custom bundle overrides the preset entirely rather than
+blending with it. Save a bundle as a named preset to reuse it on other
+routes; presets are per-user and stored server-side.
 
 ## Map tiles
 
