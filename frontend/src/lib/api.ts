@@ -590,9 +590,8 @@ export async function routeIsochrone(
 	costingOptions: BicycleCostingOptions | null = null,
 	signal?: AbortSignal
 ): Promise<IsochroneResult> {
-	const response = await fetch('/api/route/isochrone', {
+	return request<IsochroneResult>('/api/route/isochrone', {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			origin,
 			contours: [{ minutes, color: '268bd2' }],
@@ -601,17 +600,6 @@ export async function routeIsochrone(
 		}),
 		signal
 	});
-	if (!response.ok) {
-		let detail = `Isochrone lookup failed (${response.status})`;
-		try {
-			const body = await response.json();
-			if (typeof body.detail === 'string') detail = body.detail;
-		} catch {
-			// keep the generic message
-		}
-		throw new ApiError(response.status, detail);
-	}
-	return await response.json();
 }
 
 /** One candidate loop: an ordinary out-and-back route through a single via
@@ -641,9 +629,8 @@ export async function routeLoop(
 	costingOptions: BicycleCostingOptions | null = null,
 	signal?: AbortSignal
 ): Promise<LoopCandidatesResponse> {
-	const response = await fetch('/api/route/loop', {
+	return request<LoopCandidatesResponse>('/api/route/loop', {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			origin,
 			target_km: targetKm,
@@ -652,17 +639,6 @@ export async function routeLoop(
 		}),
 		signal
 	});
-	if (!response.ok) {
-		let detail = `Loop search failed (${response.status})`;
-		try {
-			const body = await response.json();
-			if (typeof body.detail === 'string') detail = body.detail;
-		} catch {
-			// keep the generic message
-		}
-		throw new Error(detail);
-	}
-	return response.json();
 }
 
 export interface AlternatesResult {
@@ -683,9 +659,8 @@ export async function routeAlternates(
 	count = 2,
 	signal?: AbortSignal
 ): Promise<AlternatesResult> {
-	const response = await fetch('/api/route/alternates', {
+	return request<AlternatesResult>('/api/route/alternates', {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			waypoints,
 			preset,
@@ -694,15 +669,4 @@ export async function routeAlternates(
 		}),
 		signal
 	});
-	if (!response.ok) {
-		let detail = `Alternate route search failed (${response.status})`;
-		try {
-			const body = await response.json();
-			if (typeof body.detail === 'string') detail = body.detail;
-		} catch {
-			// keep the generic message
-		}
-		throw new ApiError(response.status, detail);
-	}
-	return await response.json();
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAVED_SURFACES } from '$lib/surface';
 	import type { SurfaceBreakdown } from '$lib/api';
 
 	interface Props {
@@ -9,7 +10,9 @@
 
 	// Valhalla's surface enum, grouped into what a rider actually decides on:
 	// can a road bike cope with this, or does it want a gravel/cross bike.
-	const PAVED = ['paved_smooth', 'paved', 'paved_rough'];
+	// The paved group lives in $lib/surface so LoopPanel's paved percentage
+	// can never drift from this bar's.
+	const PAVED = PAVED_SURFACES;
 	const GRAVEL = ['compacted', 'dirt', 'gravel'];
 	const PATH = ['path'];
 

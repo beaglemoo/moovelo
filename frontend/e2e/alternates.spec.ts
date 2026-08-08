@@ -76,6 +76,7 @@ test('alternate routes list, and adopting one is undoable', async ({ page }) => 
 	// Adopting an alternate is an ordinary route swap: the stats row still
 	// shows a real distance (possibly unchanged, but never blank/NaN).
 	await expect(distanceStat).toContainText('km');
+	const adoptedDistance = await distanceStat.textContent();
 
 	// Undo restores exactly the pre-adoption distance text - the whole point
 	// of routeOverride: replaying reroute() would just refetch the primary,
@@ -85,4 +86,12 @@ test('alternate routes list, and adopting one is undoable', async ({ page }) => 
 	await expect(undoBtn).toBeEnabled();
 	await undoBtn.click();
 	await expect(distanceStat).toHaveText(beforeDistance ?? '');
+
+	// And redo restores the ADOPTED route, not a refetched primary - the
+	// undo/redo entries carry the live route as routeOverride, so the
+	// rider's pick survives a round trip through history.
+	const redoBtn = page.getByRole('button', { name: 'Redo', exact: true });
+	await expect(redoBtn).toBeEnabled();
+	await redoBtn.click();
+	await expect(distanceStat).toHaveText(adoptedDistance ?? '');
 });

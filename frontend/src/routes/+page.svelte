@@ -580,32 +580,32 @@
 		}
 	}
 
-	function addWaypoint(wp: Waypoint) {
+	// Every ordinary planner edit is the same three steps around its one
+	// mutation: confirm (imported routes), record for undo, re-route. One
+	// wrapper so a future mutator cannot forget a step - forgetting
+	// history.push in particular would silently break undo for that single
+	// action while every sibling kept working.
+	function planEdit(mutation: () => void) {
 		if (!mayEdit()) return;
 		history.push(currentSnapshot());
-		waypoints.push(wp);
+		mutation();
 		reroute();
+	}
+
+	function addWaypoint(wp: Waypoint) {
+		planEdit(() => waypoints.push(wp));
 	}
 
 	function moveWaypoint(index: number, wp: Waypoint) {
-		if (!mayEdit()) return;
-		history.push(currentSnapshot());
-		waypoints[index] = wp;
-		reroute();
+		planEdit(() => (waypoints[index] = wp));
 	}
 
 	function insertVia(position: number, wp: Waypoint) {
-		if (!mayEdit()) return;
-		history.push(currentSnapshot());
-		waypoints.splice(position, 0, wp);
-		reroute();
+		planEdit(() => waypoints.splice(position, 0, wp));
 	}
 
 	function removeWaypoint(index: number) {
-		if (!mayEdit()) return;
-		history.push(currentSnapshot());
-		waypoints.splice(index, 1);
-		reroute();
+		planEdit(() => waypoints.splice(index, 1));
 	}
 
 	// Waypoint list panel: up/down buttons and native drag-and-drop both
@@ -613,46 +613,37 @@
 	// dragging a row several places in one go (not just adjacent, as the
 	// buttons always do) still lands it exactly where it was dropped.
 	function reorderWaypoint(from: number, to: number) {
-		if (!mayEdit()) return;
 		if (to < 0 || to >= waypoints.length || from === to) return;
-		history.push(currentSnapshot());
-		const [wp] = waypoints.splice(from, 1);
-		waypoints.splice(to, 0, wp);
-		reroute();
+		planEdit(() => {
+			const [wp] = waypoints.splice(from, 1);
+			waypoints.splice(to, 0, wp);
+		});
 	}
 
-	// Gated by mayEdit() like every other mutator: an avoid only means
-	// anything alongside waypoints to route between, and adding one to an
-	// imported route's planner state is exactly the "re-route this" edit
-	// mayEdit() exists to confirm.
+	// Gated by mayEdit() (inside planEdit) like every other mutator: an
+	// avoid only means anything alongside waypoints to route between, and
+	// adding one to an imported route's planner state is exactly the
+	// "re-route this" edit mayEdit() exists to confirm.
 	function addAvoid(wp: Waypoint) {
-		if (!mayEdit()) return;
-		history.push(currentSnapshot());
-		avoids.push(wp);
-		reroute();
+		planEdit(() => avoids.push(wp));
 	}
 
 	function removeAvoid(index: number) {
-		if (!mayEdit()) return;
-		history.push(currentSnapshot());
-		avoids.splice(index, 1);
-		reroute();
+		planEdit(() => avoids.splice(index, 1));
 	}
 
 	function setStart(wp: Waypoint) {
-		if (!mayEdit()) return;
-		history.push(currentSnapshot());
-		if (waypoints.length === 0) waypoints.push(wp);
-		else waypoints[0] = wp;
-		reroute();
+		planEdit(() => {
+			if (waypoints.length === 0) waypoints.push(wp);
+			else waypoints[0] = wp;
+		});
 	}
 
 	function setEnd(wp: Waypoint) {
-		if (!mayEdit()) return;
-		history.push(currentSnapshot());
-		if (waypoints.length < 2) waypoints.push(wp);
-		else waypoints[waypoints.length - 1] = wp;
-		reroute();
+		planEdit(() => {
+			if (waypoints.length < 2) waypoints.push(wp);
+			else waypoints[waypoints.length - 1] = wp;
+		});
 	}
 
 	function pickPlace(place: PlaceResult, action: 'from' | 'add' | 'to') {
@@ -665,13 +656,23 @@
 		else addWaypoint(wp);
 	}
 
+	// Undo/redo push the CURRENT state with the live route attached as
+	// routeOverride (mutators never do - their route is about to be
+	// replaced). Without it, redoing past an adopted alternate would replay
+	// reroute() and silently come back with the primary route instead of
+	// the alternate the rider picked. Skipped while a reroute is in flight,
+	// when `route` is stale for the current inputs and a replay is truer.
+	function timeTravelSnapshot(): PlannerSnapshot {
+		return { ...currentSnapshot(), routeOverride: loading ? null : route };
+	}
+
 	function undo() {
-		const snap = history.undo(currentSnapshot());
+		const snap = history.undo(timeTravelSnapshot());
 		if (snap) applySnapshot(snap);
 	}
 
 	function redo() {
-		const snap = history.redo(currentSnapshot());
+		const snap = history.redo(timeTravelSnapshot());
 		if (snap) applySnapshot(snap);
 	}
 
@@ -944,12 +945,19 @@
 		history.push(currentSnapshot());
 		preset = next;
 		customCostingOptions = null;
+		// Anything computed under the old costing is stale the moment the
+		// costing changes - leaving the panels open would let a road-costed
+		// alternate or loop be adopted while the toolbar says gravel.
+		dismissAlternates();
+		dismissLoop();
 		reroute();
 	}
 
 	function changeCustomCosting(next: BicycleCostingOptions) {
 		history.push(currentSnapshot());
 		customCostingOptions = next;
+		dismissAlternates();
+		dismissLoop();
 		reroute();
 	}
 

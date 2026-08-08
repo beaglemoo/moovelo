@@ -278,6 +278,16 @@ class RouteSaveRequest(BaseModel):
     costing_options: BicycleCostingOptions | None = None
     snapshot: RouteResponse
 
+    @model_validator(mode="after")
+    def _custom_requires_options(self) -> "RouteSaveRequest":
+        # "custom" is a marker for "the stored costing_options bundle", not a
+        # PRESETS key - stored without one, the next re-route (reverse, say)
+        # would KeyError inside PRESETS["custom"]. The planner always sends
+        # both together; this holds the API to the same invariant.
+        if self.preset == "custom" and self.costing_options is None:
+            raise ValueError('preset "custom" requires costing_options.')
+        return self
+
 
 class RoutePatchRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
@@ -290,6 +300,15 @@ class RoutePatchRequest(BaseModel):
     # both together, so this is what lets switching back to a named preset
     # clear a previously stored custom bundle. See api/routes.py:update_route.
     costing_options: BicycleCostingOptions | None = None
+
+    @model_validator(mode="after")
+    def _custom_requires_options(self) -> "RoutePatchRequest":
+        # Same invariant as RouteSaveRequest: "custom" without a bundle would
+        # store a preset that KeyErrors on the next re-route.
+        if self.preset == "custom" and self.costing_options is None:
+            raise ValueError('preset "custom" requires costing_options.')
+        return self
+
     snapshot: RouteResponse | None = None
 
 

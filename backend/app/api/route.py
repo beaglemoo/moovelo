@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 
 from app.api.deps import DbDep, UserDep
-from app.api.routes import with_ride_time
+from app.api.routes import _settings_for, with_ride_time
 from app.api.settings import get_or_default_settings
 from app.config import settings
 from app.models import SearchIndexMeta
@@ -188,8 +188,16 @@ async def route_alternates(
         waypoints=body.waypoints, preset=body.preset, costing_options=body.costing_options
     )
     primary, alternates = await client.route_alternates(route_request, body.count)
-    primary = await with_ride_time(primary, db, user.id)
-    alternates = [await with_ride_time(alt, db, user.id) for alt in alternates]
+    # One settings read for all candidates - the same row cannot change
+    # between them, and with_ride_time would re-select it per snapshot.
+    rider = await _settings_for(db, user.id)
+    primary = primary.model_copy(
+        update={"ride_time": compute_ride_time(primary.elevation, primary.surface, rider)}
+    )
+    alternates = [
+        alt.model_copy(update={"ride_time": compute_ride_time(alt.elevation, alt.surface, rider)})
+        for alt in alternates
+    ]
     return AlternatesResponse(primary=primary, alternates=alternates)
 
 
