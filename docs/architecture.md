@@ -444,14 +444,22 @@ the routing graph, so an unmatched imported track fails it by design; surface
 is decorative and never touches FIT or export, so there is nothing here worth
 retrying for.
 
-`POST /api/route/surface` exposes this for the planner, taking a line rather
-than a route id (like `/api/places/pois-along-route`) so it can be asked
-about before anything is saved. The frontend refetches it in its own effect
-whenever the route or preset changes and writes the result straight onto
-`route.surface` - a targeted property write rather than replacing the whole
-`route` object, so the effect does not retrigger its own `routeLine`
-dependency. `import_route` and `POST /api/routes/{id}/reverse` compute it
-once against their final snapshot's shape and attach it the same way, since
+`POST /api/route/surface` exposes this for the planner, taking the route's
+per-leg lines rather than a route id (like `/api/places/pois-along-route`)
+so it can be asked about before anything is saved. Legs, not one
+concatenated line: the merged shape is discontinuous at via-waypoint
+joins, where edge_walk reliably fails even though each leg matches alone -
+chunks never span a leg boundary for the same reason. The request may also
+carry the route's elevation, in which case the response includes a
+ride_time recomputed against the fresh surface and the rider's settings -
+this is what makes the planner's live estimate surface-aware without
+adding a Valhalla round trip to `/api/route` itself, which computes its
+ride_time paved-equivalent first. The frontend refetches in its own effect
+whenever the route or preset changes and writes both results straight onto
+the route object - targeted property writes rather than replacing the
+whole `route`, so the effect does not retrigger its own dependency.
+`import_route` and `POST /api/routes/{id}/reverse` compute the breakdown
+once against their final snapshot's legs and attach it the same way, since
 neither goes through the planner's own fetch. Saved snapshots carry
 `surface: SurfaceBreakdown | null`; the `None` default is what keeps routes
 saved before this existed - and any route whose edge_walk match failed -
