@@ -18,6 +18,9 @@ with turn-by-turn cues.
   marker to move it, or grab the route line itself and drag it to insert a
   via point exactly where you drop it. Right-click for a
   context menu (route from here, add waypoint, route to here, remove).
+- Multi-step undo/redo over the whole editing session - not just the last
+  waypoint - with Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z alongside the toolbar
+  buttons. Clearing the route is undoable too.
 - Loop generator: "20 km loop from here" on the right-click menu tries
   several bearings around that point and binary-searches each one's radius
   until it finds an out-and-back route close to your target distance,

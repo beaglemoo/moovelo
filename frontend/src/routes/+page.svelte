@@ -28,6 +28,7 @@
 	import { cumulativeDistances, pointAtDistance } from '$lib/geo';
 	import { gradientSegments as computeGradientSegments } from '$lib/gradient';
 	import { decodePolyline6 } from '$lib/polyline';
+	import { history, type PlannerSnapshot } from '$lib/history.svelte';
 	import { categoriesFor, DEFAULT_POI_GROUPS } from '$lib/pois';
 	import ClimbsList from '$lib/components/ClimbsList.svelte';
 	import ElevationProfile from '$lib/components/ElevationProfile.svelte';
@@ -205,6 +206,29 @@
 		return ok;
 	}
 
+	// The inputs a mutator changes, captured before the mutation lands -
+	// history.push deep-copies this itself, so the caller does not need to.
+	function currentSnapshot(): PlannerSnapshot {
+		return { waypoints, preset, costingOptions: customCostingOptions, source, routeOverride: null };
+	}
+
+	// Restores a history entry. Time travel bypasses mayEdit() - it is not a
+	// fresh editorial decision, and the imported-source guard still holds
+	// because `source` itself travels in the snapshot.
+	function applySnapshot(snap: PlannerSnapshot) {
+		waypoints = snap.waypoints.map((wp) => ({ ...wp }));
+		preset = snap.preset;
+		customCostingOptions = snap.costingOptions ? { ...snap.costingOptions } : null;
+		source = snap.source;
+		if (snap.routeOverride) {
+			route = snap.routeOverride;
+			dirty = true;
+			editGeneration += 1;
+		} else {
+			reroute();
+		}
+	}
+
 	// Open a saved route when arriving via /?route=<id>.
 	const routeParam = page.url.searchParams.get('route');
 	if (routeParam) {
@@ -220,6 +244,9 @@
 				savedName = saved.name;
 				dirty = false;
 				fitTrigger += 1;
+				// A freshly loaded route must not let undo reach back into
+				// whatever was on screen before it.
+				history.clear();
 			})
 			.catch(() => {
 				error = 'Could not load that route.';
@@ -505,30 +532,35 @@
 
 	function addWaypoint(wp: Waypoint) {
 		if (!mayEdit()) return;
+		history.push(currentSnapshot());
 		waypoints.push(wp);
 		reroute();
 	}
 
 	function moveWaypoint(index: number, wp: Waypoint) {
 		if (!mayEdit()) return;
+		history.push(currentSnapshot());
 		waypoints[index] = wp;
 		reroute();
 	}
 
 	function insertVia(position: number, wp: Waypoint) {
 		if (!mayEdit()) return;
+		history.push(currentSnapshot());
 		waypoints.splice(position, 0, wp);
 		reroute();
 	}
 
 	function removeWaypoint(index: number) {
 		if (!mayEdit()) return;
+		history.push(currentSnapshot());
 		waypoints.splice(index, 1);
 		reroute();
 	}
 
 	function setStart(wp: Waypoint) {
 		if (!mayEdit()) return;
+		history.push(currentSnapshot());
 		if (waypoints.length === 0) waypoints.push(wp);
 		else waypoints[0] = wp;
 		reroute();
@@ -536,6 +568,7 @@
 
 	function setEnd(wp: Waypoint) {
 		if (!mayEdit()) return;
+		history.push(currentSnapshot());
 		if (waypoints.length < 2) waypoints.push(wp);
 		else waypoints[waypoints.length - 1] = wp;
 		reroute();
@@ -552,12 +585,37 @@
 	}
 
 	function undo() {
-		if (!mayEdit()) return;
-		waypoints.pop();
-		reroute();
+		const snap = history.undo(currentSnapshot());
+		if (snap) applySnapshot(snap);
+	}
+
+	function redo() {
+		const snap = history.redo(currentSnapshot());
+		if (snap) applySnapshot(snap);
+	}
+
+	// Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z redoes - ignored while typing
+	// anywhere text can be entered (save dialog name, isochrone minutes,
+	// loop target, search box, sliders popover), where Z is just a letter.
+	function handleKeydown(event: KeyboardEvent) {
+		if (event.key.toLowerCase() !== 'z' || !(event.metaKey || event.ctrlKey)) return;
+		const target = event.target as HTMLElement | null;
+		if (
+			target &&
+			(target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+		) {
+			return;
+		}
+		event.preventDefault();
+		if (event.shiftKey) redo();
+		else undo();
 	}
 
 	function clear() {
+		// Pushed rather than dropped: an accidental Clear is exactly what
+		// undo is for, so history is left alone here - only the ?route= load
+		// path resets it.
+		history.push(currentSnapshot());
 		source = 'planned';
 		waypoints = [];
 		route = null;
@@ -601,6 +659,9 @@
 
 	function useLoop(candidate: LoopCandidate) {
 		if (!mayEdit()) return;
+		// An ordinary input change as far as undo is concerned: the pre-loop
+		// waypoints/preset are what should come back.
+		history.push(currentSnapshot());
 		// Valhalla already ran for this candidate - reroute() would replan it
 		// from scratch for no reason, so the snapshot goes straight onto
 		// `route` instead, with the same dirty/editGeneration bump reroute()
@@ -733,12 +794,14 @@
 	}
 
 	function changePreset(next: Preset) {
+		history.push(currentSnapshot());
 		preset = next;
 		customCostingOptions = null;
 		reroute();
 	}
 
 	function changeCustomCosting(next: BicycleCostingOptions) {
+		history.push(currentSnapshot());
 		customCostingOptions = next;
 		reroute();
 	}
@@ -757,6 +820,8 @@
 		return h ? `${h} h ${min.toString().padStart(2, '0')} min` : `${min} min`;
 	}
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="app">
 	<div class="map-area">
@@ -831,7 +896,8 @@
 					/>
 				{/if}
 			</div>
-			<button type="button" onclick={undo} disabled={waypoints.length === 0}>Undo</button>
+			<button type="button" onclick={undo} disabled={!history.canUndo}>Undo</button>
+			<button type="button" onclick={redo} disabled={!history.canRedo}>Redo</button>
 			<button type="button" onclick={clear} disabled={waypoints.length === 0}>Clear</button>
 			<button
 				type="button"
