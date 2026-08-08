@@ -38,6 +38,7 @@
 	import PresetSelector from '$lib/components/PresetSelector.svelte';
 	import PresetSlidersPopover from '$lib/components/PresetSlidersPopover.svelte';
 	import SurfaceBar from '$lib/components/SurfaceBar.svelte';
+	import WaypointList from '$lib/components/WaypointList.svelte';
 	import WeatherPanel from '$lib/components/WeatherPanel.svelte';
 	import MapView from '$lib/map/MapView.svelte';
 	import { unsaved } from '$lib/unsaved.svelte';
@@ -81,6 +82,8 @@
 	// Shared by ClimbsList (row hover), ElevationProfile (highlight band) and
 	// MapView (highlight casing) - one index rather than three copies of it.
 	let hoveredClimbIndex: number | null = $state(null);
+	// Shared by WaypointList (row hover) and MapView (marker highlight).
+	let hoveredWaypointIndex: number | null = $state(null);
 
 	// Wind along the route. Unlike POIs and surface, this never fetches from
 	// an effect - it is the one call in the app that reaches an external
@@ -558,6 +561,19 @@
 		reroute();
 	}
 
+	// Waypoint list panel: up/down buttons and native drag-and-drop both
+	// funnel through this. Splice-out-splice-in rather than a swap, so
+	// dragging a row several places in one go (not just adjacent, as the
+	// buttons always do) still lands it exactly where it was dropped.
+	function reorderWaypoint(from: number, to: number) {
+		if (!mayEdit()) return;
+		if (to < 0 || to >= waypoints.length || from === to) return;
+		history.push(currentSnapshot());
+		const [wp] = waypoints.splice(from, 1);
+		waypoints.splice(to, 0, wp);
+		reroute();
+	}
+
 	function setStart(wp: Waypoint) {
 		if (!mayEdit()) return;
 		history.push(currentSnapshot());
@@ -845,6 +861,7 @@
 				onHoverPoi={(id) => (hoveredPoiId = id)}
 				climbs={route?.climbs ?? []}
 				{hoveredClimbIndex}
+				{hoveredWaypointIndex}
 				isochrone={isochroneData}
 				{isochroneOrigin}
 				onIsochrone={openIsochronePrompt}
@@ -1013,6 +1030,14 @@
 					elevation={route.elevation}
 					onHover={handleElevationHover}
 					{hoveredClimb}
+				/>
+				<WaypointList
+					{waypoints}
+					searchEnabled={config?.search_enabled ?? false}
+					hoveredIndex={hoveredWaypointIndex}
+					onHover={(i) => (hoveredWaypointIndex = i)}
+					onReorder={reorderWaypoint}
+					onRemove={removeWaypoint}
 				/>
 				{#if route.climbs.length > 0}
 					<ClimbsList
@@ -1261,7 +1286,8 @@
 	}
 	.panel-body :global(.pois),
 	.panel-body :global(.climbs),
-	.panel-body :global(.weather) {
+	.panel-body :global(.weather),
+	.panel-body :global(.waypoints) {
 		flex: 0 0 21rem;
 		min-width: 0;
 	}
@@ -1272,7 +1298,8 @@
 		}
 		.panel-body :global(.pois),
 		.panel-body :global(.climbs),
-		.panel-body :global(.weather) {
+		.panel-body :global(.weather),
+		.panel-body :global(.waypoints) {
 			flex: none;
 			width: 100%;
 		}

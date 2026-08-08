@@ -55,6 +55,11 @@
 		 * one's sub-line is ever drawn, rather than a feature per climb. */
 		climbs?: Climb[];
 		hoveredClimbIndex?: number | null;
+		/** Hovering a row in the waypoint list panel highlights its marker.
+		 * Kept separate from the marker-rebuild effect below - toggling a CSS
+		 * class is cheap, rebuilding every marker on every hover would
+		 * interrupt a drag in progress. */
+		hoveredWaypointIndex?: number | null;
 		/** Valhalla's own isochrone GeoJSON. Null hides the layer rather than
 		 * clearing its source, so a stale polygon never flashes back on. */
 		isochrone?: FeatureCollection | null;
@@ -92,6 +97,7 @@
 		onHoverPoi,
 		climbs = [],
 		hoveredClimbIndex = null,
+		hoveredWaypointIndex = null,
 		isochrone = null,
 		isochroneOrigin = null,
 		onIsochrone,
@@ -707,6 +713,21 @@
 		});
 	});
 
+	// Highlight the hovered marker from the waypoint list panel. Deliberately
+	// separate from the rebuild effect above and toggles a class rather than
+	// rebuilding: a hover firing on every mouse move over the panel must not
+	// tear down and recreate every marker, which would interrupt a drag
+	// already in progress. Reads `waypoints` only to track-and-rerun after a
+	// rebuild replaces `markers` with fresh elements - it does nothing with
+	// the value itself.
+	$effect(() => {
+		void waypoints;
+		const hovered = hoveredWaypointIndex;
+		markers.forEach((marker, i) => {
+			marker.getElement().classList.toggle('marker-hovered', i === hovered);
+		});
+	});
+
 	// Name whatever the menu is pointing at. One effect rather than a call at
 	// each of the four sites that open the menu (right-click and long-press,
 	// on the canvas and on a marker), and its cleanup discards a lookup whose
@@ -1061,5 +1082,14 @@
 		border: none;
 		border-top: 1px solid #e5e5e5;
 		margin: 3px 0;
+	}
+	/* Applied by the highlight effect above, not by a Svelte class directive
+	   on a template element - the marker is a plain DOM node MapLibre owns,
+	   outside the component's own markup. A drop-shadow rather than a
+	   transform: MapLibre already drives this element's own transform for
+	   positioning and its own scale option, and overriding that from here
+	   would fight it and mis-place the pin. */
+	:global(.marker-hovered) {
+		filter: drop-shadow(0 0 3px #fff) drop-shadow(0 0 6px #002b36aa);
 	}
 </style>
