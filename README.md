@@ -1,9 +1,16 @@
 # Moovelo
 
-Self-hosted bike route planner with direct Wahoo ELEMNT sync. Plan routes in
-the browser on a cycling-oriented map, save them to your library, export
-GPX/FIT, and push them straight to your Wahoo head unit - with turn-by-turn
-cues.
+Moovelo is a self-hosted bike route planner for cyclists who'd rather run
+their own routing stack than hand ride data to a commercial platform. It's
+for anyone who wants full-featured route planning - click-to-plan routing,
+elevation and gradient, a real route library, turn-by-turn Wahoo sync -
+running entirely on hardware they control: `docker compose up` and it's
+yours, with no account on someone else's servers and no data leaving your
+network unless you explicitly connect Wahoo or a weather provider.
+
+Plan routes in the browser on a cycling-oriented map, save them to your
+library, export GPX/FIT, and push them straight to your Wahoo head unit -
+with turn-by-turn cues.
 
 ## Features
 
@@ -239,11 +246,15 @@ for the sampling and wind maths.
 
 ## Documentation
 
+- [docs/guide.md](docs/guide.md) - the rider's guide: every feature, how to use it
+- [docs/faq.md](docs/faq.md) - common questions, answered honestly
+- [docs/troubleshooting.md](docs/troubleshooting.md) - symptom-first fixes for common gotchas
 - [docs/architecture.md](docs/architecture.md) - components, data flow, and design decisions
-- [docs/wahoo-sync.md](docs/wahoo-sync.md) - full Wahoo setup walkthrough and troubleshooting
 - [docs/data.md](docs/data.md) - OSM extracts, elevation data, refreshing routing data
 - [docs/self-hosted-tiles.md](docs/self-hosted-tiles.md) - running your own CyclOSM tile server
+- [docs/wahoo-sync.md](docs/wahoo-sync.md) - full Wahoo setup walkthrough and troubleshooting
 - [deploy/](deploy/) - production reverse-proxy notes and Caddy snippet
+- [CONTRIBUTING.md](CONTRIBUTING.md) - development setup, tests, and PR conventions
 
 ## Development
 
