@@ -58,7 +58,9 @@ def resolve_costing(preset: Preset, custom: BicycleCostingOptions | None) -> Bic
 
     The single place this decision is made: a custom bundle always wins
     when given, otherwise the named preset's own bundle - so route(),
-    trace_attributes() and anything added later all agree on the same rule
-    rather than each re-implementing "custom overrides preset".
+    isochrone() and anything added later all agree on the same rule rather
+    than each re-implementing "custom overrides preset". (trace_attributes
+    deliberately does NOT use this - edge tracing is costing-independent,
+    see ValhallaClient._attributes_chunk.)
     """
     return custom.model_dump() if custom else PRESETS[preset]

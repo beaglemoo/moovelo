@@ -91,7 +91,7 @@ async def import_route(
     # can raise has already succeeded. Legs, not one concatenated shape -
     # see ValhallaClient.trace_attributes.
     legs = [decode_polyline6(leg.geometry) for leg in snapshot.legs]
-    surface = await valhalla.trace_attributes(legs, preset)
+    surface = await valhalla.trace_attributes(legs)
     if surface is not None:
         snapshot = snapshot.model_copy(update={"surface": surface})
 
