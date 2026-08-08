@@ -614,6 +614,43 @@ Valhalla's isochrone about a per-rider speed curve (it has no hook for one)
 or reimplementing reachability search on top of the ride-time model ourselves
 - both bigger than this feature - so the isochrone is presented as what it
 is: Valhalla's own answer, not the planner's.
+## Loop generator
+
+`services/loop.py` builds "N km loop from here" out of routing primitives
+Valhalla already exposes - `/route` and `/trace_attributes` - since it has
+no round-trip API of its own.
+
+For each of `LOOP_BEARINGS` (8) evenly spaced compass bearings around the
+origin, a via point is placed on a circle and its radius binary-searched
+(`LOOP_MAX_ITERS` = 6 halvings of a `[0.2, 2.0] * target/(2*pi)` radius
+window) until the out-and-back route through it (`origin -> via -> origin`)
+lands within `LOOP_TOLERANCE` (5%) of the target distance, or the iteration
+budget runs out - the best (closest-distance) attempt seen is kept either
+way, not just the last one tried. The 8 bearings run concurrently
+(`asyncio.gather(..., return_exceptions=True)`); a bearing whose every
+radius comes back unroutable (a coastal direction, say) simply contributes
+nothing rather than failing the whole search - normal, not an error.
+
+Each surviving bearing's best attempt is scored (lower is better):
+distance error, a mild per-km ascent penalty, and a surface term from
+`trace_attributes` (an unpaved fraction that is penalised for road/quiet
+riding and rewarded for gravel, or ignored entirely when the breakdown
+degrades to `None`). All the constants live at the top of `loop.py`,
+deliberately in one place: distance error dominates by construction (a
+typical hilly ride's ascent term is ~0.45 against a 20% distance miss's
+0.20), so ascent and surface only ever break ties between similarly-close
+candidates.
+
+The scored candidates are sorted and greedily deduplicated
+(`LOOP_DEDUP_KM` = 3 km between kept via points) down to `LOOP_CANDIDATES`
+(3) - adjacent bearings on a small target routinely converge on
+essentially the same loop, and without this the results shown would often
+just be one loop wearing three colours.
+
+`POST /api/route/loop` wraps the whole search in `asyncio.wait_for` (25 s);
+a timeout maps to 504 rather than leaving the rider staring at a spinner.
+Each returned `LoopCandidate` carries a full `RouteResponse` snapshot, so
+picking one in the frontend needs no second call back through the planner.
 
 ## Organising the library
 
@@ -687,6 +724,8 @@ backend/app/
 ├── schemas.py               # request/response models
 ├── api/
 │   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface, /api/route/isochrone
+│   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface,
+│   │                        #   /api/route/loop
 │   ├── places.py            # /api/places: search, reverse, pois-along-route
 │   ├── auth.py              # register/login/logout/me + OIDC flow
 │   ├── routes.py            # route CRUD, GPX/FIT export, share links, ride-time wiring
@@ -700,6 +739,7 @@ backend/app/
     ├── polyline.py          # polyline6 decoder
     ├── valhalla.py          # httpx client, error mapping, elevation, ascent calc
     ├── ride_time.py         # gradient/surface/FTP model, computed on read only
+    ├── loop.py              # "N km loop from here": bearing search + scoring + dedup
     ├── auth.py, oidc.py     # password hashing, sessions, OIDC client
     ├── gpx.py, fit.py       # exporters (FIT embeds maneuvers as course points)
     ├── importer.py          # GPX/TCX/FIT parsing for uploaded files
@@ -763,6 +803,18 @@ about extract coverage when no roads are found near a waypoint.
 - **Compose profiles over separate files**: `dev` (hot reload, mounted
   source, Vite on 5173) and `prod` (single container on 17777) live in one
   docker-compose.yml.
+- **A loop is an out-and-back through one via point**, not a hand-built
+  closed shape: Valhalla routes `origin -> via -> origin` as two ordinary
+  legs and, on real road topology, very often picks different streets for
+  each direction - so what comes back reads as a loop rather than doubling
+  back on itself, without the generator ever having to reason about the
+  road graph itself. 8 bearings and 6 binary-search iterations per bearing
+  is a deliberate budget, not a tuned optimum: enough spread to usually
+  find a good loop in a few seconds, few enough LAN round trips that a
+  rider is not left waiting minutes for one. Every scoring weight lives as
+  a named constant at the top of `services/loop.py`, so retuning "how much
+  a climb should hurt the score" is a one-line change, not a hunt through
+  the search itself.
 
 ## Ports
 

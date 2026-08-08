@@ -6,6 +6,7 @@
 		places,
 		planRoute,
 		routeIsochrone,
+		routeLoop,
 		routeSurface,
 		routeWeather,
 		routes,
@@ -13,6 +14,7 @@
 		type AppConfig,
 		type BicycleCostingOptions,
 		type IsochroneResult,
+		type LoopCandidate,
 		type PlaceResult,
 		type PoiResult,
 		type Preset,
@@ -29,6 +31,7 @@
 	import { categoriesFor, DEFAULT_POI_GROUPS } from '$lib/pois';
 	import ClimbsList from '$lib/components/ClimbsList.svelte';
 	import ElevationProfile from '$lib/components/ElevationProfile.svelte';
+	import LoopPanel from '$lib/components/LoopPanel.svelte';
 	import PlaceSearch from '$lib/components/PlaceSearch.svelte';
 	import PoiPanel from '$lib/components/PoiPanel.svelte';
 	import PresetSelector from '$lib/components/PresetSelector.svelte';
@@ -102,6 +105,17 @@
 	let isochroneLoading = $state(false);
 	let isochroneError: string | null = $state(null);
 	let isochroneController: AbortController | null = null;
+	// "Loop from here" (services/loop.py). loopOrigin non-null is what opens
+	// the card - set by the map's context menu, cleared by using a loop,
+	// dismissing the card, or clear(). loopCandidates stays null until the
+	// first search settles, distinguishing "hasn't searched yet" from "found
+	// nothing" ([]).
+	let loopOrigin: Waypoint | null = $state(null);
+	let loopTargetKm = $state(60);
+	let loopCandidates: LoopCandidate[] | null = $state(null);
+	let loopLoading = $state(false);
+	let loopError: string | null = $state(null);
+	let hoveredLoopIndex: number | null = $state(null);
 
 	let wahooStatus: WahooStatus | null = $state(null);
 	let wahooPush: 'idle' | 'working' | 'synced' | 'error' = $state('idle');
@@ -247,6 +261,33 @@
 		if (hoveredClimbIndex === null) return null;
 		const climb = climbs[hoveredClimbIndex];
 		return climb ? { start_dist_m: climb.start_dist_m, end_dist_m: climb.end_dist_m } : null;
+	});
+
+	/** Merge one candidate's legs into a single line, the same join rule
+	 * `routeLine` above uses - duplicated rather than shared, since a loop
+	 * candidate's snapshot is a plain RouteResponse but never assigned to
+	 * `route` itself (that only happens once one is picked, in useLoop). */
+	function mergeLegLines(legs: [number, number][][]): [number, number][] {
+		const merged: [number, number][] = [];
+		for (const leg of legs) {
+			const start =
+				merged.length &&
+				leg.length &&
+				merged[merged.length - 1][0] === leg[0][0] &&
+				merged[merged.length - 1][1] === leg[0][1]
+					? 1
+					: 0;
+			merged.push(...leg.slice(start));
+		}
+		return merged;
+	}
+
+	const loopPreviews = $derived.by(() => {
+		if (!loopCandidates) return null;
+		return loopCandidates.map((candidate, index) => ({
+			index,
+			coords: mergeLegLines(candidate.snapshot.legs.map((leg) => decodePolyline6(leg.geometry)))
+		}));
 	});
 
 	// Far enough to catch a cafe just off the road, near enough that
@@ -525,6 +566,51 @@
 		savedName = null;
 		dirty = false;
 		hideIsochrone();
+		dismissLoop();
+	}
+
+	function onLoop(wp: Waypoint) {
+		loopOrigin = wp;
+		loopCandidates = null;
+		loopError = null;
+		hoveredLoopIndex = null;
+	}
+
+	function dismissLoop() {
+		loopOrigin = null;
+		loopCandidates = null;
+		loopError = null;
+		loopLoading = false;
+		hoveredLoopIndex = null;
+	}
+
+	async function findLoops() {
+		if (!loopOrigin) return;
+		loopLoading = true;
+		loopError = null;
+		loopCandidates = null;
+		try {
+			loopCandidates = (await routeLoop(loopOrigin, loopTargetKm, preset, customCostingOptions))
+				.candidates;
+		} catch (err) {
+			loopError = err instanceof Error ? err.message : 'Loop search failed';
+		} finally {
+			loopLoading = false;
+		}
+	}
+
+	function useLoop(candidate: LoopCandidate) {
+		if (!mayEdit()) return;
+		// Valhalla already ran for this candidate - reroute() would replan it
+		// from scratch for no reason, so the snapshot goes straight onto
+		// `route` instead, with the same dirty/editGeneration bump reroute()
+		// itself does for every other edit.
+		waypoints = candidate.waypoints;
+		route = candidate.snapshot;
+		dirty = true;
+		editGeneration += 1;
+		dismissLoop();
+		fitTrigger += 1;
 	}
 
 	function defaultName(): string {
@@ -697,6 +783,9 @@
 				isochrone={isochroneData}
 				{isochroneOrigin}
 				onIsochrone={openIsochronePrompt}
+				{onLoop}
+				{loopPreviews}
+				{hoveredLoopIndex}
 				onAddWaypoint={addWaypoint}
 				onMoveWaypoint={moveWaypoint}
 				onInsertVia={insertVia}
@@ -710,6 +799,20 @@
 			<div class="search-bar">
 				<PlaceSearch near={mapCentre} onPick={pickPlace} />
 			</div>
+		{/if}
+		{#if loopOrigin}
+			<LoopPanel
+				targetKm={loopTargetKm}
+				onTargetKmChange={(value) => (loopTargetKm = value)}
+				loading={loopLoading}
+				error={loopError}
+				candidates={loopCandidates}
+				hoveredIndex={hoveredLoopIndex}
+				onHover={(i) => (hoveredLoopIndex = i)}
+				onFind={findLoops}
+				onUse={useLoop}
+				onDismiss={dismissLoop}
+			/>
 		{/if}
 		<div class="toolbar">
 			<div class="preset-anchor">

@@ -64,6 +64,13 @@
 		/** Opens the context menu's "Isochrone from here" entry. Left out by
 		 * the read-only share page, which has no menu at all. */
 		onIsochrone?: (wp: Waypoint) => void;
+		/** "Loop from here" on the context menu. Left out by the read-only
+		 * share page, which has no menu. */
+		onLoop?: (wp: Waypoint) => void;
+		/** Up to 3 candidate loops from the generator (services/loop.py),
+		 * drawn as ghost lines while its card is open. */
+		loopPreviews?: { index: number; coords: [number, number][] }[] | null;
+		hoveredLoopIndex?: number | null;
 	}
 
 	let {
@@ -88,6 +95,9 @@
 		isochrone = null,
 		isochroneOrigin = null,
 		onIsochrone,
+		onLoop,
+		loopPreviews = null,
+		hoveredLoopIndex = null,
 		onAddWaypoint,
 		onMoveWaypoint,
 		onInsertVia,
@@ -229,6 +239,23 @@
 				// emphasis is a paint expression and needs no second layer.
 				properties: { id: poi.id, category: poi.category, hovered: poi.id === hoveredPoiId },
 				geometry: { type: 'Point', coordinates: [poi.lon, poi.lat] }
+			}))
+		};
+	}
+
+	/** Up to 3 candidate loop lines, carrying which candidate they are and
+	 * whether the matching card row is hovered - both ride in the feature
+	 * data (the POI-layer pattern) so emphasis is a paint expression. */
+	function loopPreviewGeoJSON(
+		previews: { index: number; coords: [number, number][] }[] | null,
+		hoveredIndex: number | null
+	): FeatureCollection {
+		return {
+			type: 'FeatureCollection',
+			features: (previews ?? []).map((preview) => ({
+				type: 'Feature',
+				properties: { candidate: preview.index, hovered: preview.index === hoveredIndex },
+				geometry: { type: 'LineString', coordinates: preview.coords }
 			}))
 		};
 	}
@@ -380,6 +407,32 @@
 				},
 				'climb-highlight-line'
 			);
+			// Candidate loops from the generator (services/loop.py), previewed
+			// as ghost lines while its card is open - added before the real
+			// route line so that stays on top of them.
+			map.addSource('loop-preview', { type: 'geojson', data: loopPreviewGeoJSON(null, null) });
+			map.addLayer({
+				id: 'loop-preview-line',
+				type: 'line',
+				source: 'loop-preview',
+				layout: { 'line-cap': 'round', 'line-join': 'round' },
+				paint: {
+					'line-color': [
+						'match',
+						['get', 'candidate'],
+						0,
+						'#268bd2',
+						1,
+						'#b58900',
+						2,
+						'#d33682',
+						'#93a1a1'
+					],
+					'line-width': ['case', ['get', 'hovered'], 5, 3],
+					'line-opacity': 0.65,
+					'line-dasharray': [2, 1.5]
+				}
+			});
 			// The visible line is driven by its own gradient-coloured source;
 			// `route` stays a plain LineString because dragging and hit-testing
 			// (route-hit below) don't care about gradient bands.
@@ -731,6 +784,15 @@
 		setSourceData(map, 'pois', poiGeoJSON(pois));
 	});
 
+	// Sync candidate loop previews. Reads hoveredLoopIndex too, for the same
+	// reason the POI layer does above: emphasis lives in the feature data,
+	// not a filter, so a hover change has to rewrite the source.
+	$effect(() => {
+		if (!map || !mapReady) return;
+		void hoveredLoopIndex;
+		setSourceData(map, 'loop-preview', loopPreviewGeoJSON(loopPreviews, hoveredLoopIndex));
+	});
+
 	// Sync elevation-chart hover marker.
 	$effect(() => {
 		if (!map || !mapReady) return;
@@ -858,6 +920,11 @@
 				<hr />
 				<button type="button" role="menuitem" onclick={() => menuAction(() => onIsochrone(wp))}>
 					Isochrone from here
+				</button>
+			{/if}
+			{#if onLoop}
+				<button type="button" role="menuitem" onclick={() => menuAction(() => onLoop(wp))}>
+					Loop from here
 				</button>
 			{/if}
 			{#if waypoints.length > 0}

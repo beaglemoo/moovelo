@@ -72,6 +72,22 @@ def bearing(a: Point, b: Point) -> float:
     return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
 
 
+def destination_point(point: Point, bearing_deg: float, distance_m: float) -> Point:
+    """The point `distance_m` along `bearing_deg` from `point` - the inverse of `bearing()`."""
+    lat1 = math.radians(point[0])
+    lon1 = math.radians(point[1])
+    brng = math.radians(bearing_deg)
+    delta = distance_m / EARTH_RADIUS_M
+    lat2 = math.asin(
+        math.sin(lat1) * math.cos(delta) + math.cos(lat1) * math.sin(delta) * math.cos(brng)
+    )
+    lon2 = lon1 + math.atan2(
+        math.sin(brng) * math.sin(delta) * math.cos(lat1),
+        math.cos(delta) - math.sin(lat1) * math.sin(lat2),
+    )
+    return (math.degrees(lat2), (math.degrees(lon2) + 540.0) % 360.0 - 180.0)
+
+
 def resample_by_distance(points: list[Point], spacing_m: float) -> list[Point]:
     """Thin a track to roughly one point per `spacing_m`, keeping both ends.
 
