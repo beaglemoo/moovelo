@@ -26,21 +26,26 @@ test('show and hide an isochrone from the context menu', async ({ page }) => {
 	// Let the map settle before clicking onto it.
 	await page.waitForTimeout(2500);
 
-	const box = (await canvas.boundingBox())!;
-	const cx = box.x + box.width / 2;
-	const cy = box.y + box.height / 2;
+	// The canvas shrinks as the results panel below it grows (elevation,
+	// POIs), so click coordinates are recomputed from the live bounding box
+	// before every interaction rather than captured once - a stale centre
+	// can land on the panel instead of the map.
+	async function canvasPoint(dx: number, dy: number): Promise<[number, number]> {
+		const box = (await canvas.boundingBox())!;
+		return [box.x + box.width / 2 + dx, box.y + box.height / 2 + dy];
+	}
 
 	// A short route, so "Clear route" is available on the context menu and
 	// there is something for the isochrone to survive alongside.
-	await page.mouse.click(cx - 40, cy - 30);
-	await page.mouse.click(cx + 40, cy + 30);
+	await page.mouse.click(...(await canvasPoint(-40, -30)));
+	await page.mouse.click(...(await canvasPoint(40, 30)));
 	await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled({
 		timeout: 30_000
 	});
 
 	// Right-click somewhere off the route line to open the plain (non-marker)
 	// context menu.
-	await page.mouse.click(cx - 100, cy + 80, { button: 'right' });
+	await page.mouse.click(...(await canvasPoint(-100, 40)), { button: 'right' });
 	await page.getByRole('menuitem', { name: 'Isochrone from here' }).click();
 
 	const minutesInput = page.getByLabel('Minutes');
@@ -56,14 +61,14 @@ test('show and hide an isochrone from the context menu', async ({ page }) => {
 
 	// Show it again, then confirm Clear route takes both the waypoints and
 	// the isochrone with it.
-	await page.mouse.click(cx - 100, cy + 80, { button: 'right' });
+	await page.mouse.click(...(await canvasPoint(-100, 40)), { button: 'right' });
 	await page.getByRole('menuitem', { name: 'Isochrone from here' }).click();
 	await page.getByRole('button', { name: 'Show isochrone' }).click();
 	await expect(page.getByRole('button', { name: 'Hide isochrone' })).toBeVisible({
 		timeout: 30_000
 	});
 
-	await page.mouse.click(cx - 100, cy + 80, { button: 'right' });
+	await page.mouse.click(...(await canvasPoint(-100, 40)), { button: 'right' });
 	await page.getByRole('menuitem', { name: 'Clear route' }).click();
 
 	await expect(page.locator('.maplibregl-marker')).toHaveCount(0);
