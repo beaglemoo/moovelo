@@ -1,4 +1,18 @@
 export type Preset = 'road' | 'gravel' | 'quiet';
+// What a saved route's `preset` may be - "custom" marks a route whose
+// costing came from sliders rather than one of the three named bundles.
+export type StoredPreset = Preset | 'custom';
+
+/** One request's worth of costing overrides - mirrors
+ * backend/app/schemas.py's BicycleCostingOptions, which is the server-side
+ * allowlist these values are validated against. */
+export interface BicycleCostingOptions {
+	bicycle_type: 'Road' | 'Hybrid' | 'Cross' | 'Mountain';
+	cycling_speed: number;
+	use_roads: number;
+	use_hills: number;
+	avoid_bad_surfaces: number;
+}
 
 // Imported routes keep the track that was uploaded; their waypoints are only
 // the endpoints, so re-routing one would discard the imported line.
@@ -200,7 +214,7 @@ export interface WahooStatus {
 export interface RouteSummary {
 	id: string;
 	name: string;
-	preset: Preset;
+	preset: StoredPreset;
 	source: RouteSource;
 	tags: string[];
 	is_favourite: boolean;
@@ -214,7 +228,10 @@ export interface RouteSummary {
 export interface SavedRoute extends RouteResponse {
 	id: string;
 	name: string;
-	preset: Preset;
+	preset: StoredPreset;
+	/** Echoed back so reloading a route can restore the sliders and the
+	 * Custom pill. Null when a named preset was used instead. */
+	costing_options: BicycleCostingOptions | null;
 	source: RouteSource;
 	tags: string[];
 	notes: string | null;
@@ -284,7 +301,10 @@ export interface RouteMetadata {
 export interface RoutePayload {
 	name: string;
 	waypoints: Waypoint[];
-	preset: Preset;
+	preset: StoredPreset;
+	/** Only applied by the backend when `preset` is also sent - see
+	 * api/routes.py:update_route. */
+	costing_options?: BicycleCostingOptions | null;
 	snapshot: RouteResponse;
 }
 
@@ -335,6 +355,27 @@ export const shared = {
 export const admin = {
 	overview: () => request<AdminOverview>('/api/admin/overview'),
 	deleteUser: (id: string) => request<void>(`/api/admin/users/${id}`, { method: 'DELETE' })
+};
+
+export interface CustomPreset {
+	id: string;
+	name: string;
+	options: BicycleCostingOptions;
+}
+
+export const customPresets = {
+	list: () => request<CustomPreset[]>('/api/custom-presets'),
+	create: (name: string, options: BicycleCostingOptions) =>
+		request<CustomPreset>('/api/custom-presets', {
+			method: 'POST',
+			body: JSON.stringify({ name, options })
+		}),
+	update: (id: string, patch: { name?: string; options?: BicycleCostingOptions }) =>
+		request<CustomPreset>(`/api/custom-presets/${id}`, {
+			method: 'PATCH',
+			body: JSON.stringify(patch)
+		}),
+	remove: (id: string) => request<void>(`/api/custom-presets/${id}`, { method: 'DELETE' })
 };
 
 export interface UserSettings {
@@ -439,12 +480,13 @@ export async function routeSurface(
 	legs: [number, number][][],
 	preset: Preset,
 	elevation: ElevationPoint[] | null,
+	costingOptions: BicycleCostingOptions | null = null,
 	signal?: AbortSignal
 ): Promise<RouteSurfaceResult> {
 	const response = await fetch('/api/route/surface', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ legs, preset, elevation }),
+		body: JSON.stringify({ legs, preset, costing_options: costingOptions, elevation }),
 		signal
 	});
 	if (!response.ok) return { surface: null, ride_time: [] };
@@ -492,12 +534,13 @@ export async function routeWeather(
 export async function planRoute(
 	waypoints: Waypoint[],
 	preset: Preset,
+	costingOptions: BicycleCostingOptions | null = null,
 	signal?: AbortSignal
 ): Promise<RouteResponse> {
 	const response = await fetch('/api/route', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ waypoints, preset }),
+		body: JSON.stringify({ waypoints, preset, costing_options: costingOptions }),
 		signal
 	});
 	if (!response.ok) {

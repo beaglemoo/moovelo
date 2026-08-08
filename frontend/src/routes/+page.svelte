@@ -9,11 +9,13 @@
 		routes,
 		wahoo,
 		type AppConfig,
+		type BicycleCostingOptions,
 		type PlaceResult,
 		type PoiResult,
 		type Preset,
 		type RouteResponse,
 		type RouteSource,
+		type StoredPreset,
 		type WahooStatus,
 		type Waypoint,
 		type WindSegment
@@ -27,6 +29,7 @@
 	import PlaceSearch from '$lib/components/PlaceSearch.svelte';
 	import PoiPanel from '$lib/components/PoiPanel.svelte';
 	import PresetSelector from '$lib/components/PresetSelector.svelte';
+	import PresetSlidersPopover from '$lib/components/PresetSlidersPopover.svelte';
 	import SurfaceBar from '$lib/components/SurfaceBar.svelte';
 	import WeatherPanel from '$lib/components/WeatherPanel.svelte';
 	import MapView from '$lib/map/MapView.svelte';
@@ -35,6 +38,10 @@
 
 	let waypoints: Waypoint[] = $state([]);
 	let preset: Preset = $state('road');
+	// Set when the "Custom" pill is active - overrides `preset` entirely for
+	// routing, and is what makes a saved route's stored preset "custom".
+	let customCostingOptions: BicycleCostingOptions | null = $state(null);
+	let customPopoverOpen = $state(false);
 	let route: RouteResponse | null = $state(null);
 	let loading = $state(false);
 	let error: string | null = $state(null);
@@ -173,7 +180,8 @@
 			.get(routeParam)
 			.then((saved) => {
 				waypoints = saved.waypoints;
-				preset = saved.preset;
+				preset = saved.preset === 'custom' ? 'road' : saved.preset;
+				customCostingOptions = saved.costing_options;
 				source = saved.source;
 				route = saved;
 				savedId = saved.id;
@@ -283,6 +291,7 @@
 	$effect(() => {
 		const legs = decodedLegs;
 		const currentPreset = preset;
+		const currentCustom = customCostingOptions;
 		const elevation = route?.elevation ?? null;
 		surfaceController?.abort();
 		if (legs.length === 0) {
@@ -292,7 +301,7 @@
 		}
 		const controller = new AbortController();
 		surfaceController = controller;
-		surfacePending = routeSurface(legs, currentPreset, elevation, controller.signal)
+		surfacePending = routeSurface(legs, currentPreset, elevation, currentCustom, controller.signal)
 			.then((result) => {
 				if (controller.signal.aborted || !route) return;
 				route.surface = result.surface;
@@ -378,7 +387,7 @@
 		loading = true;
 		error = null;
 		try {
-			route = await planRoute(waypoints, preset, abortController.signal);
+			route = await planRoute(waypoints, preset, customCostingOptions, abortController.signal);
 			loading = false;
 			dirty = true;
 			editGeneration += 1;
@@ -491,6 +500,10 @@
 		}
 	}
 
+	// "custom" is what marks a saved route as costed from the sliders rather
+	// than one of the three named bundles - see api/routes.py's StoredPreset.
+	const storedPreset = $derived<StoredPreset>(customCostingOptions ? 'custom' : preset);
+
 	async function save() {
 		if (!route || waypoints.length < 2) return;
 		if (savedId === null) {
@@ -513,7 +526,12 @@
 			const gen = editGeneration;
 			const snapshot = route;
 			if (!snapshot) return;
-			await routes.update(savedId, { waypoints, preset, snapshot });
+			await routes.update(savedId, {
+				waypoints,
+				preset: storedPreset,
+				costing_options: customCostingOptions,
+				snapshot
+			});
 			if (gen === editGeneration) dirty = false;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Save failed';
@@ -548,7 +566,8 @@
 			const saved = await routes.create({
 				name: saveNameInput.trim(),
 				waypoints,
-				preset,
+				preset: storedPreset,
+				costing_options: customCostingOptions,
 				snapshot
 			});
 			savedId = saved.id;
@@ -564,6 +583,12 @@
 
 	function changePreset(next: Preset) {
 		preset = next;
+		customCostingOptions = null;
+		reroute();
+	}
+
+	function changeCustomCosting(next: BicycleCostingOptions) {
+		customCostingOptions = next;
 		reroute();
 	}
 
@@ -619,7 +644,22 @@
 			</div>
 		{/if}
 		<div class="toolbar">
-			<PresetSelector {preset} onChange={changePreset} />
+			<div class="preset-anchor">
+				<PresetSelector
+					{preset}
+					onChange={changePreset}
+					customActive={customCostingOptions !== null}
+					onCustomize={() => (customPopoverOpen = true)}
+				/>
+				{#if customPopoverOpen}
+					<PresetSlidersPopover
+						{preset}
+						current={customCostingOptions}
+						onApply={changeCustomCosting}
+						onClose={() => (customPopoverOpen = false)}
+					/>
+				{/if}
+			</div>
 			<button type="button" onclick={undo} disabled={waypoints.length === 0}>Undo</button>
 			<button type="button" onclick={clear} disabled={waypoints.length === 0}>Clear</button>
 			<button
@@ -782,6 +822,11 @@
 		flex-wrap: wrap;
 		max-width: calc(100% - 20px);
 		z-index: 5;
+	}
+	/* Anchors PresetSlidersPopover, which is positioned absolutely relative
+	   to this wrapper rather than the whole toolbar. */
+	.preset-anchor {
+		position: relative;
 	}
 	@media (max-width: 640px) {
 		.toolbar > button,
