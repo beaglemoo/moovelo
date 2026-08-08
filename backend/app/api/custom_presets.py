@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DbDep, UserDep
@@ -51,6 +51,14 @@ async def list_presets(db: DbDep, user: UserDep) -> list[CustomPresetResponse]:
 
 @router.post("", status_code=201)
 async def create_preset(body: CustomPresetCreate, db: DbDep, user: UserDep) -> CustomPresetResponse:
+    # The cap is a count-then-insert, which two concurrent creates would both
+    # pass on the same stale count. Nothing at the DB level enforces it (the
+    # unique constraint only covers names), so creates for one user are
+    # serialised with a transaction-scoped advisory lock - released
+    # automatically at commit/rollback, and it never blocks other users.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:uid)::bigint)"), {"uid": str(user.id)}
+    )
     count = await db.scalar(
         select(func.count()).select_from(CustomPreset).where(CustomPreset.user_id == user.id)
     )
