@@ -82,6 +82,10 @@ class ValhallaClient:
             "costing_options": {"bicycle": bicycle_options},
             "units": "kilometers",
         }
+        if request.exclude_locations:
+            payload["exclude_locations"] = [
+                {"lat": w.lat, "lon": w.lon} for w in request.exclude_locations
+            ]
         data = await self._post("/route", payload)
         return await self._parse_trip(data["trip"])
 
