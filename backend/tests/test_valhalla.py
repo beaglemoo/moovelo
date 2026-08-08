@@ -33,6 +33,10 @@ TRACE_ATTRS_FAIL = json.loads((FIXTURES / "trace_attributes_fail.json").read_tex
 # A real /isochrone response: 2 polygon features (30 and 60 minute contours),
 # captured against the dev Valhalla with the road preset.
 ISOCHRONE_REAL = json.loads((FIXTURES / "isochrone_real.json").read_text())
+# A real /route response with alternates: Tring -> Wendover, road preset,
+# "alternates": 2 requested. Valhalla returned only 1 (primary 8.237 km,
+# alternate 11.785 km) - fewer than requested is normal, not a failure.
+ROUTE_ALTERNATES_REAL = json.loads((FIXTURES / "route_alternates_real.json").read_text())
 
 TRIP_RESPONSE = {
     "trip": {
@@ -659,4 +663,82 @@ async def test_isochrone_valhalla_error_maps_to_422() -> None:
             denoise=0.25,
             generalize=None,
         )
+    assert exc.value.status_code == 422
+
+
+def make_alternates_request() -> RouteRequest:
+    return RouteRequest(
+        waypoints=[Waypoint(lat=51.7926, lon=-0.6606), Waypoint(lat=51.7645, lon=-0.7442)],
+        preset="road",
+    )
+
+
+@respx.mock
+async def test_route_still_parses_identically_after_the_parse_trip_refactor() -> None:
+    """route() delegates its RouteResponse construction to _parse_trip now,
+    but its own behaviour must be byte-identical - this pins the same
+    assertions test_route_success already makes."""
+    route_mock = respx.post(f"{BASE}/route").respond(json=TRIP_RESPONSE)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+
+    client = ValhallaClient(base_url=BASE)
+    result = await client.route(make_request())
+
+    assert result.distance_m == pytest.approx(1234.0)
+    assert result.duration_s == pytest.approx(296.0)
+    assert len(result.legs) == 1
+    assert len(result.legs[0].maneuvers) == 2
+    assert [p.elev_m for p in result.elevation] == [55.0, 60.5, 48.0]
+    assert result.ascent_m == pytest.approx(5.5)
+    assert result.descent_m == pytest.approx(12.5)
+
+    sent = json.loads(route_mock.calls[0].request.content)
+    assert "alternates" not in sent
+
+
+@respx.mock
+async def test_route_alternates_parses_primary_and_the_one_alternate_returned() -> None:
+    route_mock = respx.post(f"{BASE}/route").respond(json=ROUTE_ALTERNATES_REAL)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+
+    client = ValhallaClient(base_url=BASE)
+    primary, alternates = await client.route_alternates(make_alternates_request(), count=2)
+
+    assert primary.distance_m == pytest.approx(8237.0)
+    assert len(primary.legs) == 1
+    assert primary.legs[0].maneuvers
+
+    # 2 were requested, Valhalla returned only 1 - reflected as-is, not
+    # padded or treated as an error.
+    assert len(alternates) == 1
+    assert alternates[0].distance_m == pytest.approx(11785.0)
+    assert alternates[0].legs[0].maneuvers
+
+    sent = json.loads(route_mock.calls[0].request.content)
+    assert sent["alternates"] == 2
+    assert sent["costing"] == "bicycle"
+    assert sent["costing_options"]["bicycle"] == PRESETS["road"]
+
+
+@respx.mock
+async def test_route_alternates_none_returned_is_an_empty_list() -> None:
+    no_alternates = {"trip": ROUTE_ALTERNATES_REAL["trip"]}
+    respx.post(f"{BASE}/route").respond(json=no_alternates)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+
+    client = ValhallaClient(base_url=BASE)
+    primary, alternates = await client.route_alternates(make_alternates_request(), count=3)
+
+    assert primary.distance_m == pytest.approx(8237.0)
+    assert alternates == []
+
+
+@respx.mock
+async def test_route_alternates_valhalla_error_maps_to_422() -> None:
+    respx.post(f"{BASE}/route").respond(
+        status_code=400, json={"error": "No path could be found for input"}
+    )
+    client = ValhallaClient(base_url=BASE)
+    with pytest.raises(HTTPException) as exc:
+        await client.route_alternates(make_alternates_request(), count=2)
     assert exc.value.status_code == 422

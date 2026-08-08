@@ -658,3 +658,45 @@ export async function routeLoop(
 	}
 	return response.json();
 }
+
+export interface AlternatesResult {
+	primary: RouteResponse;
+	alternates: RouteResponse[];
+}
+
+/** Valhalla `alternates`, only ever valid for a single origin/destination
+ * pair (its own documented limitation) - `waypoints` here must be exactly
+ * 2 or the backend rejects it with a 422 before Valhalla is asked at all.
+ * Only ever called on an explicit "Alternatives" click, matching
+ * routeWeather/routeIsochrone/routeLoop's convention for calls the rider
+ * has to ask for. */
+export async function routeAlternates(
+	waypoints: [Waypoint, Waypoint],
+	preset: Preset,
+	costingOptions: BicycleCostingOptions | null = null,
+	count = 2,
+	signal?: AbortSignal
+): Promise<AlternatesResult> {
+	const response = await fetch('/api/route/alternates', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			waypoints,
+			preset,
+			costing_options: costingOptions,
+			count
+		}),
+		signal
+	});
+	if (!response.ok) {
+		let detail = `Alternate route search failed (${response.status})`;
+		try {
+			const body = await response.json();
+			if (typeof body.detail === 'string') detail = body.detail;
+		} catch {
+			// keep the generic message
+		}
+		throw new ApiError(response.status, detail);
+	}
+	return await response.json();
+}

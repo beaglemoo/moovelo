@@ -11,6 +11,8 @@ from app.config import settings
 from app.models import SearchIndexMeta
 from app.schemas import (
     MAX_ROUTE_POINTS,
+    AlternatesQuery,
+    AlternatesResponse,
     AppConfig,
     BicycleCostingOptions,
     ElevationPoint,
@@ -169,6 +171,26 @@ async def route_isochrone(
         generalize=body.generalize,
     )
     return IsochroneResponse.model_validate(data)
+
+
+@router.post("/route/alternates")
+async def route_alternates(
+    request: Request, body: AlternatesQuery, db: DbDep, user: UserDep
+) -> AlternatesResponse:
+    """Up to `body.count` alternative routes alongside the primary, for the
+    A-to-B pair AlternatesQuery restricts this to (see its docstring for
+    why). Both the primary and every alternate carry a ride_time, computed
+    for the caller's own rider settings, so adopting any of them keeps a
+    populated stats row rather than losing it until the route is re-planned.
+    """
+    client: ValhallaClient = request.app.state.valhalla
+    route_request = RouteRequest(
+        waypoints=body.waypoints, preset=body.preset, costing_options=body.costing_options
+    )
+    primary, alternates = await client.route_alternates(route_request, body.count)
+    primary = await with_ride_time(primary, db, user.id)
+    alternates = [await with_ride_time(alt, db, user.id) for alt in alternates]
+    return AlternatesResponse(primary=primary, alternates=alternates)
 
 
 @router.post("/route/loop")

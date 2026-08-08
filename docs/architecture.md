@@ -652,6 +652,48 @@ a timeout maps to 504 rather than leaving the rider staring at a spinner.
 Each returned `LoopCandidate` carries a full `RouteResponse` snapshot, so
 picking one in the frontend needs no second call back through the planner.
 
+## Route alternates
+
+`POST /api/route/alternates` asks Valhalla for other reasonable ways
+between the same two points, via its own `alternates` option on `/route`.
+This only ever means something for a single origin/destination pair - a
+via-waypoint route has no well-defined "alternative" per leg, and Valhalla
+does not document (or reliably support) requesting alternates for more than
+two locations - so `AlternatesQuery.waypoints` is bounded to exactly 2 by
+Pydantic, producing a 422 before Valhalla is ever asked, and the frontend
+disables the "Alternatives" button (with an explanatory `title`) the moment
+a route has more than two waypoints.
+
+`ValhallaClient.route()` and the new `route_alternates()` share a private
+`_parse_trip()` helper that turns one Valhalla `trip` object into a
+`RouteResponse` (legs, elevation, ascent/descent, climbs) - `route()` parses
+`data["trip"]`, `route_alternates()` parses that plus every entry of
+`data.get("alternates", [])`. Valhalla's own top-level shape for this call
+is `{"trip": {...}, "alternates": [{"trip": {...}}, ...]}`, undocumented
+upstream; a real capture (`tests/fixtures/route_alternates_real.json`,
+Tring -> Wendover, `"alternates": 2` requested) came back with only one
+alternate - **fewer than requested, or none at all, is normal**, not an
+error, and the response is simply as long as whatever Valhalla returned.
+
+Both the primary and every alternate get a `ride_time` via `with_ride_time`
+before the response leaves `/api/route/alternates`, so adopting any of them
+in the frontend keeps a populated stats row rather than showing nothing
+until the next reroute.
+
+The frontend only ever fetches on the explicit "Alternatives" click -
+matching the isochrone/loop/wind convention - and draws the results as
+muted ghost lines on the map (clickable - clicking one adopts it, same as
+its "Use" row in the small list beside the toolbar). Adopting an alternate
+is the first real use of `PlannerSnapshot.routeOverride` (see
+[Design decisions](#design-decisions)): the waypoints, preset and costing
+options are unchanged, only the route *output* is being swapped for one
+Valhalla already computed, so undo has to restore the previous response
+directly rather than replay `reroute()`, which would just fetch the primary
+again. The fetched list is invalidated - cleared, along with the ghost
+lines - by an `$effect` over `waypoints`, guarded against firing the instant
+a search populates the list by comparing against a plain (non-reactive)
+snapshot of the waypoints the fetch was made against.
+
 ## Organising the library
 
 Routes carry free-form organisation: `tags` (a Postgres `text[]` with a
@@ -726,9 +768,8 @@ backend/app/
 │                            #   Place, Poi, CycleWay, SearchIndexMeta
 ├── schemas.py               # request/response models
 ├── api/
-│   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface, /api/route/isochrone
 │   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface,
-│   │                        #   /api/route/loop
+│   │                        #   /api/route/isochrone, /api/route/loop, /api/route/alternates
 │   ├── places.py            # /api/places: search, reverse, pois-along-route
 │   ├── auth.py              # register/login/logout/me + OIDC flow
 │   ├── routes.py            # route CRUD, GPX/FIT export, share links, ride-time wiring
@@ -740,7 +781,7 @@ backend/app/
 └── services/
     ├── presets.py           # the three costing bundles + resolve_costing
     ├── polyline.py          # polyline6 decoder
-    ├── valhalla.py          # httpx client, error mapping, elevation, ascent calc
+    ├── valhalla.py          # httpx client, error mapping, elevation, ascent calc, _parse_trip (route/alternates)
     ├── ride_time.py         # gradient/surface/FTP model, computed on read only
     ├── loop.py              # "N km loop from here": bearing search + scoring + dedup
     ├── auth.py, oidc.py     # password hashing, sessions, OIDC client
@@ -823,13 +864,17 @@ about extract coverage when no roads are found near a waypoint.
   restores a snapshot by setting those inputs and calling `reroute()` -
   the same path an ordinary edit takes. `PlannerSnapshot.routeOverride` is
   the one deliberate exception, for actions that replace the route
-  *output* without changing any input (none yet; adopting an alternate
-  route will be the first), where replaying inputs through `reroute()`
-  cannot reproduce the exact response and the snapshot restores it
-  directly instead. Undo/redo bypass the imported-route `mayEdit()`
-  confirm - time travel is not a fresh editorial decision - which is safe
-  because `source` itself travels inside the snapshot, so undoing back
-  into an imported route's territory still shows it as imported.
+  *output* without changing any input, where replaying inputs through
+  `reroute()` cannot reproduce the exact response and the snapshot restores
+  it directly instead. Adopting a [route alternate](#route-alternates) is
+  the first real user of it: the waypoints/preset/costing are identical to
+  what is already on screen, only the route Valhalla returned is being
+  swapped for a different one it already computed, so there is no input
+  change for `reroute()` to replay. Undo/redo bypass the imported-route
+  `mayEdit()` confirm - time travel is not a fresh editorial decision -
+  which is safe because `source` itself travels inside the snapshot, so
+  undoing back into an imported route's territory still shows it as
+  imported.
 - **Waypoint list reordering is native HTML5 drag-and-drop plus
   always-present up/down buttons**, not a drag library: no new dependency,
   and the buttons are not a fallback - HTML5 drag-and-drop fires no events

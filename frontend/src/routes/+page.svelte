@@ -5,6 +5,7 @@
 		fetchConfig,
 		places,
 		planRoute,
+		routeAlternates,
 		routeIsochrone,
 		routeLoop,
 		routeSurface,
@@ -30,6 +31,7 @@
 	import { decodePolyline6 } from '$lib/polyline';
 	import { history, type PlannerSnapshot } from '$lib/history.svelte';
 	import { categoriesFor, DEFAULT_POI_GROUPS } from '$lib/pois';
+	import AlternatesPanel from '$lib/components/AlternatesPanel.svelte';
 	import ClimbsList from '$lib/components/ClimbsList.svelte';
 	import ElevationProfile from '$lib/components/ElevationProfile.svelte';
 	import LoopPanel from '$lib/components/LoopPanel.svelte';
@@ -120,6 +122,22 @@
 	let loopLoading = $state(false);
 	let loopError: string | null = $state(null);
 	let hoveredLoopIndex: number | null = $state(null);
+
+	// Route alternates ("Alternatives" button). Valhalla's `alternates` only
+	// ever applies to a single origin/destination pair, so this is an
+	// explicit button rather than something that runs alongside every
+	// reroute - see AlternatesQuery's docstring. alternatesOpen gates the
+	// panel; alternates itself stays null until the first search settles,
+	// distinguishing "hasn't searched yet" from "found nothing" ([]).
+	let alternatesOpen = $state(false);
+	let alternates: RouteResponse[] | null = $state(null);
+	let alternatesLoading = $state(false);
+	let alternatesError: string | null = $state(null);
+	let hoveredAlternateIndex: number | null = $state(null);
+	// The waypoints `alternates` was fetched against, as a plain (non-$state)
+	// snapshot - compared by value in the invalidation effect below, so
+	// populating `alternates` itself never trips that effect's own guard.
+	let alternatesFetchedFor: Waypoint[] | null = null;
 
 	let wahooStatus: WahooStatus | null = $state(null);
 	let wahooPush: 'idle' | 'working' | 'synced' | 'error' = $state('idle');
@@ -317,6 +335,14 @@
 		return loopCandidates.map((candidate, index) => ({
 			index,
 			coords: mergeLegLines(candidate.snapshot.legs.map((leg) => decodePolyline6(leg.geometry)))
+		}));
+	});
+
+	const alternatePreviews = $derived.by(() => {
+		if (!alternates) return null;
+		return alternates.map((alt, index) => ({
+			index,
+			coords: mergeLegLines(alt.legs.map((leg) => decodePolyline6(leg.geometry)))
 		}));
 	});
 
@@ -641,6 +667,7 @@
 		dirty = false;
 		hideIsochrone();
 		dismissLoop();
+		dismissAlternates();
 	}
 
 	function onLoop(wp: Waypoint) {
@@ -671,6 +698,70 @@
 		} finally {
 			loopLoading = false;
 		}
+	}
+
+	function sameWaypoints(a: Waypoint[], b: Waypoint[]): boolean {
+		return a.length === b.length && a.every((wp, i) => wp.lat === b[i].lat && wp.lon === b[i].lon);
+	}
+
+	// Any waypoint edit invalidates whatever alternates were fetched for the
+	// previous pair - reading `waypoints` is enough since every mutator
+	// reassigns or mutates this $state array. Guarded by comparing against
+	// alternatesFetchedFor (a plain snapshot, not itself reactive) so this
+	// does not fire the instant a search populates `alternates`.
+	$effect(() => {
+		const current = waypoints;
+		if (alternatesFetchedFor && !sameWaypoints(current, alternatesFetchedFor)) {
+			dismissAlternates();
+		}
+	});
+
+	function dismissAlternates() {
+		alternatesOpen = false;
+		alternates = null;
+		alternatesError = null;
+		alternatesLoading = false;
+		hoveredAlternateIndex = null;
+		alternatesFetchedFor = null;
+	}
+
+	async function findAlternates() {
+		if (waypoints.length !== 2 || alternatesLoading) return;
+		alternatesOpen = true;
+		alternatesLoading = true;
+		alternatesError = null;
+		alternates = null;
+		try {
+			const result = await routeAlternates(
+				[waypoints[0], waypoints[1]],
+				preset,
+				customCostingOptions
+			);
+			alternates = result.alternates;
+			alternatesFetchedFor = waypoints.map((wp) => ({ ...wp }));
+		} catch (err) {
+			alternatesError = err instanceof Error ? err.message : 'Alternate route search failed';
+		} finally {
+			alternatesLoading = false;
+		}
+	}
+
+	function useAlternate(index: number) {
+		if (!mayEdit()) return;
+		const picked = alternates?.[index];
+		if (!picked || !route) return;
+		// The first user of history's routeOverride escape hatch
+		// (history.svelte.ts): adopting an alternate replaces the route
+		// OUTPUT with no input change at all - the waypoints, preset and
+		// costing options that produced the route already on screen are
+		// exactly what produced this one too - so undo has to restore that
+		// prior response verbatim rather than replay reroute(), which would
+		// just fetch the current primary again.
+		history.push({ ...currentSnapshot(), routeOverride: route });
+		route = picked;
+		dirty = true;
+		editGeneration += 1;
+		dismissAlternates();
 	}
 
 	function useLoop(candidate: LoopCandidate) {
@@ -868,6 +959,9 @@
 				{onLoop}
 				{loopPreviews}
 				{hoveredLoopIndex}
+				alternateLines={alternatePreviews}
+				{hoveredAlternateIndex}
+				onAlternateClick={useAlternate}
 				onAddWaypoint={addWaypoint}
 				onMoveWaypoint={moveWaypoint}
 				onInsertVia={insertVia}
@@ -896,6 +990,18 @@
 				onDismiss={dismissLoop}
 			/>
 		{/if}
+		{#if alternatesOpen && route}
+			<AlternatesPanel
+				current={route}
+				loading={alternatesLoading}
+				error={alternatesError}
+				{alternates}
+				hoveredIndex={hoveredAlternateIndex}
+				onHover={(i) => (hoveredAlternateIndex = i)}
+				onUse={useAlternate}
+				onDismiss={dismissAlternates}
+			/>
+		{/if}
 		<div class="toolbar">
 			<div class="preset-anchor">
 				<PresetSelector
@@ -915,6 +1021,16 @@
 			</div>
 			<button type="button" onclick={undo} disabled={!history.canUndo}>Undo</button>
 			<button type="button" onclick={redo} disabled={!history.canRedo}>Redo</button>
+			<button
+				type="button"
+				onclick={findAlternates}
+				disabled={waypoints.length !== 2 || loading}
+				title={waypoints.length !== 2
+					? "Alternate routes are only available for routes with a single start and finish - Valhalla's own limitation"
+					: undefined}
+			>
+				{alternatesLoading ? 'Alternatives…' : 'Alternatives'}
+			</button>
 			<button type="button" onclick={clear} disabled={waypoints.length === 0}>Clear</button>
 			<button
 				type="button"

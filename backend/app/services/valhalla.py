@@ -83,7 +83,39 @@ class ValhallaClient:
             "units": "kilometers",
         }
         data = await self._post("/route", payload)
-        trip = data["trip"]
+        return await self._parse_trip(data["trip"])
+
+    async def route_alternates(
+        self, request: RouteRequest, count: int
+    ) -> tuple[RouteResponse, list[RouteResponse]]:
+        """Up to `count` alternative routes alongside the primary, for A-to-B
+        rides only - Valhalla's `alternates` only ever applies to a two
+        location request, which is why AlternatesQuery bounds waypoints to
+        exactly 2 before this is ever called.
+
+        Valhalla may return fewer than `count` (or none at all) when there is
+        only one reasonable way to go; that is normal, not a failure, so the
+        returned list is simply as long as whatever came back.
+        """
+        bicycle_options = resolve_costing(request.preset, request.costing_options)
+        payload: dict[str, Any] = {
+            "locations": [{"lat": w.lat, "lon": w.lon, "type": "break"} for w in request.waypoints],
+            "costing": "bicycle",
+            "costing_options": {"bicycle": bicycle_options},
+            "units": "kilometers",
+        }
+        payload["alternates"] = count
+        data = await self._post("/route", payload)
+        primary = await self._parse_trip(data["trip"])
+        alternates = [await self._parse_trip(alt["trip"]) for alt in data.get("alternates", [])]
+        return primary, alternates
+
+    async def _parse_trip(self, trip: dict[str, Any]) -> RouteResponse:
+        """Everything a Valhalla `trip` object needs to become a
+        RouteResponse: legs with their maneuvers, the concatenated shape's
+        elevation profile, and ascent/descent/climbs derived from it. Shared
+        by `route` and `route_alternates`, which each parse one or more
+        `trip`s out of the same `/route` response shape."""
         legs = [RouteLeg(geometry=leg["shape"], maneuvers=leg["maneuvers"]) for leg in trip["legs"]]
         shape = concat_shapes([decode_polyline6(leg.geometry) for leg in legs])
         elevation = await self._elevation_profile(shape)

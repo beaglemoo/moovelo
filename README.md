@@ -94,6 +94,14 @@ with turn-by-turn cues.
 - Isochrones: right-click any point on the map for "Isochrone from here" and
   see how far you can get in N minutes, drawn as a polygon overlay. Entirely
   self-hosted via Valhalla's own `/isochrone` - no third-party service.
+- Alternate routes for a straight A-to-B ride: an "Alternatives" button asks
+  Valhalla for other reasonable ways between the same two points, previewed
+  as ghost lines on the map with the distance/climbing difference against
+  what's on screen, and adopting one is undoable like any other edit. Only
+  available for a route with exactly one start and one finish - Valhalla's
+  own `alternates` option has no meaning for a route with via points, so the
+  button is disabled (with an explanation) the moment a route has more than
+  two waypoints.
 - Entirely self-hostable: routing (Valhalla), app, database, and
   optionally the map tiles run on your own hardware. The only external
   services are Wahoo's cloud and an optional weather provider, and only
