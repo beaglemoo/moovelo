@@ -21,6 +21,11 @@ with turn-by-turn cues.
 - Multi-step undo/redo over the whole editing session - not just the last
   waypoint - with Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z alongside the toolbar
   buttons. Clearing the route is undoable too.
+- Waypoint list panel: every waypoint in route order, named via reverse
+  geocoding where the place index is available, with up/down and remove
+  buttons on each row and drag-and-drop reordering. The buttons are the
+  accessible and touch path (drag-and-drop fires no events on touch), not
+  just a fallback.
 - Loop generator: "20 km loop from here" on the right-click menu tries
   several bearings around that point and binary-searches each one's radius
   until it finds an out-and-back route close to your target distance,

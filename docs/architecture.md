@@ -702,7 +702,8 @@ frontend/src/
     └── components/
         ├── PresetSelector.svelte
         ├── ElevationProfile.svelte   # custom SVG chart, no chart library
-        └── SurfaceBar.svelte         # paved/gravel/path stacked bar + cycleway %
+        ├── SurfaceBar.svelte         # paved/gravel/path stacked bar + cycleway %
+        └── WaypointList.svelte       # route-order list: reorder (drag or up/down), remove, reverse-geocoded names
 ```
 
 State lives in `+page.svelte` with Svelte 5 runes; `MapView` receives
@@ -829,6 +830,11 @@ about extract coverage when no roads are found near a waypoint.
   confirm - time travel is not a fresh editorial decision - which is safe
   because `source` itself travels inside the snapshot, so undoing back
   into an imported route's territory still shows it as imported.
+- **Waypoint list reordering is native HTML5 drag-and-drop plus
+  always-present up/down buttons**, not a drag library: no new dependency,
+  and the buttons are not a fallback - HTML5 drag-and-drop fires no events
+  at all on touch, so they are the only reordering path on a phone, which
+  is where this app is mostly used mid-ride.
 
 ## Ports
 
