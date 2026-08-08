@@ -2,12 +2,33 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 Preset = Literal["road", "gravel", "quiet"]
+# What a saved route's `preset` column may hold. "custom" marks a route
+# whose costing came from sliders rather than one of the three named
+# bundles - it is never a valid PRESETS key, so it is kept out of `Preset`,
+# which is passed straight into Valhalla-facing lookups.
+StoredPreset = Literal["road", "gravel", "quiet", "custom"]
 
 Latitude = Annotated[float, Field(ge=-90, le=90)]
 Longitude = Annotated[float, Field(ge=-180, le=180)]
+
+
+class BicycleCostingOptions(BaseModel):
+    """User-chosen overrides for Valhalla's bicycle costing, one request's
+    worth. `extra="forbid"` makes this model the server-side allowlist of
+    what a client may tune - validated at request parse, before anything
+    reaches Valhalla - and the bounds mirror services/presets.py's own
+    three bundles (see backend/tests/test_presets.py)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    bicycle_type: Literal["Road", "Hybrid", "Cross", "Mountain"]
+    cycling_speed: float = Field(ge=10, le=35)
+    use_roads: float = Field(ge=0, le=1)
+    use_hills: float = Field(ge=0, le=1)
+    avoid_bad_surfaces: float = Field(ge=0, le=1)
 
 
 class AppConfig(BaseModel):
@@ -160,6 +181,9 @@ class Waypoint(BaseModel):
 class RouteRequest(BaseModel):
     waypoints: list[Waypoint] = Field(min_length=2)
     preset: Preset = "road"
+    # When set, overrides `preset` entirely - see services/presets.py's
+    # resolve_costing, the one place that decision is made.
+    costing_options: BicycleCostingOptions | None = None
 
 
 class ElevationPoint(BaseModel):
@@ -244,7 +268,8 @@ class RouteSurfaceResponse(BaseModel):
 class RouteSaveRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     waypoints: list[Waypoint] = Field(min_length=2)
-    preset: Preset
+    preset: StoredPreset
+    costing_options: BicycleCostingOptions | None = None
     snapshot: RouteResponse
 
 
@@ -254,7 +279,11 @@ class RoutePatchRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=5000)
     is_favourite: bool | None = None
     waypoints: list[Waypoint] | None = Field(default=None, min_length=2)
-    preset: Preset | None = None
+    preset: StoredPreset | None = None
+    # Only applied when `preset` is also sent - the planner always resends
+    # both together, so this is what lets switching back to a named preset
+    # clear a previously stored custom bundle. See api/routes.py:update_route.
+    costing_options: BicycleCostingOptions | None = None
     snapshot: RouteResponse | None = None
 
 
@@ -304,6 +333,10 @@ class SavedRoute(RouteResponse):
     id: uuid.UUID
     name: str
     preset: str
+    # Echoed back so reloading a route can restore the sliders and the
+    # Custom pill - a plain dict, not BicycleCostingOptions, matching how
+    # it is stored (services/presets.py's BicycleOptions shape).
+    costing_options: dict[str, str | float | int] | None = None
     source: str = "planned"
     tags: list[str] = []
     notes: str | None = None
@@ -363,3 +396,31 @@ class WeatherAlongRoute(BaseModel):
     # or the request otherwise degraded rather than raising - the planner
     # says so instead of presenting an empty result as "no wind".
     truncated: bool
+
+
+class CustomPresetCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    options: BicycleCostingOptions
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, value: Any) -> Any:
+        # Stripped before the length bounds are checked, so a name that is
+        # only whitespace fails min_length rather than saving as blank.
+        return value.strip() if isinstance(value, str) else value
+
+
+class CustomPresetPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=60)
+    options: BicycleCostingOptions | None = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+
+class CustomPresetResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    options: BicycleCostingOptions

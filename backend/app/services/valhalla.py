@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from app.config import settings
 from app.schemas import (
+    BicycleCostingOptions,
     ElevationPoint,
     Preset,
     RouteLeg,
@@ -25,7 +26,7 @@ from app.services.geo import (
     resample_by_distance,
 )
 from app.services.polyline import decode_polyline6, encode_polyline6
-from app.services.presets import PRESETS
+from app.services.presets import PRESETS, resolve_costing
 
 MAX_ELEVATION_SAMPLES = 500
 
@@ -71,10 +72,11 @@ class ValhallaClient:
         return data
 
     async def route(self, request: RouteRequest) -> RouteResponse:
+        bicycle_options = resolve_costing(request.preset, request.costing_options)
         payload: dict[str, Any] = {
             "locations": [{"lat": w.lat, "lon": w.lon, "type": "break"} for w in request.waypoints],
             "costing": "bicycle",
-            "costing_options": {"bicycle": PRESETS[request.preset]},
+            "costing_options": {"bicycle": bicycle_options},
             "units": "kilometers",
         }
         data = await self._post("/route", payload)
@@ -180,7 +182,10 @@ class ValhallaClient:
         return trip
 
     async def trace_attributes(
-        self, legs: list[list[Point]], preset: Preset
+        self,
+        legs: list[list[Point]],
+        preset: Preset,
+        costing_options: BicycleCostingOptions | None = None,
     ) -> SurfaceBreakdown | None:
         """Per-edge surface, road class, use and cycle-lane presence along a
         route's own legs, aggregated into metres per bucket.
@@ -216,7 +221,7 @@ class ValhallaClient:
         chunks = [chunk for leg in usable_legs for chunk in _plain_chunks(leg, TRACE_MAX_POINTS)]
         try:
             results = await asyncio.gather(
-                *(self._attributes_chunk(chunk, preset) for chunk in chunks)
+                *(self._attributes_chunk(chunk, preset, costing_options) for chunk in chunks)
             )
         except HTTPException:
             return None
@@ -255,12 +260,17 @@ class ValhallaClient:
             cycle_lane_m=cycle_lane_m,
         )
 
-    async def _attributes_chunk(self, chunk: list[Point], preset: Preset) -> dict[str, Any]:
+    async def _attributes_chunk(
+        self,
+        chunk: list[Point],
+        preset: Preset,
+        costing_options: BicycleCostingOptions | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "shape": [{"lat": lat, "lon": lon} for lat, lon in chunk],
             "shape_match": "edge_walk",
             "costing": "bicycle",
-            "costing_options": {"bicycle": PRESETS[preset]},
+            "costing_options": {"bicycle": resolve_costing(preset, costing_options)},
             "units": "kilometers",
             "filters": {
                 "action": "include",
