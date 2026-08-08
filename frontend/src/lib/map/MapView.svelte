@@ -599,6 +599,13 @@
 
 	let longPressFired = false;
 
+	// One definition of "did this press land on the route line", shared by
+	// every menu-opening path so right-click and long-press can never
+	// disagree about whether "Avoid this road" is offered.
+	function isOnRoute(m: maplibregl.Map, point: maplibregl.PointLike): boolean {
+		return m.queryRenderedFeatures(point, { layers: ['route-hit'] }).length > 0;
+	}
+
 	function setupInteractions(m: maplibregl.Map) {
 		m.on('click', (e) => {
 			if (longPressFired) {
@@ -610,10 +617,15 @@
 				return;
 			}
 			// Grabbing the line handles its own interaction; plain map clicks add waypoints.
-			if (m.queryRenderedFeatures(e.point, { layers: ['route-hit'] }).length > 0) return;
-			// A click on a ghost alternate line adopts it, via the layer-specific
-			// handler below - it must not also add a waypoint underneath it.
-			if (m.queryRenderedFeatures(e.point, { layers: ['route-alternates-line'] }).length > 0) {
+			if (isOnRoute(m, e.point)) return;
+			// A click on a ghost line must not also add a waypoint underneath
+			// it: alternates adopt via their layer-specific handler, and loop
+			// previews are inspection-only while their card is open.
+			if (
+				m.queryRenderedFeatures(e.point, {
+					layers: ['route-alternates-line', 'loop-preview-line']
+				}).length > 0
+			) {
 				return;
 			}
 			onAddWaypoint({ lat: e.lngLat.lat, lon: e.lngLat.lng });
@@ -621,7 +633,7 @@
 
 		m.on('contextmenu', (e) => {
 			e.preventDefault();
-			const onRoute = m.queryRenderedFeatures(e.point, { layers: ['route-hit'] }).length > 0;
+			const onRoute = isOnRoute(m, e.point);
 			menu = {
 				x: e.point.x,
 				y: e.point.y,
@@ -647,7 +659,7 @@
 			pressTimer = setTimeout(() => {
 				pressTimer = null;
 				longPressFired = true;
-				const onRoute = m.queryRenderedFeatures(point, { layers: ['route-hit'] }).length > 0;
+				const onRoute = isOnRoute(m, point);
 				menu = {
 					x: point.x,
 					y: point.y,
