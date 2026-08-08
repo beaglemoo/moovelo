@@ -420,23 +420,34 @@ export async function fetchConfig(): Promise<AppConfig> {
 	}
 }
 
-/** Surface/road-class/use breakdown for a route line, via /trace_attributes
- * with edge_walk. Takes a signal because the route can change underneath a
- * request that is still in flight; resolves to null when the line does not
- * lie exactly on the routing graph (edge_walk fails by design) or the
- * request otherwise fails - surface is decorative, never blocking. */
+export interface RouteSurfaceResult {
+	surface: SurfaceBreakdown | null;
+	/** Empty when no elevation was sent - the caller then falls back to
+	 * whatever ride_time it already has. */
+	ride_time: RideTimePoint[];
+}
+
+/** Surface/road-class/use breakdown for a route, via /trace_attributes with
+ * edge_walk over each leg separately (a via-waypoint route's concatenated
+ * shape fails edge_walk at the joins). Optionally recomputes ride_time from
+ * the rider's settings against the fresh surface. Takes a signal because the
+ * route can change underneath a request that is still in flight; resolves to
+ * a null surface when a leg does not lie exactly on the routing graph
+ * (edge_walk fails by design) or the request otherwise fails - surface is
+ * decorative, never blocking. */
 export async function routeSurface(
-	line: [number, number][],
+	legs: [number, number][][],
 	preset: Preset,
+	elevation: ElevationPoint[] | null,
 	signal?: AbortSignal
-): Promise<SurfaceBreakdown | null> {
+): Promise<RouteSurfaceResult> {
 	const response = await fetch('/api/route/surface', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ line, preset }),
+		body: JSON.stringify({ legs, preset, elevation }),
 		signal
 	});
-	if (!response.ok) return null;
+	if (!response.ok) return { surface: null, ride_time: [] };
 	return await response.json();
 }
 
