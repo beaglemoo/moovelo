@@ -387,6 +387,29 @@ async def test_saving_with_custom_costing_persists_and_is_echoed_back(
     assert reloaded["costing_options"] == CUSTOM_OPTIONS
 
 
+async def test_saving_custom_preset_without_options_is_rejected(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    """preset="custom" with no bundle would KeyError inside PRESETS on the
+    next re-route (reverse), so the schema refuses to store it at all."""
+    await register(client)
+    body = custom_save_body(snapshot)
+    del body["costing_options"]
+    assert (await client.post("/api/routes", json=body)).status_code == 422
+
+
+async def test_patching_to_custom_preset_without_options_is_rejected(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    await register(client)
+    created = (await client.post("/api/routes", json=custom_save_body(snapshot))).json()
+    patched = await client.patch(
+        f"/api/routes/{created['id']}",
+        json={"preset": "custom", "waypoints": WAYPOINTS, "snapshot": snapshot.model_dump()},
+    )
+    assert patched.status_code == 422
+
+
 async def test_switching_back_to_a_named_preset_clears_stored_costing_options(
     client: AsyncClient, snapshot: RouteResponse
 ) -> None:
