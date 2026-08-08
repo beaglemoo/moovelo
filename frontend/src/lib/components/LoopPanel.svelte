@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAVED_SURFACES } from '$lib/surface';
 	import type { LoopCandidate } from '$lib/api';
 	import { km } from '$lib/format';
 
@@ -33,12 +34,10 @@
 	// three candidates, the same three colours.
 	const COLOURS = ['#268bd2', '#b58900', '#d33682'];
 
-	const PAVED_KEYS = ['paved_smooth', 'paved', 'paved_rough'];
-
 	function pavedPercent(candidate: LoopCandidate): number | null {
 		const surface = candidate.snapshot.surface;
 		if (!surface || surface.total_m <= 0) return null;
-		const paved = PAVED_KEYS.reduce((total, key) => total + (surface.surface_m[key] ?? 0), 0);
+		const paved = PAVED_SURFACES.reduce((total, key) => total + (surface.surface_m[key] ?? 0), 0);
 		return Math.round((paved / surface.total_m) * 100);
 	}
 
