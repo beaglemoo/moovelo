@@ -102,6 +102,11 @@ with turn-by-turn cues.
   own `alternates` option has no meaning for a route with via points, so the
   button is disabled (with an explanation) the moment a route has more than
   two waypoints.
+- Avoids: right-click a point on the route line for "Avoid this road", which
+  re-plans the route excluding it (Valhalla's `exclude_locations`). Avoided
+  points show as small markers with a chip you can remove. Avoided roads
+  apply while planning and are not saved with a route - the saved geometry
+  already reflects them.
 - Entirely self-hostable: routing (Valhalla), app, database, and
   optionally the map tiles run on your own hardware. The only external
   services are Wahoo's cloud and an optional weather provider, and only
