@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Climb } from '$lib/api';
 	import { categoryColour, categoryLabel } from '$lib/climbs';
+	import { km } from '$lib/format';
 
 	interface Props {
 		climbs: Climb[];
@@ -9,10 +10,6 @@
 	}
 
 	let { climbs, hoveredIndex, onHover }: Props = $props();
-
-	function km(metres: number): string {
-		return `${(metres / 1000).toFixed(1)} km`;
-	}
 
 	function at(metres: number): string {
 		return metres < 1000 ? `${Math.round(metres)} m` : `${(metres / 1000).toFixed(1)} km`;

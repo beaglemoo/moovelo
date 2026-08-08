@@ -239,3 +239,67 @@ async def test_weather_endpoint_returns_segments_when_enabled(
     assert body["truncated"] is False
     assert len(body["segments"]) == 1
     assert body["segments"][0]["wind_speed_ms"] == pytest.approx(1.0)
+
+
+@respx.mock
+async def test_http_date_retry_after_backs_off_instead_of_crashing(
+    weather_settings: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retry-After may legally be an HTTP-date, not delay-seconds - it must
+    fall back to the exponential default, not raise ValueError into a 500."""
+    single = {
+        "latitude": 51.0,
+        "longitude": -1.0,
+        "hourly": {
+            "time": ["2026-08-07T09:00"],
+            "wind_speed_10m": [3.0],
+            "wind_direction_10m": [180.0],
+        },
+    }
+    slept: list[float] = []
+
+    async def no_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(weather.asyncio, "sleep", no_sleep)
+    calls = respx.get(WEATHER_URL)
+    calls.side_effect = [
+        Response(429, headers={"Retry-After": "Wed, 07 Aug 2026 12:00:00 GMT"}),
+        Response(200, json=single),
+    ]
+    start = datetime(2026, 8, 7, 9, 0, tzinfo=UTC)
+
+    result = await weather_along_route(shape_of(SHORT_LINE), start, ride_time=None, duration_s=None)
+
+    assert calls.call_count == 2
+    assert slept == [2.0]
+    assert len(result.segments) == 1
+
+
+@respx.mock
+async def test_null_hourly_slot_skips_the_sample_not_the_request(weather_settings: None) -> None:
+    """Open-Meteo can return null for individual hourly slots at the edge of
+    the model's range; the sample is skipped as truncated, never a 500."""
+    single = {
+        "latitude": 51.0,
+        "longitude": -1.0,
+        "hourly": {
+            "time": ["2026-08-07T09:00"],
+            "wind_speed_10m": [None],
+            "wind_direction_10m": [None],
+        },
+    }
+    respx.get(WEATHER_URL).mock(return_value=Response(200, json=single))
+    start = datetime(2026, 8, 7, 9, 0, tzinfo=UTC)
+
+    result = await weather_along_route(shape_of(SHORT_LINE), start, ride_time=None, duration_s=None)
+
+    assert result.segments == []
+    assert result.truncated is True
+
+
+def test_cache_stays_bounded() -> None:
+    empty = weather.WeatherAlongRoute(segments=[], truncated=False)
+    for i in range(weather._CACHE_MAX_ENTRIES + 40):
+        weather._cache_set(f"key-{i}", empty)
+    assert len(weather._cache) <= weather._CACHE_MAX_ENTRIES
