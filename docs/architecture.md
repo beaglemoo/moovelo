@@ -39,9 +39,15 @@ flowchart LR
 
 ## Request flow for a route
 
-1. The browser POSTs `/api/route` with waypoints and a preset name.
-2. The backend looks up the preset's bicycle costing bundle
-   (`backend/app/services/presets.py`) and calls Valhalla `/route`.
+1. The browser POSTs `/api/route` with waypoints and a preset name (plus,
+   optionally, a custom costing bundle from the slider popover).
+2. The backend resolves what actually goes to Valhalla -
+   `services/presets.py`'s `resolve_costing`: the custom bundle when one was
+   sent, otherwise the named preset's bundle - and calls Valhalla `/route`.
+   `BicycleCostingOptions` (`schemas.py`) is the server-side allowlist for
+   custom values: `extra="forbid"` plus the same bounds as the three
+   presets, so nothing beyond the five tunable options ever reaches
+   Valhalla.
 3. The backend decodes the returned polyline6 legs, resamples the shape to
    at most 500 points, and calls Valhalla `/height` for the elevation
    profile. If elevation data was not built, the route still succeeds with
@@ -60,6 +66,19 @@ Routes are stored with their full response snapshot (legs with geometry
 and maneuvers, elevation series, stats) as JSONB plus a PostGIS
 linestring of the merged shape. Saving never re-routes; loading a saved
 route replays the snapshot. Alembic migrations run on backend startup.
+
+`routes.costing_options` is a sibling of `routes.preset`, not part of the
+snapshot: null when a named preset (`road`/`gravel`/`quiet`) was used,
+and the resolved `BicycleCostingOptions` bundle when `preset` is
+`"custom"`. It is set alongside `preset` at save time (both come from the
+same request) and carried forward unchanged by duplicate and reverse, so
+either operation re-routes (or, for duplicate, replays) with the same
+costing the original was saved with. A user's named custom presets live
+in their own `custom_presets` table (`GET/POST/PATCH/DELETE
+/api/custom-presets`, capped at 20 per user) and are purely a client-side
+convenience for populating the sliders - see
+[Design decisions](#design-decisions) for why routes do not reference
+them.
 
 Auth is session-cookie based: argon2 password hashes, a sha256-hashed
 token in a `sessions` table with a 30-day sliding expiry. The first
@@ -627,7 +646,7 @@ backend/app/
 ├── main.py                  # app factory, lifespan (valhalla client, wahoo worker), SPA static
 ├── config.py                # pydantic-settings, all env-driven
 ├── db.py                    # async engine + session factory
-├── models.py                # User, Session, Route, WahooAccount,
+├── models.py                # User, Session, Route, CustomPreset, WahooAccount,
 │                            #   Place, Poi, CycleWay, SearchIndexMeta
 ├── schemas.py               # request/response models
 ├── api/
@@ -635,12 +654,13 @@ backend/app/
 │   ├── places.py            # /api/places: search, reverse, pois-along-route
 │   ├── auth.py              # register/login/logout/me + OIDC flow
 │   ├── routes.py            # route CRUD, GPX/FIT export, share links, ride-time wiring
+│   ├── custom_presets.py    # CRUD for saved costing-slider bundles
 │   ├── settings.py          # GET/PATCH /api/settings, get_or_default_settings
 │   ├── wahoo.py             # connect/callback/status/push
 │   └── admin.py             # /api/admin (admin accounts only)
 ├── alembic/                 # migrations, run on startup
 └── services/
-    ├── presets.py           # the three costing bundles + rationale
+    ├── presets.py           # the three costing bundles + resolve_costing
     ├── polyline.py          # polyline6 decoder
     ├── valhalla.py          # httpx client, error mapping, elevation, ascent calc
     ├── ride_time.py         # gradient/surface/FTP model, computed on read only
@@ -691,6 +711,13 @@ about extract coverage when no roads are found near a waypoint.
 - **Snapshot-based persistence**: saved routes replay their stored
   response instead of re-routing, so a library route never silently
   changes when routing data is refreshed.
+- **Resolved costing, not a preset foreign key**: a route saved with
+  custom sliders stores the resolved `BicycleCostingOptions` bundle
+  directly on `routes.costing_options` rather than a reference to a row in
+  `custom_presets`. Renaming or deleting a saved preset therefore never
+  changes what a route that was saved while it was selected actually
+  routes with - the same reasoning as snapshot-based persistence, applied
+  to costing instead of the route line.
 - **In-process push queue** rather than a broker: a single worker task is
   plenty for a personal instance, serializes calls under Wahoo's rate
   limits, and route-row status makes it restart-safe without extra
