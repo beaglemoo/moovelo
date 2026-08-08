@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 Preset = Literal["road", "gravel", "quiet"]
 # What a saved route's `preset` column may hold. "custom" marks a route
@@ -424,3 +424,47 @@ class CustomPresetResponse(BaseModel):
     id: uuid.UUID
     name: str
     options: BicycleCostingOptions
+
+
+class IsochroneContour(BaseModel):
+    """One reachability ring: either a time or a distance contour, never
+    both - Valhalla's own `/isochrone` takes a list of contours each keyed
+    by exactly one of `time` (minutes) or `distance` (km)."""
+
+    minutes: float | None = Field(default=None, gt=0, le=240)
+    km: float | None = Field(default=None, gt=0, le=200)
+    # Valhalla wants this sans "#"; the frontend strips it before sending.
+    color: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{6}$")
+
+    @model_validator(mode="after")
+    def _exactly_one_of_minutes_or_km(self) -> "IsochroneContour":
+        if (self.minutes is None) == (self.km is None):
+            raise ValueError("Set exactly one of minutes or km.")
+        return self
+
+
+class IsochroneQuery(BaseModel):
+    origin: Waypoint
+    # Valhalla's own limit on contours per request.
+    contours: list[IsochroneContour] = Field(min_length=1, max_length=4)
+    preset: Preset = "road"
+    # Overrides `preset` entirely when set - see resolve_costing.
+    costing_options: BicycleCostingOptions | None = None
+    polygons: bool = True
+    denoise: float = Field(default=0.25, ge=0, le=1)
+    generalize: float | None = Field(default=None, ge=0)
+
+
+class IsochroneResponse(BaseModel):
+    """Valhalla's own GeoJSON, passed through untouched.
+
+    `extra="allow"` plus only the two fields MapLibre actually needs
+    (`type`, `features`) means whatever else Valhalla's isochrone response
+    carries - it varies by version - reaches the frontend unmolested rather
+    than being silently stripped by a model that tried to fully describe it.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+    features: list[dict[str, Any]]

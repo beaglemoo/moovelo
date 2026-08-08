@@ -1,4 +1,5 @@
-"""Client for the Valhalla routing engine: /route, /trace_route and /height."""
+"""Client for the Valhalla routing engine: /route, /trace_route, /height and
+/isochrone."""
 
 import asyncio
 import contextlib
@@ -11,11 +12,13 @@ from app.config import settings
 from app.schemas import (
     BicycleCostingOptions,
     ElevationPoint,
+    IsochroneContour,
     Preset,
     RouteLeg,
     RouteRequest,
     RouteResponse,
     SurfaceBreakdown,
+    Waypoint,
 )
 from app.services.climbs import detect_climbs
 from app.services.geo import (
@@ -26,7 +29,7 @@ from app.services.geo import (
     resample_by_distance,
 )
 from app.services.polyline import decode_polyline6, encode_polyline6
-from app.services.presets import PRESETS, resolve_costing
+from app.services.presets import PRESETS, BicycleOptions, resolve_costing
 
 MAX_ELEVATION_SAMPLES = 500
 
@@ -94,6 +97,46 @@ class ValhallaClient:
             elevation=elevation,
             climbs=detect_climbs(elevation),
         )
+
+    async def isochrone(
+        self,
+        origin: Waypoint,
+        contours: list[IsochroneContour],
+        costing: BicycleOptions,
+        *,
+        polygons: bool,
+        denoise: float,
+        generalize: float | None,
+    ) -> dict[str, Any]:
+        """How far can I get in N minutes, as Valhalla's own GeoJSON.
+
+        Returned as a plain dict rather than decoded into our own shapes:
+        the polygons are drawn straight onto the map by MapLibre, and
+        `IsochroneResponse`'s `extra="allow"` is what lets Valhalla's own
+        per-feature styling (fill/color/opacity) reach it untouched.
+        """
+        contour_payload: list[dict[str, Any]] = []
+        for contour in contours:
+            entry: dict[str, Any] = (
+                {"time": contour.minutes}
+                if contour.minutes is not None
+                else {"distance": contour.km}
+            )
+            if contour.color is not None:
+                entry["color"] = contour.color
+            contour_payload.append(entry)
+        payload: dict[str, Any] = {
+            "locations": [{"lat": origin.lat, "lon": origin.lon}],
+            "costing": "bicycle",
+            "costing_options": {"bicycle": costing},
+            "contours": contour_payload,
+            "polygons": polygons,
+            "denoise": denoise,
+            "units": "kilometers",
+        }
+        if generalize is not None:
+            payload["generalize"] = generalize
+        return await self._post("/isochrone", payload)
 
     async def trace_route(self, shape: list[Point], preset: Preset) -> RouteResponse:
         """Snap an imported track to the road network, gaining maneuvers.
