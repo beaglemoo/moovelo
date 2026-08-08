@@ -607,3 +607,54 @@ export async function routeIsochrone(
 	}
 	return await response.json();
 }
+
+/** One candidate loop: an ordinary out-and-back route through a single via
+ * point, with its full RouteResponse snapshot already computed - picking
+ * one needs no second round trip to plan it again. */
+export interface LoopCandidate {
+	waypoints: Waypoint[];
+	snapshot: RouteResponse;
+	distance_error_km: number;
+	score: number;
+}
+
+export interface LoopCandidatesResponse {
+	candidates: LoopCandidate[];
+}
+
+/** "N km loop from here" (services/loop.py): dozens of LAN Valhalla round
+ * trips server-side, so this call is legitimately slow - no artificial
+ * client-side timeout is applied, unlike planRoute and routeSurface.
+ * The active preset rides along so candidates route (and score their
+ * surface mix) the way the rider actually rides; a custom-costing bundle
+ * overrides it entirely - see resolve_costing. */
+export async function routeLoop(
+	origin: Waypoint,
+	targetKm: number,
+	preset: Preset,
+	costingOptions: BicycleCostingOptions | null = null,
+	signal?: AbortSignal
+): Promise<LoopCandidatesResponse> {
+	const response = await fetch('/api/route/loop', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			origin,
+			target_km: targetKm,
+			preset,
+			costing_options: costingOptions
+		}),
+		signal
+	});
+	if (!response.ok) {
+		let detail = `Loop search failed (${response.status})`;
+		try {
+			const body = await response.json();
+			if (typeof body.detail === 'string') detail = body.detail;
+		} catch {
+			// keep the generic message
+		}
+		throw new Error(detail);
+	}
+	return response.json();
+}
