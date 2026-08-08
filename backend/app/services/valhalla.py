@@ -179,9 +179,22 @@ class ValhallaClient:
         trip: dict[str, Any] = (await self._post("/trace_route", payload))["trip"]
         return trip
 
-    async def trace_attributes(self, shape: list[Point], preset: Preset) -> SurfaceBreakdown | None:
+    async def trace_attributes(
+        self, legs: list[list[Point]], preset: Preset
+    ) -> SurfaceBreakdown | None:
         """Per-edge surface, road class, use and cycle-lane presence along a
-        route's own shape, aggregated into metres per bucket.
+        route's own legs, aggregated into metres per bucket.
+
+        Takes the route's own legs rather than one concatenated shape. At a
+        via waypoint, leg N ends and leg N+1 begins at the same coordinate
+        but arriving and departing on different edges, so the concatenated
+        shape is discontinuous there - and edge_walk fails outright on
+        whichever chunk straddles that discontinuity, not just loses a few
+        edges near it. Reproduced live: two legs that individually matched
+        fine (56 and 80 edges) summed to nothing at all (422 edges expected,
+        None returned) once concatenated and chunked together. Chunks are
+        therefore built per leg, via `_plain_chunks`, and a chunk must never
+        span a leg boundary.
 
         Deliberately the opposite failure policy to trace_route: there, a
         5xx propagates because a lost turn cue has to be retried rather than
@@ -192,9 +205,15 @@ class ValhallaClient:
         unmatched imported track fails it by design, and that must not block
         saving the route it describes.
         """
-        if len(shape) < 2:
+        # A leg of fewer than 2 points has no edge to walk and Valhalla
+        # would reject it outright; dropping it costs at most a few metres
+        # of surface, not the whole breakdown.
+        usable_legs = [leg for leg in legs if len(leg) >= 2]
+        if not usable_legs:
             return None
-        chunks = _plain_chunks(shape, TRACE_MAX_POINTS)
+        # Every leg's chunks are independent requests regardless of which
+        # leg produced them, so they are flattened and gathered together.
+        chunks = [chunk for leg in usable_legs for chunk in _plain_chunks(leg, TRACE_MAX_POINTS)]
         try:
             results = await asyncio.gather(
                 *(self._attributes_chunk(chunk, preset) for chunk in chunks)

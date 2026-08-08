@@ -6,6 +6,8 @@ import respx
 from httpx import AsyncClient
 
 from app.main import app
+from app.schemas import ElevationPoint
+from app.services.climbs import detect_climbs
 from app.services.importer import MAX_FILE_BYTES
 from app.services.polyline import encode_polyline6
 from app.services.valhalla import ValhallaClient
@@ -181,6 +183,55 @@ async def test_reverse_works_for_an_unmatched_import(client: AsyncClient) -> Non
 
     assert response.status_code == 201, response.text
     assert response.json()["name"].endswith("(reversed)")
+
+
+@respx.mock
+async def test_reverse_of_a_matched_import_falls_back_to_reversed_elevation(
+    client: AsyncClient,
+) -> None:
+    """A route that matched forwards (with a real elevation profile from
+    Valhalla's own /height) but fails to match in reverse must not lose
+    that profile - match_or_keep's unmatched fallback carries elevation=[],
+    so the endpoint has to backfill it from the stored, now-reversed route
+    rather than silently discarding it."""
+    respx.post(f"{VALHALLA}/trace_route").mock(
+        side_effect=[
+            httpx.Response(200, json=TRACE_RESPONSE),
+            httpx.Response(400, json={"error": "No suitable edges near location"}),
+        ]
+    )
+    respx.post(f"{VALHALLA}/height").respond(json=HEIGHT_RESPONSE)
+    respx.post(f"{VALHALLA}/trace_attributes").respond(json=TRACE_ATTRS_RESPONSE)
+    await register(client)
+
+    imported = (await upload(client)).json()
+    assert imported["legs"][0]["maneuvers"] != []
+    # HEIGHT_RESPONSE: (0, 55.0), (900, 63.0), (1930, 48.0) -> ascent 8.0.
+    assert imported["ascent_m"] == pytest.approx(8.0)
+    assert [p["elev_m"] for p in imported["elevation"]] == [55.0, 63.0, 48.0]
+
+    response = await client.post(f"/api/routes/{imported['id']}/reverse")
+
+    assert response.status_code == 201, response.text
+    reversed_route = response.json()
+    # The reverse-direction match failed, so this only passes if the
+    # elevation was backfilled from the stored (forward) profile.
+    assert reversed_route["legs"][0]["maneuvers"] == []
+    assert reversed_route["elevation"] != []
+    # Distances flip around the route's own length, and ascent/descent swap
+    # as a natural result: forward ascent 8.0 becomes reversed descent 8.0.
+    assert reversed_route["descent_m"] == pytest.approx(8.0)
+    assert reversed_route["ascent_m"] == pytest.approx(15.0)
+    assert [p["elev_m"] for p in reversed_route["elevation"]] == [48.0, 63.0, 55.0]
+    dists = [p["dist_m"] for p in reversed_route["elevation"]]
+    assert dists == pytest.approx([0.0, 1030.0, 1930.0])
+    # Climbs are recomputed over the reversed profile too, not left stale.
+    assert reversed_route["climbs"] == detect_climbs_of(reversed_route["elevation"])
+
+
+def detect_climbs_of(elevation: list[dict[str, float]]) -> list[dict[str, object]]:
+    points = [ElevationPoint(**p) for p in elevation]
+    return [c.model_dump() for c in detect_climbs(points)]
 
 
 async def test_upload_larger_than_the_cap_is_refused(client: AsyncClient) -> None:

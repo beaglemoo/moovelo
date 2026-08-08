@@ -48,6 +48,11 @@
 	let savedId: string | null = $state(null);
 	let savedName: string | null = $state(null);
 	let dirty = $state(false);
+	// Bumped at every site that sets `dirty = true`. A save that started
+	// before a later edit landed must not clear `dirty` for that later edit -
+	// it captures this before its own await chain and only clears dirty if
+	// nothing has bumped it since.
+	let editGeneration = 0;
 	let saveDialogOpen = $state(false);
 	let saveNameInput = $state('');
 	let saving = $state(false);
@@ -263,26 +268,38 @@
 	let surfacePending: Promise<void> | null = null;
 
 	// Refetch the surface breakdown whenever the route or preset changes.
-	// Written straight onto `route.surface` (rather than replacing `route`
-	// itself) so the existing save path persists it with zero
-	// special-casing, without reassigning `route` wholesale - which would
-	// retrigger routeLine's own derivation and loop this effect back on
-	// itself.
+	// Sent per-leg (a via-waypoint route's concatenated shape fails
+	// edge_walk at the joins) and with the route's own elevation, so the
+	// response also carries a ride_time recomputed against the fresh
+	// surface. Written straight onto `route.surface`/`route.ride_time`
+	// (rather than replacing `route` itself) so the existing save path
+	// persists it with zero special-casing, without reassigning `route`
+	// wholesale - which would retrigger decodedLegs' own derivation and
+	// loop this effect back on itself. `route.elevation` only changes when
+	// `route` itself is replaced (by reroute or by loading a saved route),
+	// which already retriggers this effect via `decodedLegs` (derived from
+	// `route.legs`), so reading it here does not need to be tracked
+	// separately.
 	$effect(() => {
-		const line = routeLine;
+		const legs = decodedLegs;
 		const currentPreset = preset;
+		const elevation = route?.elevation ?? null;
 		surfaceController?.abort();
-		if (line.length < 2) {
+		if (legs.length === 0) {
 			if (route) route.surface = null;
 			surfacePending = null;
 			return;
 		}
 		const controller = new AbortController();
 		surfaceController = controller;
-		surfacePending = routeSurface(line, currentPreset, controller.signal)
+		surfacePending = routeSurface(legs, currentPreset, elevation, controller.signal)
 			.then((result) => {
 				if (controller.signal.aborted || !route) return;
-				route.surface = result;
+				route.surface = result.surface;
+				// The live estimate starts paved-equivalent (plan_route computes
+				// it before the surface breakdown exists); this is what refines
+				// it once the real surface is known.
+				if (result.ride_time.length) route.ride_time = result.ride_time;
 			})
 			.catch(() => {
 				if (controller.signal.aborted || !route) return;
@@ -303,6 +320,10 @@
 		windSegments = [];
 		windTruncated = false;
 		windError = null;
+		// The abort above never resolves showWind's own finally (an aborted
+		// fetch's promise settles asynchronously, after this effect has
+		// already run), so it must reset the spinner itself here too.
+		windLoading = false;
 	});
 
 	function nextFullHourLocal(): string {
@@ -338,7 +359,11 @@
 			windTruncated = false;
 			windError = err instanceof Error ? err.message : 'Weather lookup failed';
 		} finally {
-			if (!controller.signal.aborted) windLoading = false;
+			// Only clear the spinner for the request that is still current -
+			// a newer "Show wind" click (or the route-change effect) may
+			// already have moved windController on, and its own spinner must
+			// not be clobbered by this older request settling late.
+			if (windController === controller) windLoading = false;
 		}
 	}
 
@@ -356,6 +381,7 @@
 			route = await planRoute(waypoints, preset, abortController.signal);
 			loading = false;
 			dirty = true;
+			editGeneration += 1;
 		} catch (err) {
 			if (err instanceof DOMException && err.name === 'AbortError') return;
 			loading = false;
@@ -452,6 +478,19 @@
 		if (saveDialogOpen && saveNameInput === fallback) saveNameInput = suggestion;
 	}
 
+	// Waits out the surface fetch in flight when called, and any newer one
+	// that starts while waiting - guards against drag, save, drag again
+	// before the first fetch settles, where a bare `await surfacePending`
+	// would resolve against a promise a later reroute has already replaced
+	// and let save proceed with a stale (or null) surface.
+	async function awaitSurfaceSettled() {
+		while (surfacePending) {
+			const pending = surfacePending;
+			await pending;
+			if (pending === surfacePending) break; // nothing newer started while we waited
+		}
+	}
+
 	async function save() {
 		if (!route || waypoints.length < 2) return;
 		if (savedId === null) {
@@ -461,13 +500,17 @@
 			void suggestName(fallback);
 			return;
 		}
+		// Captured before the surface/HTTP round trip: a newer edit landing
+		// during the await must not have its dirty flag cleared by this
+		// save, which is only persisting the route as it was when clicked.
+		const gen = editGeneration;
 		saving = true;
 		try {
-			// A save racing the surface fetch would persist the reroute
-			// response's null surface over a stored breakdown.
-			await surfacePending;
-			await routes.update(savedId, { waypoints, preset, snapshot: route });
-			dirty = false;
+			await awaitSurfaceSettled();
+			const snapshot = route;
+			if (!snapshot) return;
+			await routes.update(savedId, { waypoints, preset, snapshot });
+			if (gen === editGeneration) dirty = false;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Save failed';
 		} finally {
@@ -490,18 +533,22 @@
 	async function confirmSave(event: SubmitEvent) {
 		event.preventDefault();
 		if (!route || !saveNameInput.trim()) return;
+		// See save(): a newer edit during the await must keep dirty set.
+		const gen = editGeneration;
 		saving = true;
 		try {
-			await surfacePending;
+			await awaitSurfaceSettled();
+			const snapshot = route;
+			if (!snapshot) return;
 			const saved = await routes.create({
 				name: saveNameInput.trim(),
 				waypoints,
 				preset,
-				snapshot: route
+				snapshot
 			});
 			savedId = saved.id;
 			savedName = saved.name;
-			dirty = false;
+			if (gen === editGeneration) dirty = false;
 			saveDialogOpen = false;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Save failed';

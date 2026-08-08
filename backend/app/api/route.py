@@ -1,24 +1,28 @@
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 
 from app.api.deps import DbDep, UserDep
 from app.api.routes import with_ride_time
+from app.api.settings import get_or_default_settings
 from app.config import settings
 from app.models import SearchIndexMeta
 from app.schemas import (
     MAX_ROUTE_POINTS,
     AppConfig,
+    ElevationPoint,
     Latitude,
     Longitude,
     Preset,
+    RideTimePoint,
     RouteRequest,
     RouteResponse,
-    SurfaceBreakdown,
+    RouteSurfaceResponse,
     WeatherAlongRoute,
     WeatherQuery,
 )
-from app.services.valhalla import ValhallaClient
+from app.services.ride_time import compute_ride_time
+from app.services.valhalla import MAX_ELEVATION_SAMPLES, ValhallaClient
 from app.services.weather import WeatherError, weather_along_route
 
 router = APIRouter(prefix="/api")
@@ -54,23 +58,61 @@ async def plan_route(
 
 
 class RouteSurfaceQuery(BaseModel):
-    """A route line to break down by surface, sent rather than a route id so
-    the planner can ask before anything is saved."""
+    """A route's own legs (and, optionally, its elevation) to break down by
+    surface, sent rather than a route id so the planner can ask before
+    anything is saved."""
 
-    # [lon, lat], matching GeoJSON and PoiQuery.line.
-    line: list[tuple[Longitude, Latitude]] = Field(min_length=2, max_length=MAX_ROUTE_POINTS)
+    # One [lon, lat] array per route leg (GeoJSON order, matching
+    # PoiQuery.line), each needing at least 2 points to be traced. Legs stay
+    # separate rather than concatenated: a via waypoint's legs meet at a
+    # shared coordinate but arrive/depart on different edges, and
+    # ValhallaClient.trace_attributes fails outright on a chunk straddling
+    # that discontinuity.
+    legs: list[list[tuple[Longitude, Latitude]]] = Field(min_length=1)
     preset: Preset = "road"
+    # When given, the response also carries a surface-aware ride_time -
+    # otherwise plan_route's own paved-equivalent estimate is the only one
+    # the planner has until the route is saved.
+    elevation: list[ElevationPoint] | None = Field(
+        default=None, max_length=MAX_ELEVATION_SAMPLES * 2
+    )
+
+    @model_validator(mode="after")
+    def _check_leg_lengths_and_total(self) -> "RouteSurfaceQuery":
+        for leg in self.legs:
+            if len(leg) < 2:
+                raise ValueError("Each leg needs at least 2 points.")
+        total = sum(len(leg) for leg in self.legs)
+        if total > MAX_ROUTE_POINTS:
+            raise ValueError(f"Route has too many points (max {MAX_ROUTE_POINTS}).")
+        return self
 
 
 @router.post("/route/surface")
 async def route_surface(
-    request: Request, body: RouteSurfaceQuery, _user: UserDep
-) -> SurfaceBreakdown | None:
+    request: Request, body: RouteSurfaceQuery, user: UserDep, db: DbDep
+) -> RouteSurfaceResponse:
+    """Surface breakdown for the given legs and, when elevation is supplied,
+    a ride-time estimate computed with that breakdown.
+
+    This is how the planner's live estimate becomes surface-aware before a
+    route is ever saved: plan_route runs before any surface breakdown
+    exists, so without this the displayed time always assumes factor 1.0
+    (paved). Folding both into one request avoids a second round trip -
+    and a second latency hit - added to /api/route itself.
+    """
     client: ValhallaClient = request.app.state.valhalla
-    # The line arrives as [lon, lat] (GeoJSON order); ValhallaClient shapes
-    # are (lat, lon), matching PoiQuery's handling of the same ordering.
-    shape = [(lat, lon) for lon, lat in body.line]
-    return await client.trace_attributes(shape, body.preset)
+    # [lon, lat] per leg (GeoJSON order) in; ValhallaClient legs are
+    # (lat, lon), matching PoiQuery's handling of the same ordering.
+    legs = [[(lat, lon) for lon, lat in leg] for leg in body.legs]
+    surface = await client.trace_attributes(legs, body.preset)
+    ride_time: list[RideTimePoint] = []
+    if body.elevation is not None:
+        # Computed even when surface is None (factor 1.0), matching
+        # plan_route's own behaviour for a route with no breakdown yet.
+        settings_ = await get_or_default_settings(db, user.id)
+        ride_time = compute_ride_time(body.elevation, surface, settings_)
+    return RouteSurfaceResponse(surface=surface, ride_time=ride_time)
 
 
 @router.post("/route/weather")

@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from app.schemas import ElevationPoint, Preset, RouteLeg, RouteResponse, Waypoint
 from app.services.climbs import detect_climbs
-from app.services.geo import Point, concat_shapes, cumulative_distances, resample_by_distance
+from app.services.geo import Point, cumulative_distances, resample_by_distance
 from app.services.importer import ImportedTrack, elevation_profile, parse_route_file
 from app.services.polyline import decode_polyline6, encode_polyline6
 from app.services.valhalla import TRACE_SPACING_M, ValhallaClient, ascent_descent
@@ -88,9 +88,10 @@ async def import_route(
 
     # Surface is decorative: an unmatched track fails edge_walk by design and
     # must not block the import, so this is fetched after everything that
-    # can raise has already succeeded.
-    shape = concat_shapes([decode_polyline6(leg.geometry) for leg in snapshot.legs])
-    surface = await valhalla.trace_attributes(shape, preset)
+    # can raise has already succeeded. Legs, not one concatenated shape -
+    # see ValhallaClient.trace_attributes.
+    legs = [decode_polyline6(leg.geometry) for leg in snapshot.legs]
+    surface = await valhalla.trace_attributes(legs, preset)
     if surface is not None:
         snapshot = snapshot.model_copy(update={"surface": surface})
 

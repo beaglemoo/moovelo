@@ -2,6 +2,7 @@ import uuid
 
 from fastapi import APIRouter
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DbDep, UserDep
@@ -52,10 +53,26 @@ async def update_settings(
             ftp_watts=changes.get("ftp_watts"),
         )
         db.add(row)
+        try:
+            await db.commit()
+        except IntegrityError:
+            # Two concurrent first PATCHes from the same user both pass the
+            # select above (neither row exists yet) and both try to insert
+            # the same user_id primary key; the loser hits this rather than
+            # blocking on the winner. Recover instead of 500ing: the row now
+            # exists, so re-select it and apply this request's changes on
+            # top rather than losing them.
+            await db.rollback()
+            row = (
+                await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
+            ).scalar_one()
+            for field, value in changes.items():
+                setattr(row, field, value)
+            await db.commit()
     else:
         for field, value in changes.items():
             setattr(row, field, value)
-    await db.commit()
+        await db.commit()
     await db.refresh(row)
     return UserSettingsResponse(
         weight_kg=row.weight_kg, flat_speed_kmh=row.flat_speed_kmh, ftp_watts=row.ftp_watts

@@ -74,7 +74,7 @@
 				<span>FTP (W, optional)</span>
 				<input
 					type="number"
-					min="0"
+					min="1"
 					max="2000"
 					step="1"
 					bind:value={ftpWatts}
