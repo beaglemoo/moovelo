@@ -18,6 +18,14 @@ with turn-by-turn cues.
   marker to move it, or grab the route line itself and drag it to insert a
   via point exactly where you drop it. Right-click for a
   context menu (route from here, add waypoint, route to here, remove).
+- Loop generator: "20 km loop from here" on the right-click menu tries
+  several bearings around that point and binary-searches each one's radius
+  until it finds an out-and-back route close to your target distance,
+  scored on distance accuracy, climbing and surface mix. Up to three
+  distinct candidates are previewed on the map together; picking one lands
+  as an ordinary, already-routed, editable route - no round trip back
+  through the planner. Valhalla has no round-trip API of its own, so this
+  is built entirely from routing calls it already exposes.
 - Three bicycle presets - road, gravel, quiet - implemented as Valhalla
   costing bundles with genuinely different routing behavior (see
   [Routing presets](#routing-presets)). A "Custom…" pill exposes the same
