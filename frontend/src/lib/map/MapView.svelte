@@ -76,6 +76,14 @@
 		 * drawn as ghost lines while its card is open. */
 		loopPreviews?: { index: number; coords: [number, number][] }[] | null;
 		hoveredLoopIndex?: number | null;
+		/** Up to a few Valhalla `alternates`, drawn as ghost lines while the
+		 * Alternatives list is open. Unlike loopPreviews these are never
+		 * colour-coded per candidate (they are all one A-to-B pair) - hover
+		 * alone distinguishes them. */
+		alternateLines?: { index: number; coords: [number, number][] }[] | null;
+		hoveredAlternateIndex?: number | null;
+		/** Clicking a ghost line adopts that alternate. */
+		onAlternateClick?: (index: number) => void;
 	}
 
 	let {
@@ -104,6 +112,9 @@
 		onLoop,
 		loopPreviews = null,
 		hoveredLoopIndex = null,
+		alternateLines = null,
+		hoveredAlternateIndex = null,
+		onAlternateClick,
 		onAddWaypoint,
 		onMoveWaypoint,
 		onInsertVia,
@@ -262,6 +273,23 @@
 				type: 'Feature',
 				properties: { candidate: preview.index, hovered: preview.index === hoveredIndex },
 				geometry: { type: 'LineString', coordinates: preview.coords }
+			}))
+		};
+	}
+
+	/** Up to a few alternate route lines, carrying which alternate they are
+	 * and whether the matching list row is hovered - same pattern as
+	 * loopPreviewGeoJSON above. */
+	function alternateLinesGeoJSON(
+		lines: { index: number; coords: [number, number][] }[] | null,
+		hoveredIndex: number | null
+	): FeatureCollection {
+		return {
+			type: 'FeatureCollection',
+			features: (lines ?? []).map((line) => ({
+				type: 'Feature',
+				properties: { index: line.index, hovered: line.index === hoveredIndex },
+				geometry: { type: 'LineString', coordinates: line.coords }
 			}))
 		};
 	}
@@ -439,6 +467,25 @@
 					'line-dasharray': [2, 1.5]
 				}
 			});
+			// Ghost lines for Valhalla's own route alternatives, shown while the
+			// Alternatives list is open - a muted solid colour rather than
+			// loop-preview's dashed per-candidate palette, since there is only
+			// ever one route being compared against, not several distinct plans.
+			map.addSource('route-alternates', {
+				type: 'geojson',
+				data: alternateLinesGeoJSON(null, null)
+			});
+			map.addLayer({
+				id: 'route-alternates-line',
+				type: 'line',
+				source: 'route-alternates',
+				layout: { 'line-cap': 'round', 'line-join': 'round' },
+				paint: {
+					'line-color': ['case', ['get', 'hovered'], '#586e75', '#93a1a1'],
+					'line-width': ['case', ['get', 'hovered'], 5, 3],
+					'line-opacity': ['case', ['get', 'hovered'], 0.9, 0.7]
+				}
+			});
 			// The visible line is driven by its own gradient-coloured source;
 			// `route` stays a plain LineString because dragging and hit-testing
 			// (route-hit below) don't care about gradient bands.
@@ -525,6 +572,11 @@
 			}
 			// Grabbing the line handles its own interaction; plain map clicks add waypoints.
 			if (m.queryRenderedFeatures(e.point, { layers: ['route-hit'] }).length > 0) return;
+			// A click on a ghost alternate line adopts it, via the layer-specific
+			// handler below - it must not also add a waypoint underneath it.
+			if (m.queryRenderedFeatures(e.point, { layers: ['route-alternates-line'] }).length > 0) {
+				return;
+			}
 			onAddWaypoint({ lat: e.lngLat.lat, lon: e.lngLat.lng });
 		});
 
@@ -590,6 +642,17 @@
 		m.on('mouseleave', 'poi-points', () => {
 			m.getCanvas().style.cursor = '';
 			onHoverPoi?.(null);
+		});
+
+		m.on('mouseenter', 'route-alternates-line', () => {
+			m.getCanvas().style.cursor = 'pointer';
+		});
+		m.on('mouseleave', 'route-alternates-line', () => {
+			m.getCanvas().style.cursor = '';
+		});
+		m.on('click', 'route-alternates-line', (e) => {
+			const index = e.features?.[0]?.properties?.index;
+			if (typeof index === 'number') onAlternateClick?.(index);
 		});
 
 		const startDrag = (
@@ -812,6 +875,17 @@
 		if (!map || !mapReady) return;
 		void hoveredLoopIndex;
 		setSourceData(map, 'loop-preview', loopPreviewGeoJSON(loopPreviews, hoveredLoopIndex));
+	});
+
+	// Sync route alternates, for the same reason loop previews above do.
+	$effect(() => {
+		if (!map || !mapReady) return;
+		void hoveredAlternateIndex;
+		setSourceData(
+			map,
+			'route-alternates',
+			alternateLinesGeoJSON(alternateLines, hoveredAlternateIndex)
+		);
 	});
 
 	// Sync elevation-chart hover marker.
