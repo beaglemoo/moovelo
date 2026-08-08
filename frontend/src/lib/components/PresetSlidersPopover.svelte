@@ -253,8 +253,13 @@
 	<button type="button" class="close" onclick={onClose}>Close</button>
 </div>
 
+<!-- pointerdown, not click: Svelte flushes this popover into the DOM
+     synchronously during the opening button's click handler, so a click
+     listener here would catch that same click still bubbling to window and
+     close the popover the instant it opened. The opening interaction's
+     pointerdown fired before mount, so only the next outside press closes. -->
 <svelte:window
-	onclick={(event) => {
+	onpointerdown={(event) => {
 		if (!(event.target as HTMLElement)?.closest('.popover')) onClose();
 	}}
 />
