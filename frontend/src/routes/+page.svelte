@@ -121,6 +121,7 @@
 	let loopCandidates: LoopCandidate[] | null = $state(null);
 	let loopLoading = $state(false);
 	let loopError: string | null = $state(null);
+	let loopController: AbortController | null = null;
 	let hoveredLoopIndex: number | null = $state(null);
 
 	// Route alternates ("Alternatives" button). Valhalla's `alternates` only
@@ -240,6 +241,8 @@
 			costingOptions: customCostingOptions,
 			source,
 			avoidLocations: avoids,
+			savedId,
+			savedName,
 			routeOverride: null
 		};
 	}
@@ -253,6 +256,14 @@
 		customCostingOptions = snap.costingOptions ? { ...snap.costingOptions } : null;
 		source = snap.source;
 		avoids = snap.avoidLocations.map((wp) => ({ ...wp }));
+		// Re-attach only, never detach - see PlannerSnapshot.savedId. This is
+		// what makes an accidental Clear fully undoable: the restored route
+		// is still the library row it was, so Save offers "Save changes",
+		// not a duplicating "Save".
+		if (snap.savedId !== null) {
+			savedId = snap.savedId;
+			savedName = snap.savedName;
+		}
 		if (snap.routeOverride) {
 			route = snap.routeOverride;
 			dirty = true;
@@ -420,8 +431,6 @@
 	// separately.
 	$effect(() => {
 		const legs = decodedLegs;
-		const currentPreset = preset;
-		const currentCustom = customCostingOptions;
 		const elevation = route?.elevation ?? null;
 		surfaceController?.abort();
 		if (legs.length === 0) {
@@ -431,7 +440,11 @@
 		}
 		const controller = new AbortController();
 		surfaceController = controller;
-		surfacePending = routeSurface(legs, currentPreset, elevation, currentCustom, controller.signal)
+		// No preset/costing sent: an edge_walk trace follows the shape's own
+		// edges, so costing cannot change the answer (it could only break
+		// it) - see the backend's RouteSurfaceQuery. A preset change reroutes
+		// anyway, which replaces the legs and re-fires this effect.
+		surfacePending = routeSurface(legs, elevation, controller.signal)
 			.then((result) => {
 				if (controller.signal.aborted || !route) return;
 				route.surface = result.surface;
@@ -557,6 +570,10 @@
 		if (waypoints.length < 2) {
 			route = null;
 			error = null;
+			// The abort above may have killed an in-flight reroute whose
+			// AbortError path never resets `loading` - without this the
+			// "Routing..." banner and the loading-gated buttons wedge forever.
+			loading = false;
 			return;
 		}
 		abortController = new AbortController();
@@ -712,6 +729,9 @@
 	}
 
 	function onLoop(wp: Waypoint) {
+		// One results card at a time - LoopPanel and AlternatesPanel share the
+		// same screen position, and stacking them hides whichever lost.
+		dismissAlternates();
 		loopOrigin = wp;
 		loopCandidates = null;
 		loopError = null;
@@ -719,6 +739,7 @@
 	}
 
 	function dismissLoop() {
+		loopController?.abort();
 		loopOrigin = null;
 		loopCandidates = null;
 		loopError = null;
@@ -728,16 +749,30 @@
 
 	async function findLoops() {
 		if (!loopOrigin) return;
+		// Abort-on-supersede like every other fetch path here: without it a
+		// slow search for a dismissed origin could land later and overwrite
+		// the candidates of the origin now on screen.
+		loopController?.abort();
+		const controller = new AbortController();
+		loopController = controller;
 		loopLoading = true;
 		loopError = null;
 		loopCandidates = null;
 		try {
-			loopCandidates = (await routeLoop(loopOrigin, loopTargetKm, preset, customCostingOptions))
-				.candidates;
+			const result = await routeLoop(
+				loopOrigin,
+				loopTargetKm,
+				preset,
+				customCostingOptions,
+				controller.signal
+			);
+			if (controller.signal.aborted) return;
+			loopCandidates = result.candidates;
 		} catch (err) {
+			if (controller.signal.aborted) return;
 			loopError = err instanceof Error ? err.message : 'Loop search failed';
 		} finally {
-			loopLoading = false;
+			if (loopController === controller) loopLoading = false;
 		}
 	}
 
@@ -768,15 +803,20 @@
 
 	async function findAlternates() {
 		if (waypoints.length !== 2 || alternatesLoading) return;
+		// One results card at a time - see onLoop.
+		dismissLoop();
 		alternatesOpen = true;
 		alternatesLoading = true;
 		alternatesError = null;
 		alternates = null;
 		try {
+			// Avoids ride along: alternates that route straight through an
+			// avoided road would be adoptable lies.
 			const result = await routeAlternates(
 				[waypoints[0], waypoints[1]],
 				preset,
-				customCostingOptions
+				customCostingOptions,
+				avoids.length ? avoids : null
 			);
 			alternates = result.alternates;
 			alternatesFetchedFor = waypoints.map((wp) => ({ ...wp }));
@@ -865,7 +905,11 @@
 	const storedPreset = $derived<StoredPreset>(customCostingOptions ? 'custom' : preset);
 
 	async function save() {
-		if (!route || waypoints.length < 2) return;
+		// Never while a reroute is in flight: `route` still holds the OLD
+		// geometry while `waypoints` already holds the new ones, and saving
+		// that pair persists a route whose stored track does not match its
+		// stored waypoints. The button is disabled too; this is the backstop.
+		if (!route || waypoints.length < 2 || loading) return;
 		if (savedId === null) {
 			const fallback = savedName ?? defaultName();
 			saveNameInput = fallback;
@@ -914,7 +958,8 @@
 
 	async function confirmSave(event: SubmitEvent) {
 		event.preventDefault();
-		if (!route || !saveNameInput.trim()) return;
+		// Same in-flight guard as save() - see the comment there.
+		if (!route || !saveNameInput.trim() || loading) return;
 		saving = true;
 		try {
 			await awaitSurfaceSettled();
@@ -1086,7 +1131,7 @@
 				type="button"
 				class="save"
 				onclick={save}
-				disabled={!route || saving || (savedId !== null && !dirty)}
+				disabled={!route || saving || loading || (savedId !== null && !dirty)}
 			>
 				{savedId === null ? 'Save' : dirty ? 'Save changes' : 'Saved'}
 			</button>
@@ -1151,7 +1196,7 @@
 			<div class="isochrone-prompt">
 				<label>
 					Minutes
-					<input type="number" min="5" max="240" step="5" bind:value={isochroneMinutes} />
+					<input type="number" min="5" max="120" step="5" bind:value={isochroneMinutes} />
 				</label>
 				<div class="isochrone-prompt-buttons">
 					<button type="button" onclick={() => (isochronePromptOpen = false)}>Cancel</button>
