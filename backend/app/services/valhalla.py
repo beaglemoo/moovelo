@@ -74,19 +74,27 @@ class ValhallaClient:
         data: dict[str, Any] = response.json()
         return data
 
-    async def route(self, request: RouteRequest) -> RouteResponse:
-        bicycle_options = resolve_costing(request.preset, request.costing_options)
+    @staticmethod
+    def _route_payload(request: RouteRequest) -> dict[str, Any]:
+        """The /route request body for a RouteRequest - shared by route()
+        and route_alternates() so a field added to one path (as
+        exclude_locations once was) can never be silently missing from the
+        other."""
+        costing = resolve_costing(request.preset, request.costing_options)
         payload: dict[str, Any] = {
             "locations": [{"lat": w.lat, "lon": w.lon, "type": "break"} for w in request.waypoints],
             "costing": "bicycle",
-            "costing_options": {"bicycle": bicycle_options},
+            "costing_options": {"bicycle": costing},
             "units": "kilometers",
         }
         if request.exclude_locations:
             payload["exclude_locations"] = [
                 {"lat": w.lat, "lon": w.lon} for w in request.exclude_locations
             ]
-        data = await self._post("/route", payload)
+        return payload
+
+    async def route(self, request: RouteRequest) -> RouteResponse:
+        data = await self._post("/route", self._route_payload(request))
         return await self._parse_trip(data["trip"])
 
     async def route_alternates(
@@ -101,13 +109,7 @@ class ValhallaClient:
         only one reasonable way to go; that is normal, not a failure, so the
         returned list is simply as long as whatever came back.
         """
-        bicycle_options = resolve_costing(request.preset, request.costing_options)
-        payload: dict[str, Any] = {
-            "locations": [{"lat": w.lat, "lon": w.lon, "type": "break"} for w in request.waypoints],
-            "costing": "bicycle",
-            "costing_options": {"bicycle": bicycle_options},
-            "units": "kilometers",
-        }
+        payload = self._route_payload(request)
         payload["alternates"] = count
         data = await self._post("/route", payload)
         primary = await self._parse_trip(data["trip"])
