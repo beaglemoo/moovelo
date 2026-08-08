@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 Preset = Literal["road", "gravel", "quiet"]
 
@@ -108,8 +108,29 @@ class UserSettingsPatch(BaseModel):
     flat_speed_kmh: float | None = Field(default=None, ge=5, le=60)
     # Nullable *and* optional: omitting the field leaves ftp_watts untouched,
     # sending it as null clears a previously set value. exclude_unset is
-    # what tells these two apart.
-    ftp_watts: float | None = Field(default=None, ge=0, le=2000)
+    # what tells these two apart. gt=0, not ge=0: a 0 here would zero the
+    # rider's speed outright once cubed into effective_flat_speed's scale
+    # factor, so it is rejected rather than accepted as a roundabout "no
+    # FTP" - that meaning already belongs to the field being unset or null.
+    ftp_watts: float | None = Field(default=None, gt=0, le=2000)
+
+    @field_validator("weight_kg", "flat_speed_kmh")
+    @classmethod
+    def _reject_explicit_null(cls, value: float | None, info: ValidationInfo) -> float | None:
+        """Unlike ftp_watts, these two have no "cleared" meaning to fall
+        back to - the ride-time model divides by them - so an explicit null
+        is a request error rather than a no-op.
+
+        `validate_default` is False by default, so this only runs when the
+        field was actually present in the request body: omitting it entirely
+        never triggers validation of the (also-None) default, which is the
+        whole trick that keeps "omit to leave unchanged" working.
+        """
+        if value is None:
+            raise ValueError(
+                f"{info.field_name} cannot be null - omit the field to leave it unchanged"
+            )
+        return value
 
 
 class SurfaceBreakdown(BaseModel):

@@ -89,7 +89,10 @@ def effective_flat_speed(settings: UserSettingsResponse) -> float:
     watts/kg is modelled as riding about 26% faster on the flat, not twice
     as fast.
     """
-    if settings.ftp_watts is None:
+    # Truthiness, not `is None`: the schema now rejects a 0 on write
+    # (UserSettingsPatch.ftp_watts is gt=0), but a 0 already stored by an
+    # older row must not be cubed into a zero speed here either.
+    if not settings.ftp_watts:
         return settings.flat_speed_kmh
     w_per_kg = settings.ftp_watts / settings.weight_kg
     scale: float = (w_per_kg / FTP_BASELINE_W_PER_KG) ** (1 / 3)

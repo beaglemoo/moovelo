@@ -108,6 +108,13 @@ class TestEffectiveFlatSpeed:
         settings = _settings(weight_kg=weight_kg, flat_speed_kmh=22.0, ftp_watts=ftp_watts)
         assert effective_flat_speed(settings) == pytest.approx(44.0)
 
+    def test_zero_ftp_is_ignored_rather_than_cubed_into_zero_speed(self) -> None:
+        """The schema now rejects a 0 on write, but a 0 already stored by an
+        older row must not be treated as real wattage here either - `if
+        settings.ftp_watts` (truthiness), not `is None`."""
+        settings = _settings(flat_speed_kmh=25.0, ftp_watts=0.0)
+        assert effective_flat_speed(settings) == pytest.approx(25.0)
+
 
 class TestComputeRideTime:
     def test_flat_ten_km_at_defaults(self) -> None:
