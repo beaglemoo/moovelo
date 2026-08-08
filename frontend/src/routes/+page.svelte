@@ -500,13 +500,17 @@
 			void suggestName(fallback);
 			return;
 		}
-		// Captured before the surface/HTTP round trip: a newer edit landing
-		// during the await must not have its dirty flag cleared by this
-		// save, which is only persisting the route as it was when clicked.
-		const gen = editGeneration;
 		saving = true;
 		try {
 			await awaitSurfaceSettled();
+			// Captured AFTER the settle wait, in the same synchronous block
+			// as the snapshot read: the loop chases every fetch a mid-wait
+			// reroute starts, so an edit landing during the wait is folded
+			// into the snapshot and genuinely saved - counting it as unsaved
+			// left dirty stuck true, blocking export and Wahoo push after a
+			// save that persisted exactly what was on screen. Only an edit
+			// landing during the HTTP round trip below is still unsaved.
+			const gen = editGeneration;
 			const snapshot = route;
 			if (!snapshot) return;
 			await routes.update(savedId, { waypoints, preset, snapshot });
@@ -533,11 +537,12 @@
 	async function confirmSave(event: SubmitEvent) {
 		event.preventDefault();
 		if (!route || !saveNameInput.trim()) return;
-		// See save(): a newer edit during the await must keep dirty set.
-		const gen = editGeneration;
 		saving = true;
 		try {
 			await awaitSurfaceSettled();
+			// See save(): captured after the settle wait, beside the
+			// snapshot read - a mid-wait edit is in the snapshot and saved.
+			const gen = editGeneration;
 			const snapshot = route;
 			if (!snapshot) return;
 			const saved = await routes.create({
