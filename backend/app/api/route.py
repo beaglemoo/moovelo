@@ -10,6 +10,7 @@ from app.models import SearchIndexMeta
 from app.schemas import (
     MAX_ROUTE_POINTS,
     AppConfig,
+    BicycleCostingOptions,
     ElevationPoint,
     Latitude,
     Longitude,
@@ -70,6 +71,8 @@ class RouteSurfaceQuery(BaseModel):
     # that discontinuity.
     legs: list[list[tuple[Longitude, Latitude]]] = Field(min_length=1)
     preset: Preset = "road"
+    # Overrides `preset` entirely when set - see resolve_costing.
+    costing_options: BicycleCostingOptions | None = None
     # When given, the response also carries a surface-aware ride_time -
     # otherwise plan_route's own paved-equivalent estimate is the only one
     # the planner has until the route is saved.
@@ -105,7 +108,7 @@ async def route_surface(
     # [lon, lat] per leg (GeoJSON order) in; ValhallaClient legs are
     # (lat, lon), matching PoiQuery's handling of the same ordering.
     legs = [[(lat, lon) for lon, lat in leg] for leg in body.legs]
-    surface = await client.trace_attributes(legs, body.preset)
+    surface = await client.trace_attributes(legs, body.preset, body.costing_options)
     ride_time: list[RideTimePoint] = []
     if body.elevation is not None:
         # Computed even when surface is None (factor 1.0), matching

@@ -14,6 +14,7 @@ from app.models import Route
 from app.schemas import (
     DEFAULT_FLAT_SPEED_KMH,
     DEFAULT_WEIGHT_KG,
+    BicycleCostingOptions,
     ElevationPoint,
     Preset,
     RideTimePoint,
@@ -130,6 +131,7 @@ async def _saved(route: Route, db: AsyncSession, user_id: uuid.UUID) -> SavedRou
         id=route.id,
         name=route.name,
         preset=route.preset,
+        costing_options=route.costing_options,
         source=route.source,
         tags=route.tags,
         notes=route.notes,
@@ -280,6 +282,7 @@ async def save_route(body: RouteSaveRequest, db: DbDep, user: UserDep) -> SavedR
         user_id=user.id,
         name=body.name,
         preset=body.preset,
+        costing_options=body.costing_options.model_dump() if body.costing_options else None,
         waypoints=[wp.model_dump() for wp in body.waypoints],
     )
     _apply_snapshot(route, body.snapshot)
@@ -314,6 +317,11 @@ async def update_route(
         route.source = "planned"
     if body.preset is not None:
         route.preset = body.preset
+        # Tied to `preset` rather than checked on its own: the planner
+        # always resends both together on every save, so this is what lets
+        # switching back to a named preset clear a previously stored
+        # custom bundle rather than leaving it stranded.
+        route.costing_options = body.costing_options.model_dump() if body.costing_options else None
     if body.snapshot is not None:
         _apply_snapshot(route, body.snapshot)
     await db.commit()
@@ -334,6 +342,10 @@ def _copy_of(route: Route, name: str) -> Route:
         user_id=route.user_id,
         name=name,
         preset=route.preset,
+        # Carried over alongside preset - otherwise a copy of a
+        # preset="custom" route would keep that marker but lose the
+        # options it refers to.
+        costing_options=route.costing_options,
         source=route.source,
         tags=list(route.tags),
         notes=route.notes,
@@ -356,6 +368,22 @@ async def duplicate_route(route_id: uuid.UUID, db: DbDep, user: UserDep) -> Save
     return await _saved(copy, db, user.id)
 
 
+def _route_costing(route: Route) -> tuple[Preset, BicycleCostingOptions | None]:
+    """Base preset and any custom override to re-route a stored route with.
+
+    `route.preset` can now be "custom", which is not a Valhalla preset key
+    - casting it straight to Preset (as every call site below used to do)
+    is a runtime KeyError inside PRESETS[...] once a custom-costed route
+    exists, that mypy has no way to see. When costing_options is set,
+    "road" stands in as the placeholder base preset: resolve_costing always
+    prefers costing_options over it, so the placeholder is never actually
+    looked up.
+    """
+    if route.costing_options:
+        return "road", BicycleCostingOptions(**route.costing_options)
+    return cast("Preset", route.preset), None
+
+
 @router.post("/{route_id}/reverse", status_code=201)
 async def reverse_route(
     request: Request, route_id: uuid.UUID, db: DbDep, user: UserDep
@@ -369,6 +397,7 @@ async def reverse_route(
     """
     route = await get_owned_route(db, user, route_id)
     valhalla: ValhallaClient = request.app.state.valhalla
+    base_preset, costing = _route_costing(route)
 
     if route.source == "imported":
         # An imported route has no meaningful waypoints, so reverse the track
@@ -377,8 +406,10 @@ async def reverse_route(
         shape.reverse()
         # Same fallback as import: a track that could not be matched forwards
         # will not match backwards either, and losing the ride is worse than
-        # losing its cues.
-        snapshot, _matched = await match_or_keep(shape, cast("Preset", route.preset), valhalla)
+        # losing its cues. trace_route stays preset-only by design (see
+        # ValhallaClient.trace_route), so `costing` is not threaded through
+        # here even when set.
+        snapshot, _matched = await match_or_keep(shape, base_preset, valhalla)
         waypoints = [
             {"lat": shape[0][0], "lon": shape[0][1]},
             {"lat": shape[-1][0], "lon": shape[-1][1]},
@@ -411,7 +442,9 @@ async def reverse_route(
         waypoints = list(reversed(route.waypoints))
         snapshot = await valhalla.route(
             RouteRequest(
-                waypoints=[Waypoint(**wp) for wp in waypoints], preset=cast("Preset", route.preset)
+                waypoints=[Waypoint(**wp) for wp in waypoints],
+                preset=base_preset,
+                costing_options=costing,
             )
         )
 
@@ -419,7 +452,7 @@ async def reverse_route(
     # blocking the reverse, so it is fetched after the snapshot is settled.
     # Legs, not one concatenated shape - see ValhallaClient.trace_attributes.
     surface = await valhalla.trace_attributes(
-        [decode_polyline6(leg.geometry) for leg in snapshot.legs], cast("Preset", route.preset)
+        [decode_polyline6(leg.geometry) for leg in snapshot.legs], base_preset, costing
     )
     if surface is not None:
         snapshot = snapshot.model_copy(update={"surface": surface})
