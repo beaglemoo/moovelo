@@ -1,5 +1,5 @@
-"""Surface breakdown: POST /api/route/surface and its round trip through
-saved routes and share links."""
+"""Surface breakdown and surface-aware ride time: POST /api/route/surface,
+and the breakdown's round trip through saved routes and share links."""
 
 import json
 
@@ -8,7 +8,7 @@ import respx
 from httpx import AsyncClient
 
 from app.main import app
-from app.schemas import RouteResponse, SurfaceBreakdown
+from app.schemas import MAX_ROUTE_POINTS, RouteResponse, SurfaceBreakdown
 from app.services.valhalla import ValhallaClient
 from tests.conftest import register
 from tests.test_auth_routes import save_body
@@ -17,6 +17,7 @@ VALHALLA = "http://valhalla.test"
 
 # [lon, lat], matching GeoJSON and PoiQuery.line.
 LINE = [[-1.5491, 53.7996], [-1.5523, 53.8008], [-1.5600, 53.7950]]
+LEGS = [LINE]
 
 TRACE_ATTRS_RESPONSE = {
     "units": "kilometers",
@@ -47,7 +48,7 @@ def valhalla_client() -> None:
 
 
 async def test_route_surface_needs_a_session(client: AsyncClient) -> None:
-    response = await client.post("/api/route/surface", json={"line": LINE})
+    response = await client.post("/api/route/surface", json={"legs": LEGS})
     assert response.status_code == 401
 
 
@@ -56,16 +57,18 @@ async def test_route_surface_returns_the_breakdown(client: AsyncClient) -> None:
     mock = respx.post(f"{VALHALLA}/trace_attributes").respond(json=TRACE_ATTRS_RESPONSE)
     await register(client)
 
-    response = await client.post("/api/route/surface", json={"line": LINE, "preset": "gravel"})
+    response = await client.post("/api/route/surface", json={"legs": LEGS, "preset": "gravel"})
 
     assert response.status_code == 200, response.text
-    body = response.json()
+    body = response.json()["surface"]
     assert body["total_m"] == pytest.approx(800.0)
     assert body["surface_m"] == {"paved": 500.0, "gravel": 300.0}
     assert body["road_class_m"] == {"residential": 500.0, "path": 300.0}
     assert body["use_m"] == {"road": 500.0, "path": 300.0}
     # Only the "lane" edge counts - "none" is not marked infrastructure.
     assert body["cycle_lane_m"] == pytest.approx(500.0)
+    # No elevation was sent, so there is nothing to time.
+    assert response.json()["ride_time"] == []
 
     sent = json.loads(mock.calls[0].request.content)
     assert sent["shape_match"] == "edge_walk"
@@ -77,21 +80,79 @@ async def test_route_surface_returns_the_breakdown(client: AsyncClient) -> None:
 @respx.mock
 async def test_route_surface_is_null_when_edge_walk_fails(client: AsyncClient) -> None:
     """An unmatched line fails edge_walk by design; the endpoint says so with
-    a null body rather than an error the planner would have to handle."""
+    a null surface rather than an error the planner would have to handle."""
     respx.post(f"{VALHALLA}/trace_attributes").respond(
         status_code=400, json={"error": "edge_walk algorithm failed to find exact route match"}
     )
     await register(client)
 
-    response = await client.post("/api/route/surface", json={"line": LINE})
+    response = await client.post("/api/route/surface", json={"legs": LEGS})
 
     assert response.status_code == 200
-    assert response.json() is None
+    assert response.json() == {"surface": None, "ride_time": []}
 
 
-async def test_a_line_of_one_point_is_rejected(client: AsyncClient) -> None:
+@respx.mock
+async def test_elevation_produces_a_surface_aware_ride_time(client: AsyncClient) -> None:
+    """The whole point of this endpoint: a gravel-heavy breakdown makes the
+    live estimate slower than the paved-equivalent flat-speed time, without
+    the route ever having been saved."""
+    respx.post(f"{VALHALLA}/trace_attributes").respond(
+        json={
+            "units": "kilometers",
+            "edges": [
+                {
+                    "length": 1.0,
+                    "surface": "dirt",
+                    "road_class": "path",
+                    "use": "path",
+                    "cycle_lane": "none",
+                }
+            ],
+        }
+    )
     await register(client)
-    response = await client.post("/api/route/surface", json={"line": [LINE[0]]})
+    elevation = [{"dist_m": 0.0, "elev_m": 100.0}, {"dist_m": 1000.0, "elev_m": 100.0}]
+
+    response = await client.post("/api/route/surface", json={"legs": LEGS, "elevation": elevation})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["surface"]["total_m"] == pytest.approx(1000.0)
+    assert len(body["ride_time"]) == 2
+    paved_equivalent_s = (1.0 / 22.0) * 3600.0
+    assert body["ride_time"][-1]["time_s"] > paved_equivalent_s
+
+
+async def test_elevation_with_fewer_than_two_points_yields_no_ride_time(
+    client: AsyncClient,
+) -> None:
+    with respx.mock:
+        respx.post(f"{VALHALLA}/trace_attributes").respond(json=TRACE_ATTRS_RESPONSE)
+        await register(client)
+        response = await client.post(
+            "/api/route/surface",
+            json={"legs": LEGS, "elevation": [{"dist_m": 0.0, "elev_m": 100.0}]},
+        )
+    assert response.json()["ride_time"] == []
+
+
+async def test_no_legs_is_rejected(client: AsyncClient) -> None:
+    await register(client)
+    response = await client.post("/api/route/surface", json={"legs": []})
+    assert response.status_code == 422
+
+
+async def test_a_leg_of_one_point_is_rejected(client: AsyncClient) -> None:
+    await register(client)
+    response = await client.post("/api/route/surface", json={"legs": [[LINE[0]]]})
+    assert response.status_code == 422
+
+
+async def test_legs_totalling_over_the_point_cap_are_rejected(client: AsyncClient) -> None:
+    await register(client)
+    oversized_leg = [[0.0, float(i % 90)] for i in range(MAX_ROUTE_POINTS + 1)]
+    response = await client.post("/api/route/surface", json={"legs": [oversized_leg]})
     assert response.status_code == 422
 
 

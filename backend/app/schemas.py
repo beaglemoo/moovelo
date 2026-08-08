@@ -207,6 +207,19 @@ class RouteResponse(BaseModel):
     ride_time: list[RideTimePoint] = []
 
 
+class RouteSurfaceResponse(BaseModel):
+    """Response to POST /api/route/surface: the surface breakdown for the
+    given legs and, when elevation was supplied, a ride-time estimate
+    computed with that breakdown - one request lets the planner's live
+    estimate become surface-aware without a second round trip to
+    /api/route, which runs before any surface breakdown exists."""
+
+    surface: SurfaceBreakdown | None
+    # [] when elevation was absent or had fewer than two points, matching
+    # compute_ride_time's own degenerate-input behaviour.
+    ride_time: list[RideTimePoint] = []
+
+
 class RouteSaveRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     waypoints: list[Waypoint] = Field(min_length=2)

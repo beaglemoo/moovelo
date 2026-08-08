@@ -30,6 +30,7 @@ from app.schemas import (
     WahooState,
     Waypoint,
 )
+from app.services.climbs import detect_climbs
 from app.services.fit import build_fit
 from app.services.geo import concat_shapes
 from app.services.gpx import build_gpx
@@ -37,7 +38,7 @@ from app.services.import_routes import import_route, match_or_keep
 from app.services.importer import MAX_FILE_BYTES, RouteImportError
 from app.services.polyline import decode_polyline6
 from app.services.ride_time import compute_ride_time
-from app.services.valhalla import ValhallaClient
+from app.services.valhalla import ValhallaClient, ascent_descent
 
 router = APIRouter(prefix="/api/routes")
 
@@ -382,6 +383,30 @@ async def reverse_route(
             {"lat": shape[0][0], "lon": shape[0][1]},
             {"lat": shape[-1][0], "lon": shape[-1][1]},
         ]
+        if not snapshot.elevation and route.elevation:
+            # match_or_keep's unmatched fallback carries no elevation at
+            # all, but the route being reversed usually already has a real
+            # profile - either from Valhalla's own /height on the forward
+            # match, or from the imported file itself. Losing it on reverse
+            # would be a worse regression than losing cues. Mirrors
+            # import_route's own fallback (services/import_routes.py) by
+            # reversing the stored profile rather than discarding it:
+            # distances flip around the route's own length, and ascent and
+            # descent naturally swap as a result.
+            stored = [ElevationPoint(**p) for p in route.elevation]
+            total = stored[-1].dist_m
+            reversed_profile = [
+                ElevationPoint(dist_m=total - p.dist_m, elev_m=p.elev_m) for p in reversed(stored)
+            ]
+            ascent, descent = ascent_descent(reversed_profile)
+            snapshot = snapshot.model_copy(
+                update={
+                    "elevation": reversed_profile,
+                    "ascent_m": ascent,
+                    "descent_m": descent,
+                    "climbs": detect_climbs(reversed_profile),
+                }
+            )
     else:
         waypoints = list(reversed(route.waypoints))
         snapshot = await valhalla.route(
@@ -392,8 +417,10 @@ async def reverse_route(
 
     # Surface is decorative: it degrades to None on any failure rather than
     # blocking the reverse, so it is fetched after the snapshot is settled.
-    surface_shape = concat_shapes([decode_polyline6(leg.geometry) for leg in snapshot.legs])
-    surface = await valhalla.trace_attributes(surface_shape, cast("Preset", route.preset))
+    # Legs, not one concatenated shape - see ValhallaClient.trace_attributes.
+    surface = await valhalla.trace_attributes(
+        [decode_polyline6(leg.geometry) for leg in snapshot.legs], cast("Preset", route.preset)
+    )
     if surface is not None:
         snapshot = snapshot.model_copy(update={"surface": surface})
 
