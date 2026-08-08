@@ -12,6 +12,8 @@ from app.schemas import (
     AppConfig,
     BicycleCostingOptions,
     ElevationPoint,
+    IsochroneQuery,
+    IsochroneResponse,
     Latitude,
     Longitude,
     Preset,
@@ -22,6 +24,7 @@ from app.schemas import (
     WeatherAlongRoute,
     WeatherQuery,
 )
+from app.services.presets import resolve_costing
 from app.services.ride_time import compute_ride_time
 from app.services.valhalla import MAX_ELEVATION_SAMPLES, ValhallaClient
 from app.services.weather import WeatherError, weather_along_route
@@ -134,3 +137,24 @@ async def route_weather(body: WeatherQuery, _user: UserDep) -> WeatherAlongRoute
         return await weather_along_route(shape, body.start_time, body.ride_time, body.duration_s)
     except WeatherError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/route/isochrone")
+async def route_isochrone(
+    request: Request, body: IsochroneQuery, _user: UserDep
+) -> IsochroneResponse:
+    """Reachability polygons ("how far can I get in N minutes") from a
+    point, sent rather than tied to a saved route - it is anchored to
+    wherever the rider right-clicked, not to any route on screen.
+    """
+    client: ValhallaClient = request.app.state.valhalla
+    costing = resolve_costing(body.preset, body.costing_options)
+    data = await client.isochrone(
+        body.origin,
+        body.contours,
+        costing,
+        polygons=body.polygons,
+        denoise=body.denoise,
+        generalize=body.generalize,
+    )
+    return IsochroneResponse.model_validate(data)

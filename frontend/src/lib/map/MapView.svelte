@@ -55,6 +55,15 @@
 		 * one's sub-line is ever drawn, rather than a feature per climb. */
 		climbs?: Climb[];
 		hoveredClimbIndex?: number | null;
+		/** Valhalla's own isochrone GeoJSON. Null hides the layer rather than
+		 * clearing its source, so a stale polygon never flashes back on. */
+		isochrone?: FeatureCollection | null;
+		/** Where the isochrone was asked from, drawn as a small marker of its
+		 * own so the overlay never reads as anchored to the route. */
+		isochroneOrigin?: Waypoint | null;
+		/** Opens the context menu's "Isochrone from here" entry. Left out by
+		 * the read-only share page, which has no menu at all. */
+		onIsochrone?: (wp: Waypoint) => void;
 	}
 
 	let {
@@ -76,6 +85,9 @@
 		onHoverPoi,
 		climbs = [],
 		hoveredClimbIndex = null,
+		isochrone = null,
+		isochroneOrigin = null,
+		onIsochrone,
 		onAddWaypoint,
 		onMoveWaypoint,
 		onInsertVia,
@@ -230,6 +242,10 @@
 		};
 	}
 
+	function emptyFeatureCollection(): FeatureCollection {
+		return { type: 'FeatureCollection', features: [] };
+	}
+
 	onMount(() => {
 		basemap = savedBasemap();
 		cycleNetwork = localStorage.getItem(OVERLAY_STORAGE_KEY) === 'on';
@@ -315,6 +331,55 @@
 					'line-opacity': 0.85
 				}
 			});
+			// Inserted below climb-highlight-line (via beforeId) so the route,
+			// its markers and the climb casing all stay readable on top of a
+			// wide reachability polygon. Hidden until an isochrone is asked
+			// for, and styled entirely from each feature's own Valhalla
+			// properties rather than a fixed paint colour, since a request can
+			// carry several differently-coloured contours at once.
+			map.addSource('isochrone', { type: 'geojson', data: emptyFeatureCollection() });
+			map.addLayer(
+				{
+					id: 'isochrone-fill',
+					type: 'fill',
+					source: 'isochrone',
+					layout: { visibility: 'none' },
+					paint: {
+						'fill-color': ['get', 'fill'],
+						'fill-opacity': 0.25
+					}
+				},
+				'climb-highlight-line'
+			);
+			map.addLayer(
+				{
+					id: 'isochrone-outline',
+					type: 'line',
+					source: 'isochrone',
+					layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+					paint: {
+						'line-color': ['get', 'color'],
+						'line-width': 1.5,
+						'line-opacity': 0.8
+					}
+				},
+				'climb-highlight-line'
+			);
+			map.addSource('isochrone-origin', { type: 'geojson', data: pointGeoJSON(null) });
+			map.addLayer(
+				{
+					id: 'isochrone-origin-point',
+					type: 'circle',
+					source: 'isochrone-origin',
+					paint: {
+						'circle-radius': 6,
+						'circle-color': '#ffffff',
+						'circle-stroke-color': '#268bd2',
+						'circle-stroke-width': 3
+					}
+				},
+				'climb-highlight-line'
+			);
 			// The visible line is driven by its own gradient-coloured source;
 			// `route` stays a plain LineString because dragging and hit-testing
 			// (route-hit below) don't care about gradient bands.
@@ -672,6 +737,24 @@
 		setSourceData(map, 'hover-point', pointGeoJSON(hoverPoint));
 	});
 
+	// Sync the isochrone overlay. Visibility follows presence of data rather
+	// than a separate flag - null hides the layer, clearing the origin
+	// marker along with it, so the two can never disagree about whether an
+	// isochrone is currently shown.
+	$effect(() => {
+		if (!map || !mapReady) return;
+		const data = isochrone ?? emptyFeatureCollection();
+		setSourceData(map, 'isochrone', data);
+		const visibility = isochrone ? 'visible' : 'none';
+		map.setLayoutProperty('isochrone-fill', 'visibility', visibility);
+		map.setLayoutProperty('isochrone-outline', 'visibility', visibility);
+		setSourceData(
+			map,
+			'isochrone-origin',
+			pointGeoJSON(isochroneOrigin ? [isochroneOrigin.lon, isochroneOrigin.lat] : null)
+		);
+	});
+
 	// Fit the viewport to the route when asked (e.g. after loading a saved one).
 	$effect(() => {
 		// Read all reactive dependencies before any early return.
@@ -771,6 +854,12 @@
 			<button type="button" role="menuitem" onclick={() => menuAction(() => onSetEnd(wp))}>
 				Route to here
 			</button>
+			{#if onIsochrone}
+				<hr />
+				<button type="button" role="menuitem" onclick={() => menuAction(() => onIsochrone(wp))}>
+					Isochrone from here
+				</button>
+			{/if}
 			{#if waypoints.length > 0}
 				<hr />
 				<button type="button" role="menuitem" onclick={() => menuAction(onClear)}>

@@ -1,15 +1,18 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import type { FeatureCollection } from 'geojson';
 	import {
 		fetchConfig,
 		places,
 		planRoute,
+		routeIsochrone,
 		routeSurface,
 		routeWeather,
 		routes,
 		wahoo,
 		type AppConfig,
 		type BicycleCostingOptions,
+		type IsochroneResult,
 		type PlaceResult,
 		type PoiResult,
 		type Preset,
@@ -84,6 +87,21 @@
 	let windLoading = $state(false);
 	let windError: string | null = $state(null);
 	let windController: AbortController | null = null;
+
+	// Isochrone ("how far can I get in N minutes"), opened from the map's
+	// context menu. Origin-anchored rather than route-anchored: it survives
+	// a reroute or waypoint edit and is cleared only by clear() or the
+	// "Hide isochrone" button, matching wind's "only on explicit user
+	// action" convention for the one other call that hits an external-ish
+	// service (here, self-hosted Valhalla, but still not free to spam).
+	let isochroneData: FeatureCollection | null = $state(null);
+	let isochroneOrigin: Waypoint | null = $state(null);
+	let isochronePromptWp: Waypoint | null = $state(null);
+	let isochronePromptOpen = $state(false);
+	let isochroneMinutes = $state(60);
+	let isochroneLoading = $state(false);
+	let isochroneError: string | null = $state(null);
+	let isochroneController: AbortController | null = null;
 
 	let wahooStatus: WahooStatus | null = $state(null);
 	let wahooPush: 'idle' | 'working' | 'synced' | 'error' = $state('idle');
@@ -376,6 +394,52 @@
 		}
 	}
 
+	// Opens the small inline prompt from the map's context menu; the fetch
+	// itself waits for "Show isochrone" so a stray right-click never spends
+	// a Valhalla round trip.
+	function openIsochronePrompt(wp: Waypoint) {
+		isochronePromptWp = wp;
+		isochronePromptOpen = true;
+		isochroneError = null;
+	}
+
+	async function showIsochrone() {
+		const wp = isochronePromptWp;
+		if (!wp) return;
+		isochroneController?.abort();
+		const controller = new AbortController();
+		isochroneController = controller;
+		isochroneLoading = true;
+		isochroneError = null;
+		try {
+			const result: IsochroneResult = await routeIsochrone(
+				wp,
+				isochroneMinutes,
+				preset,
+				customCostingOptions,
+				controller.signal
+			);
+			if (controller.signal.aborted) return;
+			// Valhalla's `type` is always "FeatureCollection" in practice;
+			// IsochroneResponse types it as a plain string only because
+			// extra="allow" lets unrelated future fields through untouched.
+			isochroneData = result as FeatureCollection;
+			isochroneOrigin = wp;
+			isochronePromptOpen = false;
+		} catch (err) {
+			if (controller.signal.aborted) return;
+			isochroneError = err instanceof Error ? err.message : 'Isochrone lookup failed';
+		} finally {
+			if (isochroneController === controller) isochroneLoading = false;
+		}
+	}
+
+	function hideIsochrone() {
+		isochroneController?.abort();
+		isochroneData = null;
+		isochroneOrigin = null;
+	}
+
 	async function reroute() {
 		abortController?.abort();
 		if (waypoints.length < 2) {
@@ -460,6 +524,7 @@
 		savedId = null;
 		savedName = null;
 		dirty = false;
+		hideIsochrone();
 	}
 
 	function defaultName(): string {
@@ -629,6 +694,9 @@
 				onHoverPoi={(id) => (hoveredPoiId = id)}
 				climbs={route?.climbs ?? []}
 				{hoveredClimbIndex}
+				isochrone={isochroneData}
+				{isochroneOrigin}
+				onIsochrone={openIsochronePrompt}
 				onAddWaypoint={addWaypoint}
 				onMoveWaypoint={moveWaypoint}
 				onInsertVia={insertVia}
@@ -706,7 +774,27 @@
 								: 'Send to Wahoo'}
 				</button>
 			{/if}
+			{#if isochroneData}
+				<button type="button" onclick={hideIsochrone}>Hide isochrone</button>
+			{/if}
 		</div>
+		{#if isochronePromptOpen}
+			<div class="isochrone-prompt">
+				<label>
+					Minutes
+					<input type="number" min="5" max="240" step="5" bind:value={isochroneMinutes} />
+				</label>
+				<div class="isochrone-prompt-buttons">
+					<button type="button" onclick={() => (isochronePromptOpen = false)}>Cancel</button>
+					<button type="button" class="primary" onclick={showIsochrone} disabled={isochroneLoading}>
+						{isochroneLoading ? 'Loading…' : 'Show isochrone'}
+					</button>
+				</div>
+				{#if isochroneError}
+					<p class="isochrone-error">{isochroneError}</p>
+				{/if}
+			</div>
+		{/if}
 		{#if saveDialogOpen}
 			<div class="dialog-backdrop">
 				<form class="dialog" onsubmit={confirmSave}>
@@ -915,6 +1003,62 @@
 	}
 	.dialog-buttons .primary:disabled {
 		opacity: 0.6;
+	}
+	/* A small card near the toolbar rather than a full dialog backdrop -
+	   the isochrone origin is already marked on the map, so nothing needs
+	   to be dimmed behind this. */
+	.isochrone-prompt {
+		position: absolute;
+		top: 52px;
+		right: 10px;
+		background: #fff;
+		border-radius: 10px;
+		padding: 0.7rem 0.8rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+		box-shadow: 0 4px 16px #0003;
+		z-index: 6;
+		font-size: 0.85rem;
+	}
+	.isochrone-prompt label {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.6rem;
+	}
+	.isochrone-prompt input {
+		font: inherit;
+		width: 4.5rem;
+		padding: 0.3rem 0.4rem;
+		border: 1px solid #ccc;
+		border-radius: 6px;
+	}
+	.isochrone-prompt-buttons {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
+	}
+	.isochrone-prompt-buttons button {
+		border: 1px solid #ccc;
+		background: #fff;
+		border-radius: 6px;
+		padding: 0.35rem 0.8rem;
+		font: inherit;
+		cursor: pointer;
+	}
+	.isochrone-prompt-buttons .primary {
+		background: #268bd2;
+		border-color: #268bd2;
+		color: #fff;
+	}
+	.isochrone-prompt-buttons .primary:disabled {
+		opacity: 0.6;
+	}
+	.isochrone-error {
+		margin: 0;
+		color: #dc322f;
+		font-size: 0.8rem;
 	}
 	.hint,
 	.banner {

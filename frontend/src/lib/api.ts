@@ -1,3 +1,5 @@
+import type { Feature } from 'geojson';
+
 export type Preset = 'road' | 'gravel' | 'quiet';
 // What a saved route's `preset` may be - "custom" marks a route whose
 // costing came from sliders rather than one of the three named bundles.
@@ -554,4 +556,54 @@ export async function planRoute(
 		throw new Error(detail);
 	}
 	return response.json();
+}
+
+/** One reachability ring - mirrors backend/app/schemas.py's
+ * IsochroneContour, minus the km option: the planner only ever asks for a
+ * single time-based contour today. */
+export interface IsochroneContour {
+	minutes: number;
+	color: string;
+}
+
+/** Valhalla's own GeoJSON, passed through untouched - MapLibre reads each
+ * feature's own `fill`/`color`/`fillOpacity` properties directly. */
+export interface IsochroneResult {
+	type: string;
+	features: Feature[];
+}
+
+/** How far a rider can get from a point in `minutes`, as a GeoJSON polygon.
+ * Only ever called on an explicit "Show isochrone" click - never from an
+ * effect - matching routeWeather's convention for calls the rider has to
+ * ask for. */
+export async function routeIsochrone(
+	origin: Waypoint,
+	minutes: number,
+	preset: Preset,
+	costingOptions: BicycleCostingOptions | null = null,
+	signal?: AbortSignal
+): Promise<IsochroneResult> {
+	const response = await fetch('/api/route/isochrone', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			origin,
+			contours: [{ minutes, color: '268bd2' }],
+			preset,
+			costing_options: costingOptions
+		}),
+		signal
+	});
+	if (!response.ok) {
+		let detail = `Isochrone lookup failed (${response.status})`;
+		try {
+			const body = await response.json();
+			if (typeof body.detail === 'string') detail = body.detail;
+		} catch {
+			// keep the generic message
+		}
+		throw new ApiError(response.status, detail);
+	}
+	return await response.json();
 }

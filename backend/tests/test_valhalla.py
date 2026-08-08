@@ -6,7 +6,13 @@ import pytest
 import respx
 from fastapi import HTTPException
 
-from app.schemas import BicycleCostingOptions, ElevationPoint, RouteRequest, Waypoint
+from app.schemas import (
+    BicycleCostingOptions,
+    ElevationPoint,
+    IsochroneContour,
+    RouteRequest,
+    Waypoint,
+)
 from app.services.geo import evenly_sampled, haversine, resample_by_distance
 from app.services.polyline import encode_polyline6
 from app.services.presets import PRESETS
@@ -24,6 +30,9 @@ FIXTURES = Path(__file__).parent / "fixtures"
 TRACE_ATTRS_REAL = json.loads((FIXTURES / "trace_attributes_real.json").read_text())
 # A real edge_walk 400: an unmatched track fails this by design.
 TRACE_ATTRS_FAIL = json.loads((FIXTURES / "trace_attributes_fail.json").read_text())
+# A real /isochrone response: 2 polygon features (30 and 60 minute contours),
+# captured against the dev Valhalla with the road preset.
+ISOCHRONE_REAL = json.loads((FIXTURES / "isochrone_real.json").read_text())
 
 TRIP_RESPONSE = {
     "trip": {
@@ -584,3 +593,70 @@ async def test_trace_attributes_with_custom_costing_sends_the_custom_bundle() ->
     sent = json.loads(mock.calls[0].request.content)
     assert sent["costing_options"]["bicycle"] == CUSTOM_OPTIONS.model_dump()
     assert sent["costing_options"]["bicycle"] != PRESETS["road"]
+
+
+ORIGIN = Waypoint(lat=51.7926, lon=-0.6606)
+
+
+@respx.mock
+async def test_isochrone_sends_time_contours_and_passes_features_through() -> None:
+    mock = respx.post(f"{BASE}/isochrone").respond(json=ISOCHRONE_REAL)
+
+    client = ValhallaClient(base_url=BASE)
+    contours = [
+        IsochroneContour(minutes=30, color="268bd2"),
+        IsochroneContour(minutes=60, color="b58900"),
+    ]
+    result = await client.isochrone(
+        ORIGIN, contours, PRESETS["road"], polygons=True, denoise=0.25, generalize=None
+    )
+
+    # Valhalla's own GeoJSON, untouched.
+    assert result["type"] == "FeatureCollection"
+    assert result["features"] == ISOCHRONE_REAL["features"]
+
+    sent = json.loads(mock.calls[0].request.content)
+    assert sent["locations"] == [{"lat": ORIGIN.lat, "lon": ORIGIN.lon}]
+    assert sent["costing"] == "bicycle"
+    assert sent["costing_options"]["bicycle"] == PRESETS["road"]
+    assert sent["contours"] == [
+        {"time": 30, "color": "268bd2"},
+        {"time": 60, "color": "b58900"},
+    ]
+    assert sent["polygons"] is True
+    assert sent["denoise"] == pytest.approx(0.25)
+    assert "generalize" not in sent
+
+
+@respx.mock
+async def test_isochrone_sends_distance_contours_without_color() -> None:
+    mock = respx.post(f"{BASE}/isochrone").respond(json=ISOCHRONE_REAL)
+
+    client = ValhallaClient(base_url=BASE)
+    contours = [IsochroneContour(km=15)]
+    await client.isochrone(
+        ORIGIN, contours, PRESETS["gravel"], polygons=False, denoise=1.0, generalize=50.0
+    )
+
+    sent = json.loads(mock.calls[0].request.content)
+    assert sent["contours"] == [{"distance": 15}]
+    assert sent["polygons"] is False
+    assert sent["generalize"] == pytest.approx(50.0)
+
+
+@respx.mock
+async def test_isochrone_valhalla_error_maps_to_422() -> None:
+    respx.post(f"{BASE}/isochrone").respond(
+        status_code=400, json={"error": "No path could be found for input"}
+    )
+    client = ValhallaClient(base_url=BASE)
+    with pytest.raises(HTTPException) as exc:
+        await client.isochrone(
+            ORIGIN,
+            [IsochroneContour(minutes=60)],
+            PRESETS["road"],
+            polygons=True,
+            denoise=0.25,
+            generalize=None,
+        )
+    assert exc.value.status_code == 422

@@ -21,7 +21,7 @@ flowchart LR
     end
 
     UI -->|/api/*| BE
-    BE -->|/route, /height, /trace_attributes| VH
+    BE -->|/route, /height, /trace_attributes, /isochrone| VH
     BE --> PG
     BE -.->|token exchange| OIDC
     BE -.->|queued FIT pushes| WAHOO
@@ -579,6 +579,42 @@ not a rider-specific guess. `ride_time` is purely additive and
 display-layer; nothing that reads `duration_s` was changed by this
 feature.
 
+## Isochrones
+
+`POST /api/route/isochrone` takes an origin, up to four contours (each a
+time in minutes or a distance in km - `IsochroneContour`'s `model_validator`
+rejects both or neither being set) and the usual `preset`/`costing_options`
+pair, and proxies straight to Valhalla `/isochrone` via
+`ValhallaClient.isochrone`. The response - a GeoJSON `FeatureCollection` of
+polygons, each carrying Valhalla's own `fill`/`color`/`fillOpacity`
+properties per contour - is returned untouched (`IsochroneResponse` uses
+`extra="allow"` and only declares `type`/`features`) so the frontend never
+has to know Valhalla's exact styling keys to draw it: MapLibre's `fill-color`
+and `line-color` paint properties read `['get', 'fill']` and `['get',
+'color']` straight off each feature.
+
+Anchored to wherever the rider right-clicked ("Isochrone from here" on the
+map's context menu), not to the planned route - a route can be rerouted, or
+have waypoints added and removed, without the isochrone changing, and it is
+cleared only by `clear()` or the panel's own "Hide isochrone" button. The
+frontend never fetches from an effect here either, matching the wind panel's
+"only on an explicit click" convention, even though `/isochrone` never
+leaves the LAN - a reachability query is still a real Valhalla round trip
+per click, not a free live update while dragging.
+
+**Important divergence, documented rather than reconciled:** "how far can I
+get" comes entirely from Valhalla's own bicycle costing (the same
+`bicycle_type`/`use_hills`/`avoid_bad_surfaces` bundle as `/route`), which
+has its own internal speed model. It has no idea about a rider's
+`user_settings` (weight, flat-road speed, FTP) or the gradient/surface-aware
+model in [Realistic ride time](#realistic-ride-time) - the two estimates can
+disagree about how far the same rider gets in the same 60 minutes, and nothing
+here tries to make them agree. Reconciling them would mean either teaching
+Valhalla's isochrone about a per-rider speed curve (it has no hook for one)
+or reimplementing reachability search on top of the ride-time model ourselves
+- both bigger than this feature - so the isochrone is presented as what it
+is: Valhalla's own answer, not the planner's.
+
 ## Organising the library
 
 Routes carry free-form organisation: `tags` (a Postgres `text[]` with a
@@ -650,7 +686,7 @@ backend/app/
 │                            #   Place, Poi, CycleWay, SearchIndexMeta
 ├── schemas.py               # request/response models
 ├── api/
-│   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface
+│   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface, /api/route/isochrone
 │   ├── places.py            # /api/places: search, reverse, pois-along-route
 │   ├── auth.py              # register/login/logout/me + OIDC flow
 │   ├── routes.py            # route CRUD, GPX/FIT export, share links, ride-time wiring
