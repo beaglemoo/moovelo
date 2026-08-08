@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -93,6 +94,13 @@ class Route(Base):
     )
     name: Mapped[str] = mapped_column(String(200))
     preset: Mapped[str] = mapped_column(String(20))
+    # Sibling of `preset`, not part of the snapshot: the resolved
+    # BicycleCostingOptions bundle when `preset` is "custom", null when a
+    # named preset was used instead. Routes carry the resolved options
+    # directly rather than a foreign key to custom_presets, so deleting a
+    # saved preset never mutates a route that was saved while it was
+    # selected.
+    costing_options: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # planned = built from waypoints in the app; imported = read from a file.
     # An imported route's waypoints are only its endpoints, so re-routing it
     # would discard the track that was imported.
@@ -135,6 +143,28 @@ class Route(Base):
     )
 
     __table_args__ = (Index("ix_routes_tags", "tags", postgresql_using="gin"),)
+
+
+class CustomPreset(Base):
+    """A user's named costing-slider bundle, applied by name from the
+    planner. Not referenced by Route.costing_options - a route stores its
+    resolved options directly, so renaming or deleting a preset here never
+    changes a route that was saved while it was selected."""
+
+    __tablename__ = "custom_presets"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(60))
+    options: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (UniqueConstraint("user_id", "name"),)
 
 
 # The four tables below are written only by the indexer sidecar, which is a
