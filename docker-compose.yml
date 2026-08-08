@@ -85,6 +85,7 @@ services:
       WAHOO_CLIENT_ID: ${WAHOO_CLIENT_ID:-}
       PASSWORD_AUTH_ENABLED: ${PASSWORD_AUTH_ENABLED:-true}
       WAHOO_CLIENT_SECRET: ${WAHOO_CLIENT_SECRET:-}
+      WEATHER_API_URL: ${WEATHER_API_URL:-}
     volumes:
       - ./backend/app:/app/app
       - ./backend/alembic:/app/alembic
@@ -135,6 +136,7 @@ services:
       WAHOO_CLIENT_ID: ${WAHOO_CLIENT_ID:-}
       PASSWORD_AUTH_ENABLED: ${PASSWORD_AUTH_ENABLED:-true}
       WAHOO_CLIENT_SECRET: ${WAHOO_CLIENT_SECRET:-}
+      WEATHER_API_URL: ${WEATHER_API_URL:-}
     ports:
       - "${APP_PORT:-17777}:17777"
     depends_on:
