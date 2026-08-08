@@ -537,12 +537,18 @@ export async function planRoute(
 	waypoints: Waypoint[],
 	preset: Preset,
 	costingOptions: BicycleCostingOptions | null = null,
+	excludeLocations: Waypoint[] | null = null,
 	signal?: AbortSignal
 ): Promise<RouteResponse> {
 	const response = await fetch('/api/route', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ waypoints, preset, costing_options: costingOptions }),
+		body: JSON.stringify({
+			waypoints,
+			preset,
+			costing_options: costingOptions,
+			exclude_locations: excludeLocations
+		}),
 		signal
 	});
 	if (!response.ok) {
