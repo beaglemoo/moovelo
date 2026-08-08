@@ -696,6 +696,8 @@ frontend/src/
     ├── api.ts                   # backend client + response types
     ├── polyline.ts              # polyline6 decoder
     ├── geo.ts                   # haversine, distance interpolation helpers
+    ├── unsaved.svelte.ts        # $state singleton: unsaved-edits flag for the layout's file drop
+    ├── history.svelte.ts        # $state singleton: undo/redo stack over planner inputs
     ├── map/MapView.svelte       # MapLibre init, layers, interactions, basemap toggle
     └── components/
         ├── PresetSelector.svelte
@@ -815,6 +817,18 @@ about extract coverage when no roads are found near a waypoint.
   a named constant at the top of `services/loop.py`, so retuning "how much
   a climb should hurt the score" is a one-line change, not a hunt through
   the search itself.
+- **Undo/redo replays inputs, not outputs**: `history.svelte.ts` snapshots
+  waypoints/preset/costing/source before each mutation and undo/redo
+  restores a snapshot by setting those inputs and calling `reroute()` -
+  the same path an ordinary edit takes. `PlannerSnapshot.routeOverride` is
+  the one deliberate exception, for actions that replace the route
+  *output* without changing any input (none yet; adopting an alternate
+  route will be the first), where replaying inputs through `reroute()`
+  cannot reproduce the exact response and the snapshot restores it
+  directly instead. Undo/redo bypass the imported-route `mayEdit()`
+  confirm - time travel is not a fresh editorial decision - which is safe
+  because `source` itself travels inside the snapshot, so undoing back
+  into an imported route's territory still shows it as imported.
 
 ## Ports
 
