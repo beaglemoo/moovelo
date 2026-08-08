@@ -10,6 +10,7 @@ import respx
 from httpx import AsyncClient, Response
 
 from app.config import settings
+from app.schemas import RideTimePoint
 from app.services import weather
 from app.services.weather import WeatherError, weather_along_route
 from tests.conftest import register
@@ -303,3 +304,75 @@ def test_cache_stays_bounded() -> None:
     for i in range(weather._CACHE_MAX_ENTRIES + 40):
         weather._cache_set(f"key-{i}", empty)
     assert len(weather._cache) <= weather._CACHE_MAX_ENTRIES
+
+
+@respx.mock
+async def test_cache_key_includes_pacing_so_different_durations_dont_collide(
+    weather_settings: None,
+) -> None:
+    """Same shape and start hour, two different durations: the second call
+    must ask upstream again rather than reuse the first's arrival times."""
+    calls = respx.get(WEATHER_URL)
+    calls.side_effect = [
+        Response(200, json=OPEN_METEO_MULTI),
+        Response(200, json=OPEN_METEO_MULTI),
+    ]
+    start = datetime(2026, 8, 7, 10, 0, tzinfo=UTC)
+
+    short = await weather_along_route(shape_of(LONG_LINE), start, ride_time=None, duration_s=3600.0)
+    long = await weather_along_route(shape_of(LONG_LINE), start, ride_time=None, duration_s=36000.0)
+
+    assert calls.call_count == 2
+    assert short.segments[1].arrival_iso != long.segments[1].arrival_iso
+
+
+def test_sample_route_spreads_evenly_past_the_spacing_cap() -> None:
+    """Fixed 10 km spacing would stop at MAX_WEATHER_SAMPLES (20) samples -
+    190 km - and silently drop coverage over anything further. Past that,
+    samples spread evenly across the whole route instead."""
+    # Due-north line of about 300 km.
+    end_lat = 51.0 + 300_000 / 111_320
+    line = [(51.0, -1.0), (end_lat, -1.0)]
+
+    samples, total = weather._sample_route(line)
+
+    assert total > 290_000.0
+    assert len(samples) == weather.MAX_WEATHER_SAMPLES
+    assert samples[-1][1] == pytest.approx(total)
+    spacing = samples[1][1] - samples[0][1]
+    assert spacing == pytest.approx(total / (weather.MAX_WEATHER_SAMPLES - 1))
+    assert spacing == pytest.approx(15_800.0, rel=0.05)
+
+
+def test_sample_route_keeps_fixed_spacing_under_the_cap() -> None:
+    """A route short enough to fit within the cap at fixed spacing keeps
+    exact 10 km steps rather than being spread evenly."""
+    end_lat = 51.0 + 25_000 / 111_320
+    line = [(51.0, -1.0), (end_lat, -1.0)]
+
+    samples, _total = weather._sample_route(line)
+
+    dists = [dist for _, dist in samples]
+    assert dists == pytest.approx([0.0, 10_000.0, 20_000.0], abs=50.0)
+
+
+@respx.mock
+async def test_forecast_window_sized_from_ride_time_not_duration_s(
+    weather_settings: None,
+) -> None:
+    """duration_s alone (1 hour from a 20:00 start) would never cross
+    midnight; the elevation-aware ride_time profile it should be sized from
+    instead totals 5 hours, which does - and arrivals are timed against
+    ride_time too, so the window must cover the same timeline."""
+    mock = respx.get(WEATHER_URL).mock(return_value=Response(200, json=OPEN_METEO_SINGLE))
+    start = datetime(2026, 8, 7, 20, 0, tzinfo=UTC)
+    ride_time = [
+        RideTimePoint(dist_m=0.0, time_s=0.0),
+        RideTimePoint(dist_m=556.0, time_s=18_000.0),
+    ]
+
+    await weather_along_route(shape_of(SHORT_LINE), start, ride_time=ride_time, duration_s=3600.0)
+
+    sent = mock.calls[0].request.url.params
+    assert sent["start_date"] == "2026-08-07"
+    assert sent["end_date"] == "2026-08-08"

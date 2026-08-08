@@ -39,13 +39,28 @@ class WeatherError(Exception):
     """Terminal weather-lookup failure whose message is shown to the user."""
 
 
-def _cache_key(start_time: datetime, samples: list[tuple[Point, float]]) -> str:
-    """Cache key: rounded start hour plus a hash of rounded sample
-    coordinates - close-enough repeats of the same ask hit the cache
-    without needing exact float equality."""
+def _cache_key(
+    start_time: datetime,
+    samples: list[tuple[Point, float]],
+    total_ride_s: float,
+    ride_time: list[RideTimePoint] | None,
+) -> str:
+    """Cache key: rounded start hour, a hash of rounded sample coordinates,
+    and a pacing signature - close-enough repeats of the same ask hit the
+    cache without needing exact float equality.
+
+    The pacing signature matters: the same shape and start time at two
+    different durations (or ride-time profiles) ask for different forecast
+    windows and time each sample's arrival differently, so they must not
+    collide on the same cache entry and return each other's wind.
+    """
     start_hour = start_time.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
     coords = ",".join(f"{lat:.3f}:{lon:.3f}" for (lat, lon), _ in samples)
-    raw = f"{start_hour.isoformat()}|{coords}"
+    pacing = f"{round(total_ride_s / 60.0)}"
+    if ride_time:
+        profile = ",".join(f"{round(p.dist_m)}:{round(p.time_s)}" for p in ride_time)
+        pacing += f"|{profile}"
+    raw = f"{start_hour.isoformat()}|{coords}|{pacing}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -82,13 +97,26 @@ def _sample_route(shape: list[Point]) -> tuple[list[tuple[Point, float]], float]
     Always includes the start; a route shorter than the spacing yields
     exactly one sample. The total is the whole route's length, not the last
     sample's position - a capped sample count must not shrink the
-    denominator used to place arrival times proportionally."""
+    denominator used to place arrival times proportionally.
+
+    Fixed 10 km spacing only reaches (MAX_WEATHER_SAMPLES - 1) * spacing -
+    about 190 km - before the count cap kicks in and every sample beyond
+    that point is silently dropped, leaving the back half of a longer route
+    with no wind coverage at all. Past that length, MAX_WEATHER_SAMPLES
+    points are instead spread evenly across the whole route so the last
+    sample always lands on the route's actual end.
+    """
     dists = cumulative_distances(shape)
     total = dists[-1]
+    samples: list[tuple[Point, float]] = []
+    if total > (MAX_WEATHER_SAMPLES - 1) * WEATHER_SAMPLE_SPACING_M:
+        for i in range(MAX_WEATHER_SAMPLES):
+            target = i * total / (MAX_WEATHER_SAMPLES - 1)
+            samples.append((point_at_distance(shape, dists, target), target))
+        return samples, total
     count = 1
     if total > 0:
         count = min(MAX_WEATHER_SAMPLES, int(total // WEATHER_SAMPLE_SPACING_M) + 1)
-    samples: list[tuple[Point, float]] = []
     for i in range(count):
         target = min(i * WEATHER_SAMPLE_SPACING_M, total)
         samples.append((point_at_distance(shape, dists, target), target))
@@ -220,15 +248,18 @@ async def weather_along_route(
     bearings = _travel_bearings(shape, [point for point, _ in samples])
     start_utc = start_time.astimezone(UTC)
 
-    cache_key = _cache_key(start_utc, samples)
+    # Prefer the elevation-aware ride_time profile's own total over the flat
+    # duration_s: arrivals below are computed against ride_time whenever it
+    # is present (see _arrival_seconds), so sizing the forecast window from
+    # a different total would leave it too short to cover a slow uphill
+    # finish, or too long for a fast one.
+    total_ride_s = ride_time[-1].time_s if ride_time else (duration_s or 0.0)
+    end_utc = start_utc + timedelta(seconds=max(total_ride_s, 0.0))
+
+    cache_key = _cache_key(start_utc, samples, total_ride_s, ride_time)
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-
-    total_ride_s = (
-        duration_s if duration_s is not None else (ride_time[-1].time_s if ride_time else 0.0)
-    )
-    end_utc = start_utc + timedelta(seconds=max(total_ride_s, 0.0))
 
     params = {
         "latitude": ",".join(f"{point[0]:.5f}" for point, _ in samples),
