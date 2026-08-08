@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
@@ -16,6 +18,8 @@ from app.schemas import (
     IsochroneResponse,
     Latitude,
     Longitude,
+    LoopCandidatesResponse,
+    LoopQuery,
     Preset,
     RideTimePoint,
     RouteRequest,
@@ -24,10 +28,17 @@ from app.schemas import (
     WeatherAlongRoute,
     WeatherQuery,
 )
+from app.services.loop import generate_loop_candidates
 from app.services.presets import resolve_costing
 from app.services.ride_time import compute_ride_time
 from app.services.valhalla import MAX_ELEVATION_SAMPLES, ValhallaClient
 from app.services.weather import WeatherError, weather_along_route
+
+# Bound on the whole search, not just each Valhalla call: dozens of LAN
+# round trips (services/loop.py) run per request, and the per-bearing early
+# stop keeps a normal search well under this - it exists for the pathological
+# case, not the common one.
+LOOP_TIMEOUT_S = 25.0
 
 router = APIRouter(prefix="/api")
 
@@ -158,3 +169,25 @@ async def route_isochrone(
         generalize=body.generalize,
     )
     return IsochroneResponse.model_validate(data)
+
+
+@router.post("/route/loop")
+async def route_loop(request: Request, body: LoopQuery, _user: UserDep) -> LoopCandidatesResponse:
+    """Up to three candidate loops from `body.origin`, each an ordinary
+    out-and-back route through one via point (services/loop.py). Bounded so
+    a rider is never left staring at a spinner indefinitely; partial results
+    on timeout are not returned - see LOOP_TIMEOUT_S.
+    """
+    client: ValhallaClient = request.app.state.valhalla
+    try:
+        candidates = await asyncio.wait_for(
+            generate_loop_candidates(
+                body.origin, body.target_km, body.preset, body.costing_options, client
+            ),
+            timeout=LOOP_TIMEOUT_S,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=504, detail="Loop search timed out - try a shorter target distance."
+        ) from exc
+    return LoopCandidatesResponse(candidates=candidates)

@@ -468,3 +468,30 @@ class IsochroneResponse(BaseModel):
 
     type: str
     features: list[dict[str, Any]]
+
+
+class LoopQuery(BaseModel):
+    """Query for the "N km loop from here" generator - see services/loop.py."""
+
+    origin: Waypoint
+    target_km: float = Field(gt=0, le=200)
+    preset: Preset = "road"
+    # Overrides `preset` entirely when set - see resolve_costing.
+    costing_options: BicycleCostingOptions | None = None
+
+
+class LoopCandidate(BaseModel):
+    """One candidate loop: an ordinary out-and-back route through a single
+    via point, with the full RouteResponse snapshot already computed - the
+    roadmap's own rule that an assistant's (or here, a generator's) proposal
+    lands as ordinary editable waypoints, never a second round trip to plan
+    it again once picked."""
+
+    waypoints: list[Waypoint]
+    snapshot: RouteResponse
+    distance_error_km: float
+    score: float
+
+
+class LoopCandidatesResponse(BaseModel):
+    candidates: list[LoopCandidate]
