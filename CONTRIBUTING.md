@@ -55,14 +55,23 @@ fresh database or `SIGNUPS_ENABLED=true`. It is not part of CI.
   (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`).
 - Keep commits atomic - one logical change per commit.
 - New behavior needs a test; bug fixes need a regression test.
-- External services (Valhalla, Wahoo) are mocked in tests - never call
-  them for real from the test suite.
+- External services (Valhalla, Wahoo, the weather provider) are mocked
+  in tests - never call them for real from the test suite. Mock fixtures
+  should be captured from real responses, not written from documentation.
 - Update the docs (`README.md`, `docs/`) when behavior or configuration
   changes.
 
 ## Scope
 
-Features outside the core loop (plan, save, export, push to Wahoo) -
-social features, ride recording, other head-unit integrations, mobile
-apps - are out of scope for now. Open an issue to discuss before building
-anything sizable.
+Moovelo has grown beyond its original core loop (plan, save, export,
+push to Wahoo): it now also imports existing files with recovered turn
+cues, searches places and finds POIs entirely offline, and analyses
+routes (surface mix, gradients, climbs, per-rider time, optional wind).
+Contributions that deepen those areas are welcome.
+
+Permanently out of scope: social features (comments, likes, feeds),
+photos, live ride recording / GPS tracking, native mobile apps, and
+i18n. Anything that would make the app call out to a third-party
+service by default is also out - external integrations must be opt-in
+via configuration and off otherwise. Open an issue to discuss before
+building anything sizable.
