@@ -57,6 +57,8 @@ async def test_route_surface_returns_the_breakdown(client: AsyncClient) -> None:
     mock = respx.post(f"{VALHALLA}/trace_attributes").respond(json=TRACE_ATTRS_RESPONSE)
     await register(client)
 
+    # An old client may still send preset/costing fields; pydantic ignores
+    # unknown extras and tracing uses the neutral road bundle regardless.
     response = await client.post("/api/route/surface", json={"legs": LEGS, "preset": "gravel"})
 
     assert response.status_code == 200, response.text
@@ -72,7 +74,9 @@ async def test_route_surface_returns_the_breakdown(client: AsyncClient) -> None:
 
     sent = json.loads(mock.calls[0].request.content)
     assert sent["shape_match"] == "edge_walk"
-    assert sent["costing_options"]["bicycle"]["bicycle_type"] == "Cross"
+    # Always the neutral road bundle - costing cannot change an edge_walk
+    # trace, and an extreme bundle could only break it (review pass 2).
+    assert sent["costing_options"]["bicycle"]["bicycle_type"] == "Road"
     # [lon, lat] in, (lat, lon) out to Valhalla.
     assert sent["shape"][0] == {"lat": LINE[0][1], "lon": LINE[0][0]}
 

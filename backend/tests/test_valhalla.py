@@ -348,7 +348,7 @@ async def test_trace_attributes_success_bucket_sums_are_exact() -> None:
     mock = respx.post(f"{BASE}/trace_attributes").respond(json=TRACE_ATTRS_REAL)
 
     client = ValhallaClient(base_url=BASE)
-    result = await client.trace_attributes([SHAPE], "road")
+    result = await client.trace_attributes([SHAPE])
 
     assert result is not None
     edges = TRACE_ATTRS_REAL["edges"]
@@ -400,7 +400,7 @@ async def test_trace_attributes_percent_along_edges_contribute_raw_length() -> N
     respx.post(f"{BASE}/trace_attributes").respond(json={"units": "kilometers", "edges": boundary})
 
     client = ValhallaClient(base_url=BASE)
-    result = await client.trace_attributes([SHAPE], "road")
+    result = await client.trace_attributes([SHAPE])
 
     assert result is not None
     expected = (boundary[0]["length"] + boundary[1]["length"]) * 1000.0
@@ -414,7 +414,7 @@ async def test_trace_attributes_edge_walk_mismatch_returns_none() -> None:
     respx.post(f"{BASE}/trace_attributes").respond(status_code=400, json=TRACE_ATTRS_FAIL)
 
     client = ValhallaClient(base_url=BASE)
-    result = await client.trace_attributes([SHAPE], "road")
+    result = await client.trace_attributes([SHAPE])
 
     assert result is None
 
@@ -428,7 +428,7 @@ async def test_trace_attributes_unreachable_engine_returns_none() -> None:
     respx.post(f"{BASE}/trace_attributes").mock(side_effect=httpx.ConnectError("refused"))
 
     client = ValhallaClient(base_url=BASE)
-    result = await client.trace_attributes([SHAPE], "road")
+    result = await client.trace_attributes([SHAPE])
 
     assert result is None
 
@@ -448,7 +448,7 @@ async def test_trace_attributes_chunks_long_shapes_without_overlap() -> None:
     long_shape = [(53.7996 + i * 0.0001, -1.5491) for i in range(2500)]
 
     client = ValhallaClient(base_url=BASE)
-    result = await client.trace_attributes([long_shape], "road")
+    result = await client.trace_attributes([long_shape])
 
     assert mock.call_count == 3
     chunks_sent = [json.loads(call.request.content)["shape"] for call in mock.calls]
@@ -479,7 +479,7 @@ async def test_trace_attributes_drops_a_trailing_single_point_chunk() -> None:
     long_shape = [(53.7996 + i * 0.0001, -1.5491) for i in range(2001)]
 
     client = ValhallaClient(base_url=BASE)
-    result = await client.trace_attributes([long_shape], "road")
+    result = await client.trace_attributes([long_shape])
 
     assert mock.call_count == 2
     chunks_sent = [json.loads(call.request.content)["shape"] for call in mock.calls]
@@ -513,7 +513,7 @@ async def test_trace_attributes_multi_leg_chunks_never_mix_legs_points() -> None
     leg2 = [(53.7996 + i * 0.0001, -1.6491) for i in range(1200)]
 
     client = ValhallaClient(base_url=BASE)
-    result = await client.trace_attributes([leg1, leg2], "road")
+    result = await client.trace_attributes([leg1, leg2])
 
     assert mock.call_count == 4
     chunks_sent = [json.loads(call.request.content)["shape"] for call in mock.calls]
@@ -554,7 +554,7 @@ async def test_trace_attributes_two_legs_both_succeeding_sums_both() -> None:
     leg2 = [(53.8008, -1.5523), (53.7950, -1.5600)]
 
     client = ValhallaClient(base_url=BASE)
-    result = await client.trace_attributes([leg1, leg2], "road")
+    result = await client.trace_attributes([leg1, leg2])
 
     assert result is not None
     assert result.total_m == pytest.approx(800.0)
@@ -576,7 +576,7 @@ async def test_trace_attributes_one_failing_leg_fails_the_whole_breakdown() -> N
     leg2 = [(53.8008, -1.5523), (53.7950, -1.5600)]
 
     client = ValhallaClient(base_url=BASE)
-    result = await client.trace_attributes([leg1, leg2], "road")
+    result = await client.trace_attributes([leg1, leg2])
 
     assert result is None
 
@@ -602,7 +602,7 @@ async def test_trace_attributes_drops_legs_with_fewer_than_two_points() -> None:
         )
         leg1 = [(53.7996, -1.5491)]
         leg2 = [(53.8008, -1.5523), (53.7950, -1.5600)]
-        result = await client.trace_attributes([leg1, leg2], "road")
+        result = await client.trace_attributes([leg1, leg2])
 
     assert mock.call_count == 1
     assert result is not None
@@ -611,21 +611,25 @@ async def test_trace_attributes_drops_legs_with_fewer_than_two_points() -> None:
 
 async def test_trace_attributes_all_legs_too_short_returns_none() -> None:
     client = ValhallaClient(base_url=BASE)
-    result = await client.trace_attributes([[(53.7996, -1.5491)]], "road")
+    result = await client.trace_attributes([[(53.7996, -1.5491)]])
     assert result is None
 
 
 @respx.mock
-async def test_trace_attributes_with_custom_costing_sends_the_custom_bundle() -> None:
+async def test_trace_attributes_always_traces_with_the_neutral_road_bundle() -> None:
+    """Costing is deliberately NOT threaded into tracing: edge_walk follows
+    the shape's own edges, so costing cannot change which edges come back -
+    but an extreme custom bundle (avoid_bad_surfaces=1.0) could make
+    Valhalla reject a route's own real unpaved edges and null the whole
+    breakdown. Proven live in review pass 2."""
     mock = respx.post(f"{BASE}/trace_attributes").respond(json=TRACE_ATTRS_REAL)
 
     client = ValhallaClient(base_url=BASE)
-    result = await client.trace_attributes([SHAPE], "road", CUSTOM_OPTIONS)
+    result = await client.trace_attributes([SHAPE])
 
     assert result is not None
     sent = json.loads(mock.calls[0].request.content)
-    assert sent["costing_options"]["bicycle"] == CUSTOM_OPTIONS.model_dump()
-    assert sent["costing_options"]["bicycle"] != PRESETS["road"]
+    assert sent["costing_options"]["bicycle"] == PRESETS["road"]
 
 
 ORIGIN = Waypoint(lat=51.7926, lon=-0.6606)

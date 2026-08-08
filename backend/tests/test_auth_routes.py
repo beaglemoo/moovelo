@@ -9,6 +9,7 @@ from httpx import AsyncClient
 from app.main import app
 from app.schemas import RouteResponse
 from app.services.polyline import encode_polyline6
+from app.services.presets import PRESETS
 from app.services.valhalla import ValhallaClient
 from tests.conftest import register
 
@@ -410,6 +411,35 @@ async def test_patching_to_custom_preset_without_options_is_rejected(
     assert patched.status_code == 422
 
 
+async def test_saving_named_preset_with_costing_options_is_rejected(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    """The other direction of the invariant: a bundle stored beside a named
+    preset would silently drive every re-route while the preset field
+    claims otherwise (proven live in review pass 2)."""
+    await register(client)
+    body = custom_save_body(snapshot)
+    body["preset"] = "road"
+    assert (await client.post("/api/routes", json=body)).status_code == 422
+
+
+async def test_patching_named_preset_with_costing_options_is_rejected(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    await register(client)
+    created = (await client.post("/api/routes", json=custom_save_body(snapshot))).json()
+    patched = await client.patch(
+        f"/api/routes/{created['id']}",
+        json={
+            "preset": "gravel",
+            "costing_options": CUSTOM_OPTIONS,
+            "waypoints": WAYPOINTS,
+            "snapshot": snapshot.model_dump(),
+        },
+    )
+    assert patched.status_code == 422
+
+
 async def test_switching_back_to_a_named_preset_clears_stored_costing_options(
     client: AsyncClient, snapshot: RouteResponse
 ) -> None:
@@ -450,5 +480,8 @@ async def test_reverse_of_a_custom_costed_route_sends_the_custom_bundle(
 
     route_sent = json.loads(route_mock.calls.last.request.content)
     assert route_sent["costing_options"]["bicycle"] == CUSTOM_OPTIONS
+    # The surface trace deliberately does NOT carry the custom bundle -
+    # tracing is costing-independent and always uses the neutral road
+    # bundle (see ValhallaClient._attributes_chunk).
     attrs_sent = json.loads(attrs_mock.calls.last.request.content)
-    assert attrs_sent["costing_options"]["bicycle"] == CUSTOM_OPTIONS
+    assert attrs_sent["costing_options"]["bicycle"] == PRESETS["road"]
