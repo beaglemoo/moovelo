@@ -34,6 +34,10 @@
 	// placeholder blocked every retry - the row was stuck positional
 	// forever. In-flight keys live in `pending` instead of a cache
 	// placeholder, so a dropped fetch never poisons future attempts.
+	// A plain Set, not SvelteSet: the $effect below both reads and writes
+	// it, so reactivity would make the effect re-trigger itself on every
+	// fetch start and completion. Rows repaint via nameCache alone.
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity
 	const pending = new Set<string>();
 
 	$effect(() => {
