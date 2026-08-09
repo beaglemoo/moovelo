@@ -808,6 +808,7 @@ backend/app/
 ├── main.py                  # app factory, lifespan (valhalla client, wahoo worker), SPA static
 ├── config.py                # pydantic-settings, all env-driven
 ├── db.py                    # async engine + session factory
+├── version.py               # APP_VERSION, read from pyproject.toml (never installed as a package)
 ├── models.py                # User, Session, Route, CustomPreset, WahooAccount,
 │                            #   Place, Poi, CycleWay, SearchIndexMeta
 ├── schemas.py               # request/response models

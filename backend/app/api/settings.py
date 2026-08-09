@@ -13,6 +13,7 @@ from app.schemas import (
     UserSettingsPatch,
     UserSettingsResponse,
 )
+from app.version import APP_VERSION
 
 router = APIRouter(prefix="/api/settings")
 
@@ -25,10 +26,16 @@ async def get_or_default_settings(db: AsyncSession, user_id: uuid.UUID) -> UserS
     ).scalar_one_or_none()
     if row is None:
         return UserSettingsResponse(
-            weight_kg=DEFAULT_WEIGHT_KG, flat_speed_kmh=DEFAULT_FLAT_SPEED_KMH, ftp_watts=None
+            weight_kg=DEFAULT_WEIGHT_KG,
+            flat_speed_kmh=DEFAULT_FLAT_SPEED_KMH,
+            ftp_watts=None,
+            version=APP_VERSION,
         )
     return UserSettingsResponse(
-        weight_kg=row.weight_kg, flat_speed_kmh=row.flat_speed_kmh, ftp_watts=row.ftp_watts
+        weight_kg=row.weight_kg,
+        flat_speed_kmh=row.flat_speed_kmh,
+        ftp_watts=row.ftp_watts,
+        version=APP_VERSION,
     )
 
 
@@ -75,5 +82,8 @@ async def update_settings(
         await db.commit()
     await db.refresh(row)
     return UserSettingsResponse(
-        weight_kg=row.weight_kg, flat_speed_kmh=row.flat_speed_kmh, ftp_watts=row.ftp_watts
+        weight_kg=row.weight_kg,
+        flat_speed_kmh=row.flat_speed_kmh,
+        ftp_watts=row.ftp_watts,
+        version=APP_VERSION,
     )

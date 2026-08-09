@@ -22,11 +22,29 @@ MINOR="${V%.*}"
 
 cd "$(dirname "$0")/.."
 
+# A hard failure, not a prompt. This script's last act is `--push`: it
+# publishes to a public registry and moves `latest`, so "are you sure?" is
+# the wrong shape of guard - anything running it non-interactively answers
+# yes. Releasing means tagging first.
 if [ "$(git describe --tags --exact-match 2>/dev/null)" != "$VERSION" ]; then
-	echo "warning: HEAD is not at tag $VERSION ($(git describe --tags --always))" >&2
-	read -rp "continue anyway? [y/N] " yn
-	[ "$yn" = "y" ] || exit 1
+	echo "error: HEAD is not at tag $VERSION (at $(git describe --tags --always))" >&2
+	echo "       tag the commit you intend to release, then re-run" >&2
+	exit 1
 fi
+
+# Refuse to build a release whose version manifests disagree with the tag -
+# a stale backend/pyproject.toml or frontend/package.json must never reach
+# an image tagged $VERSION.
+PY_V=$(grep -m1 '^version = ' backend/pyproject.toml | cut -d'"' -f2)
+FE_V=$(node -p "require('./frontend/package.json').version")
+for pair in "backend/pyproject.toml:$PY_V" "frontend/package.json:$FE_V"; do
+	f="${pair%%:*}"
+	v="${pair##*:}"
+	[ "$v" = "$V" ] || {
+		echo "error: $f says $v, releasing $VERSION" >&2
+		exit 1
+	}
+done
 
 # A docker-container builder is required for multi-platform + push.
 docker buildx inspect moovelo-release >/dev/null 2>&1 ||
