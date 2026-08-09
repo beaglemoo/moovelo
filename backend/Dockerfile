@@ -29,4 +29,16 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "17777", "--reloa
 
 FROM base AS prod
 COPY --from=frontend-build /fe/build /app/static
+# Prod only: dev keeps running as root so the bind-mounted host source
+# (owned by the developer's UID, not baked into the image) stays writable
+# for hot reload. Everything the prod image needs - app code, alembic,
+# static build, the /opt/venv site-packages - was COPY'd/built as root in
+# the base stage, but nothing at runtime writes to the filesystem (no
+# volumes are mounted onto this service - Valhalla is reached over HTTP
+# via VALHALLA_URL, not a shared volume - and there's no tempfile/cache
+# writing in app code), so a non-root, read-only-capable user is a plain
+# permission drop with nothing to chown.
+RUN groupadd --gid 10001 moovelo \
+    && useradd --uid 10001 --gid moovelo --no-create-home --shell /usr/sbin/nologin moovelo
+USER moovelo
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "17777"]
