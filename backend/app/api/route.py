@@ -61,6 +61,7 @@ async def config(db: DbDep) -> AppConfig:
         search_enabled=built_at is not None,
         search_index_version=str(int(built_at.timestamp())) if built_at else None,
         weather_enabled=settings.weather_enabled,
+        assistant_enabled=settings.assistant_enabled,
     )
 
 

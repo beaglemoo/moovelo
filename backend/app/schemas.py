@@ -48,6 +48,10 @@ class AppConfig(BaseModel):
     # False unless WEATHER_API_URL is set. Gates the weather panel entirely -
     # nothing reaches outside the LAN unless this is configured.
     weather_enabled: bool = False
+    # False unless both LLM_BASE_URL and LLM_MODEL are set. Gates the route
+    # assistant panel entirely - no route data leaves the LAN unless this is
+    # configured, and then only to the endpoint the operator chose.
+    assistant_enabled: bool = False
 
 
 class PlaceResult(BaseModel):
