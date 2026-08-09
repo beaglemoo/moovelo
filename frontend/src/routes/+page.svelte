@@ -168,10 +168,13 @@
 	let alternatesLoading = $state(false);
 	let alternatesError: string | null = $state(null);
 	let hoveredAlternateIndex: number | null = $state(null);
-	// The waypoints `alternates` was fetched against, as a plain (non-$state)
-	// snapshot - compared by value in the invalidation effect below, so
-	// populating `alternates` itself never trips that effect's own guard.
-	let alternatesFetchedFor: Waypoint[] | null = null;
+	// The routing inputs `alternates` was fetched against, as a plain
+	// (non-$state) snapshot - compared by value in the invalidation effect
+	// below, so populating `alternates` itself never trips that effect's own
+	// guard. Avoids belong here as much as waypoints do: they travel in the
+	// alternates request, so a candidate fetched before an avoid existed
+	// routes straight through it.
+	let alternatesFetchedFor: { waypoints: Waypoint[]; avoids: Waypoint[] } | null = null;
 	// Points to route around ("not that road"), from the map's context menu.
 	// Session-only planner memory - never persisted with a saved route, since
 	// the saved geometry already reflects whatever avoids shaped it.
@@ -859,14 +862,20 @@
 		return a.length === b.length && a.every((wp, i) => wp.lat === b[i].lat && wp.lon === b[i].lon);
 	}
 
-	// Any waypoint edit invalidates whatever alternates were fetched for the
-	// previous pair - reading `waypoints` is enough since every mutator
-	// reassigns or mutates this $state array. Guarded by comparing against
-	// alternatesFetchedFor (a plain snapshot, not itself reactive) so this
-	// does not fire the instant a search populates `alternates`.
+	// Any edit to the inputs invalidates whatever alternates were fetched for
+	// the previous ones - reading `waypoints` and `avoids` is enough since
+	// every mutator reassigns or mutates these $state arrays. Guarded by
+	// comparing against alternatesFetchedFor (a plain snapshot, not itself
+	// reactive) so this does not fire the instant a search populates
+	// `alternates`.
 	$effect(() => {
-		const current = waypoints;
-		if (alternatesFetchedFor && !sameWaypoints(current, alternatesFetchedFor)) {
+		const currentWaypoints = waypoints;
+		const currentAvoids = avoids;
+		if (
+			alternatesFetchedFor &&
+			(!sameWaypoints(currentWaypoints, alternatesFetchedFor.waypoints) ||
+				!sameWaypoints(currentAvoids, alternatesFetchedFor.avoids))
+		) {
 			dismissAlternates();
 		}
 	});
@@ -898,7 +907,10 @@
 				avoids.length ? avoids : null
 			);
 			alternates = result.alternates;
-			alternatesFetchedFor = waypoints.map((wp) => ({ ...wp }));
+			alternatesFetchedFor = {
+				waypoints: waypoints.map((wp) => ({ ...wp })),
+				avoids: avoids.map((wp) => ({ ...wp }))
+			};
 		} catch (err) {
 			alternatesError = err instanceof Error ? err.message : 'Alternate route search failed';
 		} finally {
