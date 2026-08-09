@@ -7,11 +7,12 @@ export interface PlannerSnapshot {
 	preset: Preset;
 	costingOptions: BicycleCostingOptions | null;
 	source: RouteSource;
-	/** The saved-route identity at capture time. Restored by applySnapshot
-	 * only when non-null - time travel can re-attach a route to its library
-	 * row (undoing an accidental Clear) but never detaches one, so undoing
-	 * past the save point cannot turn "Save changes" into a duplicating
-	 * "Save". */
+	/** The saved-route identity at capture time, restored by applySnapshot
+	 * exactly as captured - null included. Undoing past the point a route was
+	 * saved therefore detaches it, which is correct: what is on screen is no
+	 * longer what that library row holds, so offering "Save" (a new row) is
+	 * honest, where keeping the row attached would let the next save
+	 * overwrite it with unrelated content. */
 	savedId: string | null;
 	savedName: string | null;
 	/** Points to route around - see reroute()'s exclude_locations. Session-

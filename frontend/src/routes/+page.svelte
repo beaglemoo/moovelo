@@ -256,14 +256,18 @@
 		customCostingOptions = snap.costingOptions ? { ...snap.costingOptions } : null;
 		source = snap.source;
 		avoids = snap.avoidLocations.map((wp) => ({ ...wp }));
-		// Re-attach only, never detach - see PlannerSnapshot.savedId. This is
-		// what makes an accidental Clear fully undoable: the restored route
-		// is still the library row it was, so Save offers "Save changes",
-		// not a duplicating "Save".
-		if (snap.savedId !== null) {
-			savedId = snap.savedId;
-			savedName = snap.savedName;
-		}
+		// Restored exactly, null included - see PlannerSnapshot.savedId.
+		// An accidental Clear stays fully undoable because clear() pushes its
+		// snapshot BEFORE nulling savedId, so the entry undo lands on already
+		// carries the library row and Save offers "Save changes".
+		// Re-attaching only (never clearing) was tried and is worse: undoing
+		// back past the point a route was saved would leave savedId pinned to
+		// that row while the waypoints on screen wandered off to something
+		// else entirely, and the next save would PUT the unrelated content
+		// over it. Detaching can at worst duplicate a row, which the user can
+		// see and delete; overwriting silently destroys a saved route.
+		savedId = snap.savedId;
+		savedName = snap.savedName;
 		if (snap.routeOverride) {
 			route = snap.routeOverride;
 			dirty = true;
