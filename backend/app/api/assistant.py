@@ -11,6 +11,7 @@ adopt or discard - never a saved route and never a black box.
 
 import json
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Literal
 
@@ -20,8 +21,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 
 from app.api.deps import DbDep, UserDep
-from app.models import SearchIndexMeta
+from app.models import SearchIndexMeta, User
 from app.schemas import BicycleCostingOptions, Preset, RouteResponse, Waypoint
+from app.services import rate_limit
 from app.services.assistant.naming import suggest_name as generate_name
 from app.services.assistant.refs import MAX_KNOWN_HANDLES, Handle, HandleTable
 from app.services.assistant.tools import ToolContext
@@ -121,10 +123,27 @@ class AssistantChatResponse(BaseModel):
     error: str | None = None
 
 
+def _spend_a_turn(user_id: uuid.UUID) -> None:
+    """Bound what one account can spend at the configured endpoint.
+
+    The system prompt asks the assistant to stay on route planning, and a
+    prompt is persuasion rather than a guarantee - nothing stops a determined
+    rider talking it into something else on the operator's tab. This is the
+    part that is not persuasion: past the allowance the endpoint refuses,
+    whatever the model would have been willing to do.
+    """
+    if not rate_limit.assistant.check_and_record(f"assistant:{user_id}"):
+        raise HTTPException(
+            status_code=429,
+            detail="That is a lot of assistant requests - try again later.",
+        )
+
+
 async def _prepare(
     body: AssistantChatRequest,
     request: Request,
     db: DbDep,
+    user: User,
 ) -> tuple[LLMConfig, ToolContext, list[dict[str, Any]]]:
     """Everything both chat transports need before the loop starts.
 
@@ -136,6 +155,7 @@ async def _prepare(
         # 404 rather than 503, matching the weather and Wahoo gates: the
         # feature does not exist on this install rather than being broken.
         raise HTTPException(status_code=404, detail="The route assistant is not configured")
+    _spend_a_turn(user.id)
 
     built_at = await db.scalar(select(SearchIndexMeta.built_at))
     handles = HandleTable()
@@ -197,9 +217,9 @@ async def chat(
     body: AssistantChatRequest,
     request: Request,
     db: DbDep,
-    _user: UserDep,
+    user: UserDep,
 ) -> AssistantChatResponse:
-    config, ctx, history = await _prepare(body, request, db)
+    config, ctx, history = await _prepare(body, request, db, user)
     async with LLMClient(config) as llm:
         turn = await run_turn(llm, history, ctx)
 
@@ -224,7 +244,7 @@ async def chat_stream(
     body: AssistantChatRequest,
     request: Request,
     db: DbDep,
-    _user: UserDep,
+    user: UserDep,
 ) -> StreamingResponse:
     """The same turn as /chat, reported as it happens.
 
@@ -245,7 +265,7 @@ async def chat_stream(
     version in use, not assumed - and an AsyncSession would survive an early
     exit anyway, since closing one only returns its connection to the pool.
     """
-    config, ctx, history = await _prepare(body, request, db)
+    config, ctx, history = await _prepare(body, request, db, user)
 
     async def frames() -> AsyncIterator[str]:
         done_sent = False
@@ -319,7 +339,7 @@ class SuggestNameResponse(BaseModel):
 async def suggest_name(
     body: SuggestNameRequest,
     db: DbDep,
-    _user: UserDep,
+    user: UserDep,
 ) -> SuggestNameResponse:
     """Propose a short name for the route about to be saved.
 
@@ -334,6 +354,7 @@ async def suggest_name(
         # 404 rather than 503, matching /chat: the feature does not exist on
         # this install rather than being broken.
         raise HTTPException(status_code=404, detail="The route assistant is not configured")
+    _spend_a_turn(user.id)
 
     start = await reverse_geocode(db, body.waypoints[0].lat, body.waypoints[0].lon)
     end = await reverse_geocode(db, body.waypoints[-1].lat, body.waypoints[-1].lon)
