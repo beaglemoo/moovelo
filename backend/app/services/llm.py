@@ -29,6 +29,12 @@ MAX_ATTEMPTS = 3
 # the same gateway has been measured at over 40 seconds for one call.
 REQUEST_TIMEOUT_S = 90.0
 MAX_BACKOFF_S = 60.0
+# A hard ceiling on what one completion can be billed for. The assistant's
+# job is short prose plus tool calls, so this is generous for the work and
+# still bounds the damage if a model is talked into writing an essay - the
+# prompt asks it to stay on topic, this makes the cost of it not doing so
+# finite. Applies to every request, tools or not.
+MAX_COMPLETION_TOKENS = 1024
 
 
 class LLMError(Exception):
@@ -150,6 +156,7 @@ class LLMClient:
             "model": self.config.model,
             "messages": messages,
             "temperature": 0,
+            "max_tokens": MAX_COMPLETION_TOKENS,
         }
         if tools:
             payload["tools"] = tools
