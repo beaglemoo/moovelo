@@ -19,8 +19,12 @@ drawing a straight line.
   route you grabbed it.
 - **Right-click the map** (or long-press on a touch device) for a context
   menu: *Route from here* (moves the start), *Add waypoint* (appends to
-  the end), *Route to here* (moves the end), and *Remove waypoint* /
-  *Clear route* depending on what you clicked. If the place index is built
+  the end), *Route to here* (moves the end), *Remove waypoint* /
+  *Clear route* depending on what you clicked, and *Loop from here* /
+  *Isochrone from here* (see [Loops from a point](#loops-from-a-point) and
+  [Isochrones](#isochrones) below). Right-click *on the route line itself*
+  instead adds *Avoid this road* (see
+  [Avoiding a road](#avoiding-a-road) below). If the place index is built
   (see [Place search and POIs](#place-search-and-pois) below), the menu
   also shows the name of the place you right-clicked.
 - **Undo** and **Redo** step through your whole editing history -
@@ -43,6 +47,68 @@ rather than just a label:
 Switching preset re-routes your current waypoints immediately, so it's a
 good way to see how different a road-bike line and a gravel line really
 are between the same two points.
+
+### Custom costing
+
+The three presets are starting points, not the whole story. A fourth
+**Custom…** option next to them opens the same Valhalla costing options
+the presets are built from, as sliders:
+
+| Control | What it changes |
+|---------|-----------------|
+| Bike type | Road, Hybrid, Cross or Mountain - changes which surfaces the router considers normal for you |
+| Cycling speed | 10-35 km/h, the speed the router assumes on flat, good surface (this feeds routing decisions, not the displayed ride time) |
+| Prefer roads | 0-100%, willingness to ride on busier carriageways |
+| Hills OK | 0-100%, willingness to climb rather than route around |
+| Avoid rough surfaces | 0-100%, how hard to dodge unpaved ground |
+
+Move any slider and the route re-plans, with the preset row switching to
+**Custom…**. Name a setup and press **Save as preset** to keep it - your
+saved presets are listed in the same popover, one click to re-apply, and
+you can hold up to 20 of them.
+
+Saved presets are a convenience library for the sliders, nothing more. A
+saved route stores the actual costing numbers it was planned with, so
+deleting a preset never changes, breaks or re-routes a route you built
+with it.
+
+### Loops from a point
+
+Right-click anywhere and choose **Loop from here** to ask for a round
+trip of a given length - anything from 5 to 200 km. Moovelo tries eight
+directions out of that point, and for each one hunts for the distance
+out it needs to go to bring the whole ride back near your target, then
+shows you up to three genuinely different candidates as coloured ghost
+lines with distance, climbing and surface for each.
+
+Two things worth knowing. The distance is approximate: these are real
+roads, so a 60 km ask typically lands within a couple of percent rather
+than exactly. And picking one is not a commitment - **Use this loop**
+drops it in as ordinary waypoints you can drag, extend and re-plan like
+anything else. It's a starting point, not a black box.
+
+### Alternatives
+
+For a straight A-to-B route, **Alternatives** asks the router for other
+sensible ways between the same two points, drawn as ghost lines with how
+much longer or hillier each is than what you have. Click one to adopt
+it - and Undo puts back exactly the route you had, not a re-derived one.
+
+The button is only available with exactly two waypoints. Alternatives
+have no meaning once a route is pinned through via points, so it
+disables itself (and says why) as soon as you add a third.
+
+### Avoiding a road
+
+Right-click **on the route line** for **Avoid this road**: the route
+re-plans excluding that spot, and the avoided point stays on the map as
+a marker with a chip you can remove to put it back. Up to 10 at a time.
+
+Avoids are a planning tool, not part of the route: they're not saved
+with it. The saved geometry already goes the way you shaped it, so
+reloading a route gives you the line you kept - just without the list of
+places you told it to skip. Editing that reloaded route re-plans without
+those avoids, so re-add any that still matter.
 
 ## Reading the panel
 
@@ -71,6 +137,14 @@ climb gets steeper (0-3%, 3-6%, 6-9%, 9-12%, 12%+). Both use the same
 maths, so a red stretch on the chart is the same red stretch on the map. A
 route with no elevation data (see
 [Troubleshooting](troubleshooting.md)) keeps the plain, unbanded line.
+
+**Waypoint list.** Every waypoint in route order, named by
+reverse-geocoding when the place index is built and by position
+("Start", "Via 2", "Finish") when it's not. Reorder rows by dragging
+them or with the up/down buttons - the buttons are the touch and
+keyboard path, since drag-and-drop fires nothing on a touchscreen - and
+remove any waypoint from its row. Hovering a row highlights that marker
+on the map.
 
 **Climbs.** Below the chart, a list of the climbs on this route, each
 categorised HC down to 4 in the informal road-cycling sense (harder
@@ -154,6 +228,20 @@ Once it's built:
   most useful on the OSM standard basemap, which draws no cycle routes at
   all - the default CyclOSM basemap already shows the national network
   itself, so the overlay mostly just recolours what's already there.
+
+## Isochrones
+
+Right-click any point and choose **Isochrone from here** to see how far
+you could get from it in a given time - 5 to 120 minutes - drawn as a
+shaded area over the map. A marker stays at the origin, because the
+overlay belongs to that point and not to whatever route you're
+planning: it survives edits to the route on purpose, and goes away when
+you press **Hide isochrone** or clear the route.
+
+Read it as a shape, not a promise. The reach is computed by the routing
+engine's own flat speed model, not your personal ride-time settings, so
+it doesn't know about your FTP or the gradient penalty the stats bar
+uses. The 120-minute ceiling is the routing engine's, not ours.
 
 ## Weather and wind
 
