@@ -132,6 +132,14 @@ class Route(Base):
     wahoo_pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     # Public read-only share link token; null = not shared.
     share_token: Mapped[str | None] = mapped_column(String(64), unique=True, default=None)
+    # Natural-language summary, generated once (one LLM call, no tools) when
+    # the share link is created or rotated - never on the public read path.
+    # summary_signature is a hash of the route's own geometry at generation
+    # time (services/route_summary.py); a later re-route changes the
+    # geometry without touching either column, so the signature no longer
+    # matching is what tells the read path to suppress a stale summary.
+    summary: Mapped[str | None] = mapped_column(Text, default=None)
+    summary_signature: Mapped[str | None] = mapped_column(Text, default=None)
     # Free-form organisation. Tags rather than folders: a route can be both
     # "gravel" and "with the kids".
     tags: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
