@@ -243,6 +243,45 @@ engine's own flat speed model, not your personal ride-time settings, so
 it doesn't know about your FTP or the gradient penalty the stats bar
 uses. The 120-minute ceiling is the routing engine's, not ours.
 
+## The route assistant
+
+Off unless someone configures it. An admin sets an endpoint and a model
+on the **/admin** page (or via the `LLM_*` variables); until then there
+is no chat panel and nothing calls out anywhere.
+
+Once it is on, the planner grows a chat box. Ask for what you want in
+plain words - "a 40 km gravel loop from here, with water on it", "take
+me to Ivinghoe Beacon avoiding the A41" - and the reply streams back as
+it works, with a line telling you which step it is on. Long questions
+take a while, because each round trip to the model is followed by real
+routing and searching; **Stop** ends a turn you have lost patience with.
+
+What comes back is an offer, not a change. A route it builds is drawn as
+a dashed green line with a card showing its distance and climbing;
+**Use this route** turns it into ordinary waypoints you can drag, and
+**Discard** throws it away. Accepting is an ordinary edit, so **Undo**
+takes you back. Edit your route while an offer is on screen and the
+offer goes away, because it no longer describes what you are looking at.
+
+Three things worth knowing:
+
+- **It cannot make up a place or a distance.** It has no way to state a
+  coordinate: it looks places up and then hands the result to the same
+  routing engine the rest of the app uses. The figures on the card are
+  read off the route that came back, not off anything the assistant
+  wrote.
+- **It only sees the planner.** Your saved library - names, tags, notes -
+  is not available to it.
+- **It needs the place index for anything by name.** Without the
+  optional indexer (see [Place search and POIs](#place-search-and-pois))
+  it will say so and offer to work from your current waypoints or the
+  map centre instead.
+
+Whatever you type goes to the endpoint that was configured, along with
+place names and route figures it looks up on your behalf. Point it at
+Ollama or LM Studio on your own hardware and nothing leaves your
+network - see the [FAQ](faq.md#does-any-of-my-data-leave-my-network).
+
 ## Weather and wind
 
 Off unless `WEATHER_API_URL` is set to an Open-Meteo-compatible forecast
