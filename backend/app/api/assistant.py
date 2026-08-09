@@ -16,11 +16,13 @@ from sqlalchemy import select
 from app.api.deps import DbDep, UserDep
 from app.models import SearchIndexMeta
 from app.schemas import BicycleCostingOptions, Preset, RouteResponse, Waypoint
+from app.services.assistant.naming import suggest_name as generate_name
 from app.services.assistant.refs import MAX_KNOWN_HANDLES, Handle, HandleTable
 from app.services.assistant.tools import ToolContext
 from app.services.assistant.turn import run_turn
-from app.services.llm import LLMClient
+from app.services.llm import LLMClient, LLMError
 from app.services.llm_config import resolve_llm_config
+from app.services.places import reverse_geocode
 from app.services.valhalla import ValhallaClient
 
 router = APIRouter(prefix="/api/assistant")
@@ -158,3 +160,60 @@ async def chat(
         stopped_early=turn.stopped_early,
         error=turn.error,
     )
+
+
+class SuggestNameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    waypoints: list[Waypoint] = Field(min_length=2, max_length=50)
+    # Whatever the planner is showing right now, never recomputed here - the
+    # naming call must describe the route the rider is looking at, not a
+    # figure of its own invention.
+    distance_m: float = Field(ge=0)
+    ascent_m: float = Field(ge=0)
+
+
+class SuggestNameResponse(BaseModel):
+    name: str
+
+
+@router.post("/suggest-name")
+async def suggest_name(
+    body: SuggestNameRequest,
+    db: DbDep,
+    _user: UserDep,
+) -> SuggestNameResponse:
+    """Propose a short name for the route about to be saved.
+
+    One plain completion, no tools: naming needs no route-building
+    primitives, just the two place names (when the index resolves them) and
+    the distance/ascent the planner already measured. Both reverse-geocode
+    lookups are None on an install with no place index built, which the
+    prompt is told explicitly rather than left to guess at.
+    """
+    config = await resolve_llm_config(db)
+    if not config.enabled:
+        # 404 rather than 503, matching /chat: the feature does not exist on
+        # this install rather than being broken.
+        raise HTTPException(status_code=404, detail="The route assistant is not configured")
+
+    start = await reverse_geocode(db, body.waypoints[0].lat, body.waypoints[0].lon)
+    end = await reverse_geocode(db, body.waypoints[-1].lat, body.waypoints[-1].lon)
+
+    try:
+        async with LLMClient(config) as llm:
+            name = await generate_name(
+                llm,
+                distance_km=body.distance_m / 1000.0,
+                ascent_m=body.ascent_m,
+                start_name=start.name if start else None,
+                end_name=end.name if end else None,
+            )
+    except LLMError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if not name:
+        # A blank reply is a bad completion, not a reason to send the rider
+        # back to a plain date-based fallback the frontend already has - a
+        # figure we actually measured beats nothing.
+        name = f"{round(body.distance_m / 1000.0)} km ride"
+    return SuggestNameResponse(name=name)

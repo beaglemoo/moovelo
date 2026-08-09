@@ -11,6 +11,7 @@
 		routeSurface,
 		routeWeather,
 		routes,
+		suggestRouteName,
 		wahoo,
 		type AppConfig,
 		type BicycleCostingOptions,
@@ -101,6 +102,7 @@
 	let saveDialogOpen = $state(false);
 	let saveNameInput = $state('');
 	let saving = $state(false);
+	let suggestingName = $state(false);
 	// Points of interest. `poiGroups` survives across routes on purpose: the
 	// rider who wants water shown wants it shown on the next ride too.
 	let poiGroups: string[] = $state([...DEFAULT_POI_GROUPS]);
@@ -1049,6 +1051,32 @@
 		if (saveDialogOpen && saveNameInput === fallback) saveNameInput = suggestion;
 	}
 
+	/** The save dialog's explicit "Suggest" button - an assistant call the
+	 * rider asked for, unlike suggestName() above which fills the box
+	 * automatically from the place index alone. Fails silently: whatever is
+	 * already in the box is left exactly as it was, same as suggestName()
+	 * finding no place names. */
+	async function suggestNameFromAssistant() {
+		// Same `loading`/`routeStale` guard as save(), for the same reason: this
+		// reads `route.distance_m`/`route.ascent_m` and `waypoints` together, and
+		// mid-reroute (or after a failed one, where `loading` is already back to
+		// false) those two disagree. The result would be a name built from the
+		// new waypoints' place names and the old route's numbers - wrong in a way
+		// the rider cannot see, since a plausible name is exactly what they
+		// expected. The button is disabled as well; this is the backstop.
+		if (!config?.assistant_enabled || !route || waypoints.length < 2) return;
+		if (loading || routeStale) return;
+		suggestingName = true;
+		try {
+			saveNameInput = await suggestRouteName(waypoints, route.distance_m, route.ascent_m);
+		} catch {
+			// Leave the input untouched - the rider can still type a name or
+			// keep the date-based fallback.
+		} finally {
+			suggestingName = false;
+		}
+	}
+
 	// Waits out the surface fetch in flight when called, and any newer one
 	// that starts while waiting - guards against drag, save, drag again
 	// before the first fetch settles, where a bare `await surfacePending`
@@ -1405,8 +1433,21 @@
 			<div class="dialog-backdrop">
 				<form class="dialog" onsubmit={confirmSave}>
 					<h3>Save route</h3>
-					<!-- svelte-ignore a11y_autofocus -->
-					<input bind:value={saveNameInput} autofocus maxlength="200" placeholder="Route name" />
+					<div class="dialog-name-row">
+						<!-- svelte-ignore a11y_autofocus -->
+						<input bind:value={saveNameInput} autofocus maxlength="200" placeholder="Route name" />
+						{#if config?.assistant_enabled}
+							<button
+								type="button"
+								class="suggest-name"
+								onclick={suggestNameFromAssistant}
+								disabled={suggestingName || !route || loading || routeStale}
+								title="Ask the assistant to suggest a name"
+							>
+								{suggestingName ? '…' : 'Suggest'}
+							</button>
+						{/if}
+					</div>
 					<div class="dialog-buttons">
 						<button type="button" onclick={() => (saveDialogOpen = false)}>Cancel</button>
 						<button type="submit" class="primary" disabled={saving || !saveNameInput.trim()}>
@@ -1628,6 +1669,27 @@
 		padding: 0.5rem 0.6rem;
 		border: 1px solid #ccc;
 		border-radius: 6px;
+	}
+	.dialog-name-row {
+		display: flex;
+		gap: 0.5rem;
+	}
+	.dialog-name-row input {
+		flex: 1;
+		min-width: 0;
+	}
+	.dialog-name-row .suggest-name {
+		border: 1px solid #ccc;
+		background: #fff;
+		border-radius: 6px;
+		padding: 0.4rem 0.7rem;
+		font: inherit;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	.dialog-name-row .suggest-name:disabled {
+		opacity: 0.6;
+		cursor: default;
 	}
 	.dialog-buttons {
 		display: flex;
