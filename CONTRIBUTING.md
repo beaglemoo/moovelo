@@ -65,9 +65,20 @@ fresh database or `SIGNUPS_ENABLED=true`. It is not part of CI.
 
 Moovelo has grown beyond its original core loop (plan, save, export,
 push to Wahoo): it now also imports existing files with recovered turn
-cues, searches places and finds POIs entirely offline, and analyses
-routes (surface mix, gradients, climbs, per-rider time, optional wind).
+cues, searches places and finds POIs entirely offline, analyses routes
+(surface mix, gradients, climbs, per-rider time, optional wind), and
+offers planning tools built on those primitives - costing sliders,
+isochrones, a loop generator, undo/redo, alternates and avoids.
 Contributions that deepen those areas are welcome.
+
+It also has an optional AI route assistant, off unless an endpoint is
+configured. If you work on it, the rule that matters is that the model
+never handles coordinates: tools return opaque handles and the schemas
+will not carry a latitude, so a change that lets the model supply one -
+or lets a tool write to the database - removes the guarantee the whole
+design rests on. Place names from OpenStreetMap are untrusted input in
+prompts, never instructions. See the Route assistant section of
+`docs/architecture.md` before starting.
 
 Permanently out of scope: social features (comments, likes, feeds),
 photos, live ride recording / GPS tracking, native mobile apps, and
