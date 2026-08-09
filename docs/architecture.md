@@ -436,6 +436,37 @@ entirely, since the stored signature already matches. No assistant
 configured (see `services/llm_config.py`) or the call failing both
 degrade to no summary; sharing itself never fails because of this.
 
+### Chat transport
+
+`POST /api/assistant/chat/stream` is the only streaming endpoint in the
+app. It reports one turn as it happens over Server-Sent Events: `token`
+for prose as it arrives, `tool_call` and `tool_result` so the panel can
+say which step is running and which one failed, `handles` (the places
+the assistant looked up, with the coordinates the model itself never
+sees), `proposal`, `error`, and exactly one `done` on every path so the
+client has a single unambiguous stop signal. `POST /api/assistant/chat`
+answers the same turn as plain JSON once it is over.
+
+Both consume `run_turn_events()` in `services/assistant/turn.py`, which
+is the only implementation of the loop - the budgets, the self-correction
+paths and the proposal exist once, not once per transport. The single
+difference is whether prose is fetched a fragment at a time
+(`LLMClient.stream()`) or awaited whole (`LLMClient.complete()`).
+
+Streaming retries are deliberately narrower than the non-streaming ones:
+once a fragment has been handed to the caller it is already on the
+rider's screen, so restarting the completion would repeat text rather
+than replace it. A failure mid-body is terminal.
+
+The browser side is `streamAssistantChat()` in `frontend/src/lib/api.ts`
+- `fetch` plus a `ReadableStream` reader, parsing SSE by hand.
+`EventSource` is GET-only and this needs a POST body carrying the whole
+conversation. Authentication and the configured-or-not check resolve
+before the response starts, so those failures are ordinary HTTP errors;
+only something that goes wrong after the first byte becomes an `error`
+frame. Conversation state lives on the client, which echoes back the
+handles it was given, so the server keeps no session.
+
 ## Importing route files
 
 `POST /api/routes/import` takes a GPX, TCX or FIT upload.

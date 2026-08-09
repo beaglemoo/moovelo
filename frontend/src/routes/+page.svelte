@@ -37,6 +37,7 @@
 	import ElevationProfile from '$lib/components/ElevationProfile.svelte';
 	import LoopPanel from '$lib/components/LoopPanel.svelte';
 	import PlaceSearch from '$lib/components/PlaceSearch.svelte';
+	import AssistantPanel from '$lib/components/AssistantPanel.svelte';
 	import PoiPanel from '$lib/components/PoiPanel.svelte';
 	import PresetSelector from '$lib/components/PresetSelector.svelte';
 	import PresetSlidersPopover from '$lib/components/PresetSlidersPopover.svelte';
@@ -1466,6 +1467,10 @@
 			<div class="banner">Routing…</div>
 		{/if}
 	</div>
+	{#snippet assistantPanel()}
+		<AssistantPanel {waypoints} centre={mapCentre} {preset} costingOptions={customCostingOptions} />
+	{/snippet}
+
 	{#if route}
 		<div class="panel">
 			<div class="stats">
@@ -1518,6 +1523,9 @@
 						onHover={(id) => (hoveredPoiId = id)}
 					/>
 				{/if}
+				{#if config?.assistant_enabled}
+					{@render assistantPanel()}
+				{/if}
 				{#if config?.weather_enabled}
 					<WeatherPanel
 						startTime={weatherStartTime}
@@ -1530,6 +1538,10 @@
 					/>
 				{/if}
 			</div>
+		</div>
+	{:else if config?.assistant_enabled}
+		<div class="panel">
+			<div class="panel-body">{@render assistantPanel()}</div>
 		</div>
 	{/if}
 </div>
@@ -1801,6 +1813,7 @@
 	.panel-body :global(.pois),
 	.panel-body :global(.climbs),
 	.panel-body :global(.weather),
+	.panel-body :global(.assistant),
 	.panel-body :global(.waypoints) {
 		flex: 0 0 21rem;
 		min-width: 0;
@@ -1813,6 +1826,7 @@
 		.panel-body :global(.pois),
 		.panel-body :global(.climbs),
 		.panel-body :global(.weather),
+		.panel-body :global(.assistant),
 		.panel-body :global(.waypoints) {
 			flex: none;
 			width: 100%;

@@ -11,7 +11,9 @@ raises LLMError carrying a message fit to show a user.
 """
 
 import asyncio
+import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -55,6 +57,23 @@ class LLMResponse:
     # are absent against a plain local endpoint.
     raw_usage: dict[str, Any] = field(default_factory=dict)
     provider: str | None = None
+
+
+@dataclass(frozen=True)
+class TextDelta:
+    """A fragment of the assistant's prose, as it arrives."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class Completed:
+    """The assembled reply. Exactly one of these ends every stream."""
+
+    response: LLMResponse
+
+
+StreamChunk = TextDelta | Completed
 
 
 def _parse_message(
@@ -125,6 +144,7 @@ class LLMClient:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
+        stream: bool = False,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.config.model,
@@ -133,6 +153,8 @@ class LLMClient:
         }
         if tools:
             payload["tools"] = tools
+        if stream:
+            payload["stream"] = True
         provider: dict[str, Any] = {}
         if self.config.providers:
             # A preference, never a constraint. allow_fallbacks stays true:
@@ -226,6 +248,166 @@ class LLMClient:
             )
 
         raise LLMError("The assistant service is rate-limiting or unavailable - try again later")
+
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        timeout: float | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        """One completion, delivered as it arrives.
+
+        Yields TextDelta for each fragment of prose and exactly one Completed
+        at the end, carrying the same LLMResponse `complete()` would have
+        returned. Tool calls cannot be streamed usefully - the arguments are
+        a JSON string that is only valid once whole - so they accumulate
+        silently and appear on the Completed.
+
+        Retries are narrower than `complete()`'s deliberately: once a single
+        delta has been handed to the caller it has already reached the
+        rider's screen, and starting the completion again would repeat text
+        rather than replace it. So a failure mid-body is terminal, and only
+        one that happens before any output can be retried.
+        """
+        if self._client is None:
+            raise LLMError("LLM client used outside its context manager")
+        url = self.config.base_url.rstrip("/") + "/chat/completions"
+        payload = self._payload(messages, tools, stream=True)
+        headers = self._headers()
+
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            emitted = False
+            content: list[str] = []
+            # Keyed by the wire's own `index`, because a reply with two tool
+            # calls interleaves their fragments rather than finishing one
+            # before starting the next.
+            calls: dict[int, dict[str, str]] = {}
+            try:
+                async with self._client.stream(
+                    "POST",
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=timeout if timeout is not None else REQUEST_TIMEOUT_S,
+                ) as response:
+                    if response.status_code == 429 or response.status_code >= 500:
+                        await response.aread()
+                        if attempt == MAX_ATTEMPTS:
+                            break
+                        try:
+                            retry_after = float(response.headers.get("Retry-After", 2**attempt))
+                        except ValueError:
+                            retry_after = float(2**attempt)
+                        logger.warning(
+                            "Assistant stream retry %d after HTTP %d",
+                            attempt,
+                            response.status_code,
+                        )
+                        await asyncio.sleep(min(retry_after, MAX_BACKOFF_S))
+                        continue
+                    if response.status_code >= 400:
+                        await response.aread()
+                        raise LLMError(_error_message(response))
+
+                    async for line in response.aiter_lines():
+                        event = _parse_sse_line(line)
+                        if event is None:
+                            continue
+                        text = _accumulate(event, content, calls)
+                        if text:
+                            emitted = True
+                            yield TextDelta(text)
+            except httpx.TransportError as exc:
+                if emitted:
+                    raise LLMError("The assistant service disconnected mid-reply") from exc
+                if attempt == MAX_ATTEMPTS:
+                    raise LLMError("The assistant service is unreachable") from exc
+                await asyncio.sleep(min(2**attempt, MAX_BACKOFF_S))
+                continue
+
+            yield Completed(_assemble(content, calls))
+            return
+
+        raise LLMError("The assistant service is rate-limiting or unavailable - try again later")
+
+
+def _parse_sse_line(line: str) -> dict[str, Any] | None:
+    """One `data:` frame, or None for anything that carries no payload.
+
+    Comment lines (`: keep-alive`), blank separators and the terminal
+    `[DONE]` sentinel all arrive here and none of them are data.
+    """
+    if not line.startswith("data:"):
+        return None
+    payload = line[len("data:") :].strip()
+    if not payload or payload == "[DONE]":
+        return None
+    try:
+        parsed = json.loads(payload)
+    except ValueError:
+        # A malformed frame is not worth failing a reply that is otherwise
+        # arriving fine; the assembled result simply omits it.
+        logger.warning("Ignoring an unparseable frame from the assistant service")
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _accumulate(
+    event: dict[str, Any],
+    content: list[str],
+    calls: dict[int, dict[str, str]],
+) -> str:
+    """Fold one frame into the running reply, returning any new prose."""
+    choices = event.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
+    if not isinstance(delta, dict):
+        return ""
+
+    for raw in delta.get("tool_calls") or []:
+        if not isinstance(raw, dict):
+            continue
+        index = raw.get("index")
+        if not isinstance(index, int):
+            index = 0
+        call = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+        if isinstance(raw.get("id"), str):
+            call["id"] = raw["id"]
+        function = raw.get("function")
+        if isinstance(function, dict):
+            if isinstance(function.get("name"), str):
+                call["name"] += function["name"]
+            if isinstance(function.get("arguments"), str):
+                call["arguments"] += function["arguments"]
+
+    text = delta.get("content")
+    if isinstance(text, str) and text:
+        content.append(text)
+        return text
+    return ""
+
+
+def _assemble(content: list[str], calls: dict[int, dict[str, str]]) -> LLMResponse:
+    """Rebuild the assistant message the non-streaming path would have got.
+
+    Only the standard fields survive a stream - `complete()` replays the
+    message dict verbatim, extra vendor fields included, and there is no
+    equivalent here. That costs nothing today because the loop only replays
+    messages that carried tool calls, and those are reconstructed exactly.
+    """
+    message: dict[str, Any] = {"role": "assistant", "content": "".join(content)}
+    ordered = [calls[index] for index in sorted(calls) if calls[index]["id"]]
+    if ordered:
+        message["tool_calls"] = [
+            {
+                "id": call["id"],
+                "type": "function",
+                "function": {"name": call["name"], "arguments": call["arguments"]},
+            }
+            for call in ordered
+        ]
+    return _parse_message(message)
 
 
 def _error_message(response: httpx.Response) -> str:
