@@ -47,4 +47,11 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_custom_presets_user_id", table_name="custom_presets")
     op.drop_table("custom_presets")
+    # preset="custom" only means anything alongside costing_options, which is
+    # about to be dropped - leaving it behind would strand rows in a state the
+    # app's own invariant forbids (custom <-> options travel together), and
+    # older code looks preset up in PRESETS, where "custom" is a KeyError. The
+    # bundle is lost either way; falling back to the default named preset is
+    # the honest landing, and the route's stored geometry is untouched.
+    op.execute("UPDATE routes SET preset = 'road' WHERE preset = 'custom'")
     op.drop_column("routes", "costing_options")
