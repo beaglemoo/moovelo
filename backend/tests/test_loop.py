@@ -303,6 +303,24 @@ async def test_route_loop_rejects_zero_target(client: AsyncClient) -> None:
     assert response.status_code == 422
 
 
+async def test_route_loop_rejects_a_target_under_5km(client: AsyncClient) -> None:
+    """docs/guide.md promises 5 to 200 km. Below 5 the bearing search is
+    looking for a loop shorter than the spacing between its own candidate
+    waypoints, and only the HTML input's min="5" ever said otherwise."""
+    await register(client)
+    response = await client.post(
+        "/api/route/loop", json={"origin": {"lat": ORIGIN.lat, "lon": ORIGIN.lon}, "target_km": 4.9}
+    )
+    assert response.status_code == 422
+    # Asserting the status alone would pass without the floor at all: an
+    # accepted 4.9 reaches the generator, which returns its own 422 when it
+    # cannot find a loop that short. A schema rejection carries a list of
+    # field errors; the service's carries a plain string.
+    detail = response.json()["detail"]
+    assert isinstance(detail, list)
+    assert any("target_km" in str(error.get("loc", "")) for error in detail)
+
+
 async def test_route_loop_rejects_target_over_200km(client: AsyncClient) -> None:
     await register(client)
     response = await client.post(

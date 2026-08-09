@@ -482,7 +482,14 @@ class IsochroneContour(BaseModel):
     # 120 is Valhalla's own service_limits.isochrone.max_time_contour -
     # anything above it always fails downstream, so it is rejected here with
     # a clear message instead.
-    minutes: float | None = Field(default=None, gt=0, le=120)
+    # The 5-minute floor matches the input the UI offers and what
+    # docs/guide.md has always promised. `min="5"` on a number input marks
+    # the field invalid without blocking anything - the bound value goes
+    # straight to the request - so the floor was documented but reachable
+    # right down to a fraction of a minute, which draws a meaningless blob.
+    minutes: float | None = Field(default=None, ge=5, le=120)
+    # Distance contours keep the looser bound: nothing in the UI or the docs
+    # offers them, so there is no claimed floor here to make true.
     km: float | None = Field(default=None, gt=0, le=200)
     # Valhalla wants this sans "#"; the frontend strips it before sending.
     color: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{6}$")
@@ -525,7 +532,11 @@ class LoopQuery(BaseModel):
     """Query for the "N km loop from here" generator - see services/loop.py."""
 
     origin: Waypoint
-    target_km: float = Field(gt=0, le=200)
+    # 5 km floor for the same reason as IsochroneContour.minutes: the UI and
+    # docs/guide.md both say 5 to 200, and only the HTML input said so before.
+    # Below it the bearing search is looking for a loop shorter than the
+    # spacing between its own candidate waypoints.
+    target_km: float = Field(ge=5, le=200)
     preset: Preset = "road"
     # Overrides `preset` entirely when set - see resolve_costing.
     costing_options: BicycleCostingOptions | None = None

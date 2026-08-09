@@ -66,6 +66,23 @@ async def test_neither_minutes_nor_km_is_rejected(client: AsyncClient) -> None:
     assert response.status_code == 422
 
 
+async def test_under_the_five_minute_floor_is_rejected(client: AsyncClient) -> None:
+    """docs/guide.md promises 5 to 120 minutes, and until now only the HTML
+    input said so - `min="5"` marks a field invalid without blocking it, and
+    the bound value goes straight to the request."""
+    await register(client)
+    response = await ask(client, contours=[{"minutes": 4}])
+    assert response.status_code == 422
+
+
+async def test_the_five_minute_floor_itself_is_accepted(client: AsyncClient) -> None:
+    """The boundary is inclusive - 5 is the documented minimum, not the first
+    rejected value."""
+    await register(client)
+    response = await ask(client, contours=[{"minutes": 5}])
+    assert response.status_code != 422
+
+
 async def test_bad_color_is_rejected(client: AsyncClient) -> None:
     await register(client)
     response = await ask(client, contours=[{"minutes": 30, "color": "#268bd2"}])
