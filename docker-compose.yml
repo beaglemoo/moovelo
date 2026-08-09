@@ -86,6 +86,10 @@ services:
       PASSWORD_AUTH_ENABLED: ${PASSWORD_AUTH_ENABLED:-true}
       WAHOO_CLIENT_SECRET: ${WAHOO_CLIENT_SECRET:-}
       WEATHER_API_URL: ${WEATHER_API_URL:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_PROVIDER_ORDER: ${LLM_PROVIDER_ORDER:-}
     volumes:
       - ./backend/app:/app/app
       - ./backend/alembic:/app/alembic
@@ -137,6 +141,10 @@ services:
       PASSWORD_AUTH_ENABLED: ${PASSWORD_AUTH_ENABLED:-true}
       WAHOO_CLIENT_SECRET: ${WAHOO_CLIENT_SECRET:-}
       WEATHER_API_URL: ${WEATHER_API_URL:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_PROVIDER_ORDER: ${LLM_PROVIDER_ORDER:-}
     ports:
       - "${APP_PORT:-17777}:17777"
     depends_on:

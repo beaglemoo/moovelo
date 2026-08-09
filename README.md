@@ -215,6 +215,9 @@ All configuration is via environment variables, documented in
 | `PASSWORD_AUTH_ENABLED` | `true` | Set `false` for SSO-only login (ignored unless OIDC is configured) |
 | `WAHOO_CLIENT_ID` / `WAHOO_CLIENT_SECRET` | unset | Enable Wahoo sync (see [Wahoo sync](#wahoo-sync)) |
 | `WEATHER_API_URL` | unset | Enable the weather panel (see [Weather and wind](#weather-and-wind)) |
+| `LLM_BASE_URL` / `LLM_MODEL` | unset | Enable the route assistant (both required; any OpenAI-compatible endpoint) |
+| `LLM_API_KEY` | unset | API key for the above; a local endpoint usually needs none |
+| `LLM_PROVIDER_ORDER` | unset | OpenRouter only - comma-separated provider preference |
 
 Rider settings (weight, flat-road speed, optional FTP) are the first thing
 in this project configured in-app rather than by environment variable -
