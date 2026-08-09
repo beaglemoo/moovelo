@@ -1027,6 +1027,15 @@
 			const gen = editGeneration;
 			const snapshot = route;
 			if (!snapshot) return;
+			// Re-checked here, not only at entry: the wait above chases the
+			// surface refetch a completed reroute starts, but an edit made
+			// during it whose reroute has NOT landed leaves `route` on the
+			// pre-edit geometry while `waypoints` already holds the edit.
+			// Nothing stops the rider editing the map while a save is in
+			// flight, and the server cross-checks neither - so this window
+			// persisted a row whose stored track belonged to different
+			// waypoints. Reproduced live: waypoints of 4 against 2 legs.
+			if (loading || routeStale || waypoints.length < 2) return;
 			await routes.update(savedId, {
 				waypoints,
 				preset: storedPreset,
@@ -1065,6 +1074,9 @@
 			const gen = editGeneration;
 			const snapshot = route;
 			if (!snapshot) return;
+			// See save(): an edit made during the wait whose reroute has not
+			// landed leaves route and waypoints describing different rides.
+			if (loading || routeStale || waypoints.length < 2) return;
 			const saved = await routes.create({
 				name: saveNameInput.trim(),
 				waypoints,

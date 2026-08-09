@@ -87,6 +87,57 @@ test('a failed reroute blocks saving the stale geometry', async ({ page }) => {
 	await expect(saveBtn).toBeEnabled({ timeout: 30_000 });
 });
 
+test('an edit during a save in flight cannot persist a mismatched pair', async ({ page }) => {
+	await register(page, `e2e-midsave-${Date.now()}@example.com`);
+	await page.goto('/');
+	const markers = await plant(page, 2);
+
+	const saveBtn = page.getByRole('button', { name: 'Save', exact: true });
+	await expect(saveBtn).toBeEnabled({ timeout: 30_000 });
+	await saveBtn.click();
+	await page.getByPlaceholder('Route name').fill('Mid-save edit');
+	await page.locator('form.dialog').getByRole('button', { name: 'Save' }).click();
+	await expect(page.getByRole('button', { name: 'Saved', exact: true })).toBeVisible({
+		timeout: 30_000
+	});
+
+	// Capture what actually reaches the server.
+	const writes: { waypoints: number; legs: number }[] = [];
+	page.on('request', (req) => {
+		if (!/\/api\/routes\/[0-9a-f-]{36}$/.test(req.url())) return;
+		if (req.method() !== 'PATCH' && req.method() !== 'PUT') return;
+		const body = req.postDataJSON();
+		if (body?.waypoints && body?.snapshot)
+			writes.push({ waypoints: body.waypoints.length, legs: body.snapshot.legs.length });
+	});
+
+	// Hold the surface fetch so the save parks inside it, then edit while it
+	// is parked with routing held open, so the edit's reroute never lands.
+	let releaseSurface = () => {};
+	const surfaceHeld = new Promise<void>((resolve) => (releaseSurface = resolve));
+	await page.route('**/api/route/surface', async (route) => {
+		await surfaceHeld;
+		await route.continue();
+	});
+
+	const box = (await page.locator('.map canvas').first().boundingBox())!;
+	await page.mouse.click(box.x + box.width / 2 + 100, box.y + box.height / 2 + 70);
+	await expect(markers).toHaveCount(3);
+	await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toBeEnabled({
+		timeout: 30_000
+	});
+	await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+
+	await page.route('**/api/route', () => {});
+	await page.mouse.click(box.x + box.width / 2 + 140, box.y + box.height / 2 + 110);
+	await expect(markers).toHaveCount(4);
+	releaseSurface();
+	await page.waitForTimeout(2000);
+
+	// Whatever was written must describe one ride: n waypoints, n-1 legs.
+	for (const write of writes) expect(write.legs).toBe(write.waypoints - 1);
+});
+
 test('a reroute that lands after Clear does not resurrect the route', async ({ page }) => {
 	await register(page, `e2e-late-${Date.now()}@example.com`);
 	await page.goto('/');
