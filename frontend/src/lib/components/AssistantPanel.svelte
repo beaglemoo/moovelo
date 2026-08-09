@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import {
 		streamAssistantChat,
 		type AssistantHandle,
@@ -161,6 +162,11 @@
 	function stop() {
 		controller?.abort();
 	}
+
+	// A stream outlives its component otherwise: nothing stops it, and nothing
+	// can - the Stop button went with the panel. The backend keeps paying a
+	// model to finish a turn with no reader.
+	onDestroy(() => controller?.abort());
 
 	function onKeydown(event: KeyboardEvent) {
 		if (event.key === 'Enter' && !event.shiftKey) {
