@@ -123,6 +123,21 @@ class SlidingWindowLimiter:
             self.window_s,
         )
 
+    def refund(self, key: str) -> None:
+        """Give back the most recent event for `key`.
+
+        For work that was charged for up front and then never happened - an
+        endpoint that turned out to be unreachable, say. Only ever removes an
+        event this caller just added, so it cannot be used to clear someone
+        else's window.
+        """
+        timestamps = self._attempts.get(key)
+        if not timestamps:
+            return
+        timestamps.pop()
+        if not timestamps:
+            self._attempts.pop(key, None)
+
     def check_and_record(self, key: str) -> bool:
         """Record an event for `key` and report whether it is allowed.
 
