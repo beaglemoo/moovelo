@@ -53,7 +53,12 @@
 	let customCostingOptions: BicycleCostingOptions | null = $state(null);
 	let customPopoverOpen = $state(false);
 	let route: RouteResponse | null = $state(null);
-	let loading = $state(false);
+	// The reroute whose response still owns the route, or null when none is
+	// outstanding. `loading` is derived from it rather than assigned, so it
+	// cannot be left true by a path that returns early: claiming the route
+	// (below) releases it, and every superseding action claims.
+	let pendingRoute: number | null = $state(null);
+	const loading = $derived(pendingRoute !== null);
 	let error: string | null = $state(null);
 	let hoverPoint: [number, number] | null = $state(null);
 	let config: AppConfig | null = $state(null);
@@ -86,6 +91,11 @@
 	let routeToken = 0;
 	function claimRoute(): number {
 		routeToken += 1;
+		// Whatever was in flight no longer owns the route, so it no longer
+		// owns the "Routing..." state either. Without this, a response dropped
+		// for being superseded would leave the banner and every loading-gated
+		// button stuck until reload.
+		pendingRoute = null;
 		return routeToken;
 	}
 	// Bumped at every site that sets `dirty = true`. A save that started
@@ -612,15 +622,11 @@
 			route = null;
 			routeStale = false;
 			error = null;
-			// The abort above may have killed an in-flight reroute whose
-			// AbortError path never resets `loading` - without this the
-			// "Routing..." banner and the loading-gated buttons wedge forever.
-			loading = false;
 			markEdited();
 			return;
 		}
 		abortController = new AbortController();
-		loading = true;
+		pendingRoute = token;
 		error = null;
 		try {
 			const next = await planRoute(
@@ -637,14 +643,14 @@
 			// courtesy that races, and every one of those callers would
 			// otherwise have to remember to abort.
 			if (token !== routeToken) return;
+			pendingRoute = null;
 			route = next;
-			loading = false;
 			routeStale = false;
 			markEdited();
 		} catch (err) {
 			if (err instanceof DOMException && err.name === 'AbortError') return;
 			if (token !== routeToken) return;
-			loading = false;
+			pendingRoute = null;
 			routeStale = true;
 			error = err instanceof Error ? err.message : 'Routing failed';
 			markEdited();
@@ -792,7 +798,6 @@
 		claimRoute();
 		route = null;
 		routeStale = false;
-		loading = false;
 		error = null;
 		savedId = null;
 		savedName = null;
