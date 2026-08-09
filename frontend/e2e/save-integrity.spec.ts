@@ -193,3 +193,71 @@ test('redo does not restore a route captured while it was stale', async ({ page 
 	await expect(markers).toHaveCount(3);
 	await expect(saveBtn).toBeDisabled({ timeout: 30_000 });
 });
+
+test('undoing back to the saved state re-enables export', async ({ page }) => {
+	await register(page, `e2e-undo-clean-${Date.now()}@example.com`);
+	await page.goto('/');
+	const markers = await plant(page, 2);
+
+	const saveBtn = page.getByRole('button', { name: 'Save', exact: true });
+	await expect(saveBtn).toBeEnabled({ timeout: 30_000 });
+	await saveBtn.click();
+	await page.getByPlaceholder('Route name').fill('Undo clean test');
+	await page.locator('form.dialog').getByRole('button', { name: 'Save' }).click();
+	await expect(page.getByRole('button', { name: 'Saved', exact: true })).toBeVisible({
+		timeout: 30_000
+	});
+
+	const gpx = page.getByRole('button', { name: 'GPX', exact: true });
+	await expect(gpx).toBeEnabled();
+
+	// Edit, then undo straight back to what was saved. The screen now matches
+	// the library row again, so exporting is not downloading anything stale.
+	const box = (await page.locator('.map canvas').first().boundingBox())!;
+	await page.mouse.click(box.x + box.width / 2 + 100, box.y + box.height / 2 + 70);
+	await expect(markers).toHaveCount(3);
+	await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toBeEnabled({
+		timeout: 30_000
+	});
+	await expect(gpx).toBeDisabled();
+
+	await page.getByRole('button', { name: 'Undo', exact: true }).click();
+	await expect(markers).toHaveCount(2);
+	await expect(page.getByRole('button', { name: 'Saved', exact: true })).toBeVisible({
+		timeout: 30_000
+	});
+	await expect(gpx).toBeEnabled();
+});
+
+test('the Wahoo push is disabled while edits are unsaved', async ({ page }) => {
+	await register(page, `e2e-wahoo-gate-${Date.now()}@example.com`);
+	// Wahoo is not configured on the dev stack, so the status is stubbed to
+	// make the button render - the gate under test is client-side.
+	await page.route('**/api/wahoo/status', (route) =>
+		route.fulfill({ json: { configured: true, connected: true } })
+	);
+	await page.goto('/');
+	const markers = await plant(page, 2);
+
+	const saveBtn = page.getByRole('button', { name: 'Save', exact: true });
+	await expect(saveBtn).toBeEnabled({ timeout: 30_000 });
+	await saveBtn.click();
+	await page.getByPlaceholder('Route name').fill('Wahoo gate test');
+	await page.locator('form.dialog').getByRole('button', { name: 'Save' }).click();
+	await expect(page.getByRole('button', { name: 'Saved', exact: true })).toBeVisible({
+		timeout: 30_000
+	});
+
+	const wahooBtn = page.getByRole('button', { name: /Send to Wahoo/i });
+	await expect(wahooBtn).toBeEnabled();
+
+	// With an edit on screen the push would send the STORED route - the
+	// previous version - to the head unit.
+	const box = (await page.locator('.map canvas').first().boundingBox())!;
+	await page.mouse.click(box.x + box.width / 2 + 100, box.y + box.height / 2 + 70);
+	await expect(markers).toHaveCount(3);
+	await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toBeEnabled({
+		timeout: 30_000
+	});
+	await expect(wahooBtn).toBeDisabled();
+});
