@@ -420,6 +420,22 @@ DELETE revokes). `GET /api/shared/{token}` and `.../export.gpx` are the
 only unauthenticated data endpoints, serving the snapshot and GPX by
 token only - no route ids, no owner information.
 
+`share_route` also generates a natural-language summary via
+`services/route_summary.py` - one LLM completion, no tools, over the
+route's own stats (distance, elevation, surface mix, climbs). This is
+the *only* place the summary is ever generated: `share_route` is an
+authenticated, owner-triggered write, whereas `GET /api/shared/{token}`
+takes no session at all, so generating it there would let anonymous
+traffic spend the operator's money on every page view. The summary is
+stored alongside a signature hashed from the route's concatenated leg
+geometry (`route_geometry_signature`); the read path serves the stored
+text only when that signature still matches the route's current
+geometry, and suppresses it - rather than showing it stale - after a
+re-route. Rotating an unchanged link's token skips the LLM call
+entirely, since the stored signature already matches. No assistant
+configured (see `services/llm_config.py`) or the call failing both
+degrade to no summary; sharing itself never fails because of this.
+
 ## Importing route files
 
 `POST /api/routes/import` takes a GPX, TCX or FIT upload.
