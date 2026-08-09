@@ -73,6 +73,21 @@
 	// them. `loading` alone does not cover this, because the catch that
 	// leaves the state inconsistent resets `loading` on its way out.
 	let routeStale = $state(false);
+	// Ownership of `route`. Every path that puts a route on screen claims a
+	// token first; an in-flight reroute whose token has been superseded throws
+	// its response away instead of applying it. Cancellation used to be the
+	// only defence and lived solely inside reroute(), so Clear, a chosen loop,
+	// an adopted alternate and time travel each left a request running that
+	// could land afterwards and resurrect geometry for waypoints that were no
+	// longer on screen - undetectably, since the response set routeStale
+	// false on its way in. A claim is checked at the point of use rather than
+	// remembered at each call site, so a new path cannot forget it: the worst
+	// a caller that forgets to claim can do is let its own route be replaced.
+	let routeToken = 0;
+	function claimRoute(): number {
+		routeToken += 1;
+		return routeToken;
+	}
 	// Bumped at every site that sets `dirty = true`. A save that started
 	// before a later edit landed must not clear `dirty` for that later edit -
 	// it captures this before its own await chain and only clears dirty if
@@ -277,10 +292,10 @@
 		savedId = snap.savedId;
 		savedName = snap.savedName;
 		if (snap.routeOverride) {
+			claimRoute();
 			route = snap.routeOverride;
 			routeStale = false;
-			dirty = true;
-			editGeneration += 1;
+			markEdited();
 		} else {
 			reroute();
 		}
@@ -299,6 +314,7 @@
 				// Session-only: a loaded route's geometry already reflects
 				// whatever avoids shaped it, and none carried over from before.
 				avoids = [];
+				claimRoute();
 				route = saved;
 				routeStale = false;
 				savedId = saved.id;
@@ -579,7 +595,18 @@
 		isochroneOrigin = null;
 	}
 
+	// reroute() is only ever called as the tail of an edit (the mutators via
+	// planEdit, and time travel via applySnapshot), so every one of its exits
+	// marks the planner dirty - not just the successful one. An edit that
+	// routed badly, or that dropped below two waypoints, still means what is
+	// stored no longer matches what is on screen.
+	function markEdited() {
+		dirty = true;
+		editGeneration += 1;
+	}
+
 	async function reroute() {
+		const token = claimRoute();
 		abortController?.abort();
 		if (waypoints.length < 2) {
 			route = null;
@@ -589,28 +616,38 @@
 			// AbortError path never resets `loading` - without this the
 			// "Routing..." banner and the loading-gated buttons wedge forever.
 			loading = false;
+			markEdited();
 			return;
 		}
 		abortController = new AbortController();
 		loading = true;
 		error = null;
 		try {
-			route = await planRoute(
+			const next = await planRoute(
 				waypoints,
 				preset,
 				customCostingOptions,
 				avoids.length ? avoids : null,
 				abortController.signal
 			);
+			// Anything that replaced the route while this was in flight - Clear,
+			// a chosen loop, an adopted alternate, time travel - has claimed a
+			// newer token, and this response now describes waypoints that are no
+			// longer on screen. Dropping it is the whole point: aborting is a
+			// courtesy that races, and every one of those callers would
+			// otherwise have to remember to abort.
+			if (token !== routeToken) return;
+			route = next;
 			loading = false;
 			routeStale = false;
-			dirty = true;
-			editGeneration += 1;
+			markEdited();
 		} catch (err) {
 			if (err instanceof DOMException && err.name === 'AbortError') return;
+			if (token !== routeToken) return;
 			loading = false;
 			routeStale = true;
 			error = err instanceof Error ? err.message : 'Routing failed';
+			markEdited();
 		}
 	}
 
@@ -703,8 +740,18 @@
 	// a route that matched when captured. Replaying reroute() is truer in
 	// both cases: it either produces a route that really does match, or fails
 	// and sets routeStale again.
+	// The live route, but only when it genuinely describes the current inputs -
+	// null while a reroute is in flight or after one failed, when it still
+	// belongs to the previous waypoints. Anything storing a route for later
+	// restoration goes through this: a routeOverride is taken on trust when it
+	// comes back (applySnapshot marks it clean), so a stale one put into
+	// history resurfaces as a mismatched pair that every guard believes.
+	function restorableRoute(): RouteResponse | null {
+		return loading || routeStale ? null : route;
+	}
+
 	function timeTravelSnapshot(): PlannerSnapshot {
-		return { ...currentSnapshot(), routeOverride: loading || routeStale ? null : route };
+		return { ...currentSnapshot(), routeOverride: restorableRoute() };
 	}
 
 	function undo() {
@@ -742,7 +789,10 @@
 		source = 'planned';
 		waypoints = [];
 		avoids = [];
+		claimRoute();
 		route = null;
+		routeStale = false;
+		loading = false;
 		error = null;
 		savedId = null;
 		savedName = null;
@@ -862,11 +912,11 @@
 		// exactly what produced this one too - so undo has to restore that
 		// prior response verbatim rather than replay reroute(), which would
 		// just fetch the current primary again.
-		history.push({ ...currentSnapshot(), routeOverride: route });
+		history.push({ ...currentSnapshot(), routeOverride: restorableRoute() });
+		claimRoute();
 		route = picked;
 		routeStale = false;
-		dirty = true;
-		editGeneration += 1;
+		markEdited();
 		dismissAlternates();
 	}
 
@@ -880,10 +930,10 @@
 		// `route` instead, with the same dirty/editGeneration bump reroute()
 		// itself does for every other edit.
 		waypoints = candidate.waypoints;
+		claimRoute();
 		route = candidate.snapshot;
 		routeStale = false;
-		dirty = true;
-		editGeneration += 1;
+		markEdited();
 		dismissLoop();
 		fitTrigger += 1;
 	}
@@ -1148,7 +1198,7 @@
 			<button
 				type="button"
 				onclick={findAlternates}
-				disabled={waypoints.length !== 2 || loading}
+				disabled={waypoints.length !== 2 || loading || routeStale}
 				title={waypoints.length !== 2
 					? "Alternate routes are only available for routes with a single start and finish - Valhalla's own limitation"
 					: undefined}

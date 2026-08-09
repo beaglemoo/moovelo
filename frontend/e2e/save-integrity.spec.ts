@@ -87,6 +87,29 @@ test('a failed reroute blocks saving the stale geometry', async ({ page }) => {
 	await expect(saveBtn).toBeEnabled({ timeout: 30_000 });
 });
 
+test('a reroute that lands after Clear does not resurrect the route', async ({ page }) => {
+	await register(page, `e2e-late-${Date.now()}@example.com`);
+	await page.goto('/');
+
+	// Hold the routing response open so the second waypoint's reroute is still
+	// in flight when Clear runs.
+	await page.route('**/api/route', async (route) => {
+		await new Promise((resolve) => setTimeout(resolve, 3000));
+		await route.continue();
+	});
+
+	const markers = await plant(page, 2);
+	await page.getByRole('button', { name: 'Clear', exact: true }).click();
+	await expect(markers).toHaveCount(0);
+
+	// The in-flight response lands here. It describes waypoints that no longer
+	// exist, so it must be discarded rather than painting a route and its
+	// stats panel back onto an empty map.
+	await page.waitForTimeout(4500);
+	await expect(markers).toHaveCount(0);
+	await expect(page.locator('.panel')).toHaveCount(0);
+});
+
 test('redo does not restore a route captured while it was stale', async ({ page }) => {
 	await register(page, `e2e-redo-stale-${Date.now()}@example.com`);
 	await page.goto('/');
