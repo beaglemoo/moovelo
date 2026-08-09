@@ -65,6 +65,67 @@ async def test_unauthenticated_shared_read_never_calls_the_llm(
     assert completion.call_count == 1, "the public read path must never call the LLM"
 
 
+@respx.mock
+async def test_no_state_a_shared_route_can_be_in_reaches_the_llm(
+    client: AsyncClient, db: AsyncSession, snapshot: RouteResponse, no_env_llm: None
+) -> None:
+    """The guarantee above, for every branch rather than the happy one.
+
+    The test that precedes this only ever reads a route whose summary is
+    fresh, so it says nothing about the other two states `get_shared` can
+    find a route in. That gap was demonstrated, not assumed: an LLM call
+    injected into the stale branch of `get_shared` left all five tests in
+    this file passing, including the one named "never calls the llm".
+
+    So this walks each state a shared route can actually be in - summary
+    fresh, summary stale, no summary at all - and asserts the gateway is
+    untouched by the public read in every one. A regeneration-on-read
+    "fix" for the stale case is the obvious way for someone to reintroduce
+    anonymous spend, and this is what stops it.
+    """
+    await register(client)
+    routes = {
+        state: (await client.post("/api/routes", json=save_body(snapshot))).json()
+        for state in ("fresh", "stale", "absent")
+    }
+
+    # Shared before the gateway is configured, so nothing is ever stored.
+    tokens = {
+        "absent": (await client.post(f"/api/routes/{routes['absent']['id']}/share")).json()[
+            "share_token"
+        ]
+    }
+
+    await configure_llm(db)
+    completion = mock_completion()
+    for state in ("fresh", "stale"):
+        tokens[state] = (await client.post(f"/api/routes/{routes[state]['id']}/share")).json()[
+            "share_token"
+        ]
+
+    # Re-route the stale one so its stored summary no longer describes it.
+    reversed_shape = snapshot.model_copy(
+        update={"legs": [leg.model_copy() for leg in reversed(snapshot.legs)]}
+    )
+    patched = await client.patch(
+        f"/api/routes/{routes['stale']['id']}", json={"snapshot": reversed_shape.model_dump()}
+    )
+    assert patched.status_code == 200
+
+    await client.post("/api/auth/logout")
+    generated = completion.call_count
+    assert generated == 2, "one owner-triggered generation each for fresh and stale"
+
+    expected_summary = {"fresh": True, "stale": False, "absent": False}
+    for state, token in tokens.items():
+        response = await client.get(f"/api/shared/{token}")
+        assert response.status_code == 200, state
+        # Spend first: a read that regenerates identical text would still be
+        # a bug, and this is the assertion that should name it.
+        assert completion.call_count == generated, f"the {state} read path called the LLM"
+        assert (response.json()["summary"] is not None) is expected_summary[state], state
+
+
 # --- generation on share -----------------------------------------------------
 
 
