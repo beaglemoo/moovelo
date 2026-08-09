@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 
 from app.api.deps import DbDep, UserDep
@@ -69,6 +69,21 @@ class KnownHandle(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
     waypoints: list[Waypoint] | None = Field(default=None, max_length=12)
+
+    @model_validator(mode="after")
+    def _kind_matches_ref(self) -> "KnownHandle":
+        """`kind` is derived from `ref`, not trusted alongside it.
+
+        Both are client-supplied and were validated independently, so a
+        handle could arrive claiming to be a `loop` under a `place:` ref.
+        Nothing downstream currently branches on kind in a way that matters,
+        which is exactly why it is worth closing now rather than after
+        something does.
+        """
+        prefix = self.ref.split(":", 1)[0]
+        if prefix != self.kind:
+            raise ValueError(f"kind {self.kind!r} does not match ref prefix {prefix!r}")
+        return self
 
 
 class AssistantChatRequest(BaseModel):
