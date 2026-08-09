@@ -16,6 +16,7 @@
 		type AppConfig,
 		type BicycleCostingOptions,
 		type IsochroneResult,
+		type AssistantProposal,
 		type LoopCandidate,
 		type PlaceResult,
 		type PoiResult,
@@ -178,6 +179,16 @@
 	// alternates request, so a candidate fetched before an avoid existed
 	// routes straight through it.
 	let alternatesFetchedFor: RoutingInputs | null = null;
+
+	// A route the assistant built and is offering. Held here rather than in
+	// AssistantPanel so there is one source of truth for the preview line and
+	// for the staleness check below; the panel renders the card and calls
+	// back.
+	let proposal: AssistantProposal | null = $state(null);
+	// The routing inputs it was built under, as a plain (non-$state) variable
+	// for the same reason loopFetchedFor is one - writing it must not
+	// re-trigger the effect that reads it.
+	let proposalFetchedFor: RoutingInputs | null = null;
 	// Points to route around ("not that road"), from the map's context menu.
 	// Session-only planner memory - never persisted with a saved route, since
 	// the saved geometry already reflects whatever avoids shaped it.
@@ -412,6 +423,11 @@
 			index,
 			coords: mergeLegLines(candidate.snapshot.legs.map((leg) => decodePolyline6(leg.geometry)))
 		}));
+	});
+
+	const proposalPreview = $derived.by(() => {
+		if (!proposal) return null;
+		return mergeLegLines(proposal.snapshot.legs.map((leg) => decodePolyline6(leg.geometry)));
 	});
 
 	const alternatePreviews = $derived.by(() => {
@@ -925,6 +941,13 @@
 		if (loopFetchedFor && !sameRoutingInputs(current, loopFetchedFor, false)) {
 			dismissLoop();
 		}
+		// Waypoints count for a proposal, unlike a loop: a loop is anchored to
+		// its own origin, but a proposal is an offer to replace what is on
+		// screen, and once the rider has moved on it is describing a route
+		// they are no longer looking at.
+		if (proposalFetchedFor && !sameRoutingInputs(current, proposalFetchedFor, true)) {
+			dismissProposal();
+		}
 	});
 
 	/** Everything that changes what a route request would come back with. */
@@ -1024,6 +1047,34 @@
 		routeStale = false;
 		markEdited();
 		dismissLoop();
+		fitTrigger += 1;
+	}
+
+	function offerProposal(offered: AssistantProposal) {
+		proposal = offered;
+		proposalFetchedFor = currentRoutingInputs();
+	}
+
+	function dismissProposal() {
+		proposal = null;
+		proposalFetchedFor = null;
+	}
+
+	function applyProposal() {
+		if (!proposal || !mayEdit()) return;
+		// An ordinary input change as far as undo is concerned, exactly like
+		// useLoop: the pre-proposal waypoints and preset are what should come
+		// back.
+		history.push(currentSnapshot());
+		// The assistant already routed this through Valhalla, so the snapshot
+		// goes straight onto `route` rather than being replanned.
+		waypoints = proposal.waypoints;
+		preset = proposal.preset;
+		claimRoute();
+		route = proposal.snapshot;
+		routeStale = false;
+		markEdited();
+		dismissProposal();
 		fitTrigger += 1;
 	}
 
@@ -1268,6 +1319,7 @@
 				onIsochrone={openIsochronePrompt}
 				{onLoop}
 				{loopPreviews}
+				{proposalPreview}
 				{hoveredLoopIndex}
 				alternateLines={alternatePreviews}
 				{hoveredAlternateIndex}
@@ -1468,7 +1520,16 @@
 		{/if}
 	</div>
 	{#snippet assistantPanel()}
-		<AssistantPanel {waypoints} centre={mapCentre} {preset} costingOptions={customCostingOptions} />
+		<AssistantPanel
+			{waypoints}
+			centre={mapCentre}
+			{preset}
+			costingOptions={customCostingOptions}
+			{proposal}
+			onProposal={offerProposal}
+			onAccept={applyProposal}
+			onDiscard={dismissProposal}
+		/>
 	{/snippet}
 
 	{#if route}
