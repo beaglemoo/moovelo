@@ -102,6 +102,32 @@ prod up -d` (add `--build` if building from source). Database migrations
 run automatically on backend startup, before the app starts serving
 requests.
 
+## How do I go back to an older version?
+
+Roll the database back first, then the image. Going straight back to an
+older tag leaves the database on a newer schema than that image knows
+about, and the backend exits at startup with an alembic error like
+`Can't locate revision identified by '0010'` - on the prod compose
+service, which restarts automatically, that becomes a crash loop rather
+than a single clear failure.
+
+The order that works, downgrading from v0.5.0 to v0.4.0:
+
+```sh
+# 1. With the NEW image still in place, step the schema back one revision.
+docker compose --profile prod exec backend alembic downgrade 0009
+# 2. Then point the image tag at the older version and restart.
+docker compose --profile prod up -d
+```
+
+Each release notes the revision it adds, so "one revision back" is
+whatever the previous release ended on. Take a `pg_dump` first if the
+data matters to you - a downgrade drops the columns the newer version
+added, and anything stored only in them is gone. Downgrading past v0.5.0
+also resets routes planned with the custom costing sliders to the road
+preset, since the bundle they used lives in a column that is being
+removed.
+
 If you're using the place index, check whether the release notes mention
 a required re-index. In particular, any install indexed before v0.3.0 has
 its cycle routes stored unmerged, which makes the network overlay serve
