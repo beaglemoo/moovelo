@@ -104,13 +104,18 @@ export interface AppConfig {
 	/** False unless WEATHER_API_URL is set on the backend. Gates the weather
 	 * panel entirely - nothing reaches outside the LAN unless configured. */
 	weather_enabled: boolean;
+	/** False unless the assistant's endpoint and model are configured (env or
+	 * the admin page). Gates the Suggest name button and, later, the chat
+	 * panel - no route data leaves the LAN unless this is set. */
+	assistant_enabled: boolean;
 }
 
 const CONFIG_FALLBACK: AppConfig = {
 	tile_url_cyclosm: null,
 	search_enabled: false,
 	search_index_version: null,
-	weather_enabled: false
+	weather_enabled: false,
+	assistant_enabled: false
 };
 
 export interface PlaceResult {
@@ -740,4 +745,24 @@ export async function routeAlternates(
 		}),
 		signal
 	});
+}
+
+/** Ask the assistant to name a route from its waypoints and the distance/
+ * ascent the planner already measured - never recomputed here, so the
+ * suggestion always describes the route on screen. Only ever called from
+ * the save dialog's Suggest button; the caller is expected to catch and
+ * fail silently back to whatever name is already in the box, matching
+ * routeWeather/routeIsochrone's convention for calls the rider asks for. */
+export async function suggestRouteName(
+	waypoints: Waypoint[],
+	distanceM: number,
+	ascentM: number,
+	signal?: AbortSignal
+): Promise<string> {
+	const { name } = await request<{ name: string }>('/api/assistant/suggest-name', {
+		method: 'POST',
+		body: JSON.stringify({ waypoints, distance_m: distanceM, ascent_m: ascentM }),
+		signal
+	});
+	return name;
 }
