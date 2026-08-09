@@ -309,14 +309,30 @@ class LLMClient:
                         await response.aread()
                         raise LLMError(_error_message(response))
 
+                    saw_payload = False
                     async for line in response.aiter_lines():
                         event = _parse_sse_line(line)
                         if event is None:
                             continue
+                        # Gateways report a mid-generation failure - quota,
+                        # rate limit, content policy - as an error frame on a
+                        # 200 that has already gone out. Ignoring it handed
+                        # the rider a truncated answer presented as a whole
+                        # one, which is the worst shape a failure can take
+                        # here: indistinguishable from a short reply.
+                        if "error" in event:
+                            raise LLMError(_stream_error_message(event["error"]))
+                        if "choices" in event:
+                            saw_payload = True
                         text = _accumulate(event, content, calls)
                         if text:
                             emitted = True
                             yield TextDelta(text)
+                    if not saw_payload:
+                        # complete() has the same guard. A stream that closes
+                        # having carried nothing is a failure, not an empty
+                        # but successful answer.
+                        raise LLMError("The assistant service returned no reply")
             except httpx.TransportError as exc:
                 if emitted:
                     raise LLMError("The assistant service disconnected mid-reply") from exc
@@ -337,6 +353,9 @@ def _parse_sse_line(line: str) -> dict[str, Any] | None:
     Comment lines (`: keep-alive`), blank separators and the terminal
     `[DONE]` sentinel all arrive here and none of them are data.
     """
+    # A leading BOM survives httpx's decoding and would stop the first frame
+    # ever matching, silently losing it.
+    line = line.lstrip("\ufeff")
     if not line.startswith("data:"):
         return None
     payload = line[len("data:") :].strip()
@@ -397,17 +416,36 @@ def _assemble(content: list[str], calls: dict[int, dict[str, str]]) -> LLMRespon
     messages that carried tool calls, and those are reconstructed exactly.
     """
     message: dict[str, Any] = {"role": "assistant", "content": "".join(content)}
-    ordered = [calls[index] for index in sorted(calls) if calls[index]["id"]]
-    if ordered:
-        message["tool_calls"] = [
+    tool_calls = []
+    for index in sorted(calls):
+        call = calls[index]
+        if not call["name"]:
+            continue
+        # Some gateways send the id only on the opening fragment, and a
+        # dropped one used to take the whole call with it - the model would
+        # then see a reply where the tool it asked for simply never ran.
+        # The id only has to be unique within this message.
+        tool_calls.append(
             {
-                "id": call["id"],
+                "id": call["id"] or f"call_{index}",
                 "type": "function",
                 "function": {"name": call["name"], "arguments": call["arguments"]},
             }
-            for call in ordered
-        ]
+        )
+    if tool_calls:
+        message["tool_calls"] = tool_calls
     return _parse_message(message)
+
+
+def _stream_error_message(error: Any) -> str:
+    """An error frame's own text, when it offers one."""
+    if isinstance(error, dict):
+        message = error.get("message")
+        if isinstance(message, str) and message:
+            return f"The assistant service failed mid-reply: {message}"
+    if isinstance(error, str) and error:
+        return f"The assistant service failed mid-reply: {error}"
+    return "The assistant service failed mid-reply"
 
 
 def _error_message(response: httpx.Response) -> str:
