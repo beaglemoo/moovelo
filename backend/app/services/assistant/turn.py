@@ -36,6 +36,12 @@ WALL_CLOCK_S = 120.0
 # A weak model that gets an argument wrong tends to repeat the identical
 # call rather than correct it. Two strikes and the turn ends.
 MAX_IDENTICAL_ERRORS = 2
+# A single completion may request any number of tool calls, and each one is
+# real work - routing, a PostGIS query - that neither the completion budget
+# nor the wall clock was checked against between them. Five is more than any
+# sensible round needs and stops one malformed reply becoming an unbounded
+# amount of work.
+MAX_TOOL_CALLS_PER_ROUND = 5
 
 
 @dataclass
@@ -145,6 +151,9 @@ async def run_turn_events(
     tools = tool_schemas()
     deadline = time.monotonic() + WALL_CLOCK_S
     recent_errors: list[str] = []
+    # Every fragment of prose the model produced this turn, including any that
+    # accompanied tool calls rather than ending the turn.
+    prose: list[str] = []
     streamed_any_text = False
 
     for _ in range(MAX_COMPLETION_CALLS):
@@ -171,14 +180,25 @@ async def run_turn_events(
             turn.error = str(exc)
             break
 
-        if not response.tool_calls:
-            turn.content = response.content
-            if not stream_text and response.content:
+        # Prose can arrive alongside tool calls - a model narrating what it is
+        # about to do - and dropping it lost the rider text the streamed
+        # transport was already showing them.
+        if response.content:
+            prose.append(response.content)
+            if not stream_text:
                 yield Delta(response.content)
+
+        if not response.tool_calls:
             break
 
         messages.append(response.message)
-        for call in response.tool_calls:
+        for call in response.tool_calls[:MAX_TOOL_CALLS_PER_ROUND]:
+            if time.monotonic() >= deadline:
+                # Checked per call, not just per round: one reply asking for
+                # several routes can blow well past the wall clock inside a
+                # single iteration of the outer loop.
+                turn.stopped_early = "timeout"
+                break
             turn.tools_called.append(call.name)
             yield ToolStarted(call.name)
             arguments, parse_error = _parse_arguments(call.arguments)
@@ -188,7 +208,17 @@ async def run_turn_events(
                     "message": parse_error,
                 }
             else:
-                result = await run_tool(call.name, arguments, ctx)
+                try:
+                    result = await run_tool(call.name, arguments, ctx)
+                except Exception:
+                    # run_tool turns everything foreseeable into a recoverable
+                    # result; anything left is a bug. Ending the turn cleanly
+                    # keeps whatever was already computed - a route planned two
+                    # calls ago is still a real route - where letting it escape
+                    # would skip Finished entirely and discard it.
+                    logger.exception("Assistant tool %s failed unexpectedly", call.name)
+                    turn.error = "That step failed unexpectedly, so I stopped."
+                    break
             error = result.get("error")
             yield ToolFinished(call.name, error if isinstance(error, str) else None)
             messages.append(
@@ -205,10 +235,16 @@ async def run_turn_events(
                 recent_errors.clear()
             else:
                 recent_errors.append(signature)
-                if len(recent_errors) >= MAX_IDENTICAL_ERRORS and len(set(recent_errors)) == 1:
+                # Only the most recent MAX_IDENTICAL_ERRORS count. Testing the
+                # whole accumulated list meant one earlier, differently-shaped
+                # error permanently defeated the guard: set() could never
+                # collapse to one again, so a model repeating the same failure
+                # ran to the full completion budget instead of stopping.
+                recent = recent_errors[-MAX_IDENTICAL_ERRORS:]
+                if len(recent) >= MAX_IDENTICAL_ERRORS and len(set(recent)) == 1:
                     turn.stopped_early = "repeated_error"
                     break
-        if turn.stopped_early:
+        if turn.stopped_early or turn.error:
             break
     else:
         turn.stopped_early = "budget"
@@ -219,6 +255,7 @@ async def run_turn_events(
             route=ctx.route,
             preset=ctx.preset,
         )
+    turn.content = "".join(prose)
     turn.handles = ctx.handles.export()
     if not turn.content and turn.stopped_early and not turn.error:
         # Written here rather than by the caller so a stopped turn costs no
