@@ -60,6 +60,7 @@
 						SSO: {overview.config.oidc_enabled ? (overview.config.oidc_provider ?? 'on') : 'off'}
 					</li>
 					<li>Wahoo: {overview.config.wahoo_configured ? 'configured' : 'not configured'}</li>
+					<li>Version: {overview.config.version}</li>
 				</ul>
 			</div>
 		</div>

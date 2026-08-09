@@ -192,6 +192,7 @@ export interface AdminOverview {
 		oidc_enabled: boolean;
 		oidc_provider: string | null;
 		wahoo_configured: boolean;
+		version: string;
 	};
 }
 
@@ -384,6 +385,7 @@ export interface UserSettings {
 	weight_kg: number;
 	flat_speed_kmh: number;
 	ftp_watts: number | null;
+	version: string;
 }
 
 export const settings = {

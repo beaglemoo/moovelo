@@ -6,6 +6,7 @@
 	// undefined is what an empty <input type="number"> binds to - the
 	// clearable state for the optional FTP field.
 	let ftpWatts: number | undefined = $state(undefined);
+	let appVersion: string = $state('');
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -16,6 +17,7 @@
 		weightKg = data.weight_kg;
 		flatSpeedKmh = data.flat_speed_kmh;
 		ftpWatts = data.ftp_watts ?? undefined;
+		appVersion = data.version;
 	}
 
 	async function load() {
@@ -92,6 +94,8 @@
 				{/if}
 			</div>
 		</form>
+
+		<p class="hint">Moovelo {appVersion}</p>
 	{/if}
 </div>
 
