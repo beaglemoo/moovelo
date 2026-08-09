@@ -22,10 +22,14 @@ MINOR="${V%.*}"
 
 cd "$(dirname "$0")/.."
 
+# A hard failure, not a prompt. This script's last act is `--push`: it
+# publishes to a public registry and moves `latest`, so "are you sure?" is
+# the wrong shape of guard - anything running it non-interactively answers
+# yes. Releasing means tagging first.
 if [ "$(git describe --tags --exact-match 2>/dev/null)" != "$VERSION" ]; then
-	echo "warning: HEAD is not at tag $VERSION ($(git describe --tags --always))" >&2
-	read -rp "continue anyway? [y/N] " yn
-	[ "$yn" = "y" ] || exit 1
+	echo "error: HEAD is not at tag $VERSION (at $(git describe --tags --always))" >&2
+	echo "       tag the commit you intend to release, then re-run" >&2
+	exit 1
 fi
 
 # Refuse to build a release whose version manifests disagree with the tag -
