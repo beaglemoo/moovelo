@@ -1519,90 +1519,93 @@
 			<div class="banner">Routing…</div>
 		{/if}
 	</div>
-	{#snippet assistantPanel()}
-		<AssistantPanel
-			{waypoints}
-			centre={mapCentre}
-			{preset}
-			costingOptions={customCostingOptions}
-			{proposal}
-			onProposal={offerProposal}
-			onAccept={applyProposal}
-			onDiscard={dismissProposal}
-		/>
-	{/snippet}
 
-	{#if route}
+	{#if route || config?.assistant_enabled}
 		<div class="panel">
-			<div class="stats">
-				<span><strong>{formatDistance(route.distance_m)}</strong></span>
-				<span title={route.ride_time.length ? 'Estimated for your rider profile' : undefined}>
-					{formatDuration(
-						route.ride_time.length
-							? route.ride_time[route.ride_time.length - 1].time_s
-							: route.duration_s
-					)}
-				</span>
-				{#if route.ride_time.length}
-					<a class="ride-time-link" href="/settings">rider profile</a>
+			{#if route}
+				<div class="stats">
+					<span><strong>{formatDistance(route.distance_m)}</strong></span>
+					<span title={route.ride_time.length ? 'Estimated for your rider profile' : undefined}>
+						{formatDuration(
+							route.ride_time.length
+								? route.ride_time[route.ride_time.length - 1].time_s
+								: route.duration_s
+						)}
+					</span>
+					{#if route.ride_time.length}
+						<a class="ride-time-link" href="/settings">rider profile</a>
+					{/if}
+					<span>↗ {Math.round(route.ascent_m)} m</span>
+					<span>↘ {Math.round(route.descent_m)} m</span>
+				</div>
+				{#if route.surface && route.surface.total_m > 0}
+					<SurfaceBar surface={route.surface} />
 				{/if}
-				<span>↗ {Math.round(route.ascent_m)} m</span>
-				<span>↘ {Math.round(route.descent_m)} m</span>
-			</div>
-			{#if route.surface && route.surface.total_m > 0}
-				<SurfaceBar surface={route.surface} />
 			{/if}
 			<div class="panel-body">
-				<ElevationProfile
-					elevation={route.elevation}
-					onHover={handleElevationHover}
-					{hoveredClimb}
-				/>
-				<WaypointList
-					{waypoints}
-					searchEnabled={config?.search_enabled ?? false}
-					hoveredIndex={hoveredWaypointIndex}
-					onHover={(i) => (hoveredWaypointIndex = i)}
-					onReorder={reorderWaypoint}
-					onRemove={removeWaypoint}
-				/>
-				{#if route.climbs.length > 0}
-					<ClimbsList
-						climbs={route.climbs}
-						hoveredIndex={hoveredClimbIndex}
-						onHover={(i) => (hoveredClimbIndex = i)}
+				{#if route}
+					<ElevationProfile
+						elevation={route.elevation}
+						onHover={handleElevationHover}
+						{hoveredClimb}
 					/>
-				{/if}
-				{#if config?.search_enabled}
-					<PoiPanel
-						{pois}
-						truncated={poisTruncated}
-						loading={poisLoading}
-						selected={poiGroups}
-						hoveredId={hoveredPoiId}
-						onToggleGroup={togglePoiGroup}
-						onHover={(id) => (hoveredPoiId = id)}
+					<WaypointList
+						{waypoints}
+						searchEnabled={config?.search_enabled ?? false}
+						hoveredIndex={hoveredWaypointIndex}
+						onHover={(i) => (hoveredWaypointIndex = i)}
+						onReorder={reorderWaypoint}
+						onRemove={removeWaypoint}
 					/>
+					{#if route.climbs.length > 0}
+						<ClimbsList
+							climbs={route.climbs}
+							hoveredIndex={hoveredClimbIndex}
+							onHover={(i) => (hoveredClimbIndex = i)}
+						/>
+					{/if}
+					{#if config?.search_enabled}
+						<PoiPanel
+							{pois}
+							truncated={poisTruncated}
+							loading={poisLoading}
+							selected={poiGroups}
+							hoveredId={hoveredPoiId}
+							onToggleGroup={togglePoiGroup}
+							onHover={(id) => (hoveredPoiId = id)}
+						/>
+					{/if}
+					{#if config?.weather_enabled}
+						<WeatherPanel
+							startTime={weatherStartTime}
+							onStartTimeChange={(value) => (weatherStartTime = value)}
+							loading={windLoading}
+							error={windError}
+							segments={windSegments}
+							truncated={windTruncated}
+							onShowWind={showWind}
+						/>
+					{/if}
 				{/if}
+				<!-- One call site, deliberately. Rendering this from two
+				     branches of the same conditional made Svelte treat it as
+				     two components, so `route` going from null to non-null -
+				     accepting a proposal, drawing a route, loading a saved one -
+				     destroyed the panel and mounted an empty one, taking the
+				     whole conversation with it. -->
 				{#if config?.assistant_enabled}
-					{@render assistantPanel()}
-				{/if}
-				{#if config?.weather_enabled}
-					<WeatherPanel
-						startTime={weatherStartTime}
-						onStartTimeChange={(value) => (weatherStartTime = value)}
-						loading={windLoading}
-						error={windError}
-						segments={windSegments}
-						truncated={windTruncated}
-						onShowWind={showWind}
+					<AssistantPanel
+						{waypoints}
+						centre={mapCentre}
+						{preset}
+						costingOptions={customCostingOptions}
+						{proposal}
+						onProposal={offerProposal}
+						onAccept={applyProposal}
+						onDiscard={dismissProposal}
 					/>
 				{/if}
 			</div>
-		</div>
-	{:else if config?.assistant_enabled}
-		<div class="panel">
-			<div class="panel-body">{@render assistantPanel()}</div>
 		</div>
 	{/if}
 </div>
