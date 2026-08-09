@@ -397,6 +397,10 @@ class SharedRoute(RouteResponse):
     name: str
     preset: str
     updated_at: datetime
+    # Stored text only - never generated on this read path. None whenever
+    # the assistant was not configured at share time, or the route has been
+    # re-routed since (its signature no longer matches the geometry).
+    summary: str | None = None
 
 
 class WeatherQuery(BaseModel):
