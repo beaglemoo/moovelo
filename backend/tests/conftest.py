@@ -75,7 +75,7 @@ def _reset_login_rate_limit() -> None:
     the same email over the sandboxed client's fixed peer address (httpx's
     ASGITransport always reports "127.0.0.1") would accumulate attempts
     against each other and eventually 429 a test that expects success."""
-    rate_limit._attempts.clear()
+    rate_limit.reset()
 
 
 @pytest.fixture
