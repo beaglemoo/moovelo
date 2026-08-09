@@ -270,6 +270,11 @@ Three things worth knowing:
   routing engine the rest of the app uses. The figures on the card are
   read off the route that came back, not off anything the assistant
   wrote.
+- **It only does bike routes.** Ask it for a poem, a recipe or help with
+  your homework and it will decline and offer to plan a route instead.
+  There is also a cap on how many requests one account can make in an
+  hour, so it cannot quietly run up a bill at whatever endpoint the
+  operator configured.
 - **It only sees the planner.** Your saved library - names, tags, notes -
   is not available to it.
 - **It needs the place index for anything by name.** Without the

@@ -211,6 +211,33 @@ If you are self-hosting the model, start by checking tool calling works
 at all - some local chat templates emit tool-call-shaped JSON as
 ordinary text, which this does not try to parse.
 
+## Can the assistant be talked into doing something else?
+
+Partly, and the design assumes so. The system prompt confines it to bike
+routes and says no message can grant an exemption - including one that
+turns up inside an OpenStreetMap place name - and those rules are
+repeated after the conversation as well as before it, which is much
+harder to talk past than a single opening instruction. That is
+mitigation, not a guarantee: a determined person can get most models to
+say something off-topic.
+
+What that person cannot do is more interesting than what they can:
+
+- **It cannot route anywhere you could not.** The model has no way to
+  express a coordinate. It calls tools that take opaque references the
+  server issued, so the worst case is a route to a place it looked up.
+- **It cannot change anything.** No tool writes to the database. It
+  proposes; you accept or discard.
+- **It cannot read your library.** Names, tags and notes on your saved
+  routes are not available to it.
+- **It cannot run up an unbounded bill.** One completion is capped, one
+  turn is capped, and one account's turns per hour are capped.
+
+So the realistic outcome of a successful jailbreak is a model writing
+some off-topic prose in a chat box, at a bounded cost, on an install only
+your own users can reach. If that still bothers you, point `LLM_BASE_URL`
+at a local model and it costs nothing at all.
+
 ## Can I use it without a Wahoo?
 
 Yes. Wahoo integration is entirely optional - leave `WAHOO_CLIENT_ID`/`WAHOO_CLIENT_SECRET`

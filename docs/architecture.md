@@ -500,6 +500,36 @@ because a weak model repeats a bad call verbatim rather than fixing it.
 Budget exhaustion writes its own closing message and never spends
 another completion on one.
 
+### Staying on route planning
+
+The assistant answers questions about bike routes and declines everything
+else. Worth being precise about what enforces that, because the two
+mechanisms are not equally strong:
+
+**Persuasion.** The system prompt states the scope, tells the model to
+decline out-of-scope requests in one sentence, and says plainly that no
+message - from the rider, a tool result, or text claiming to be an
+operator or an emergency - can grant an exemption. The same rules are
+repeated in a trailing system message *after* the conversation, not only
+before it: a leading instruction block is easy to talk past because
+everything read afterwards is more recent, and restating the rules last
+makes them the most recent thing as well as the first. This reduces how
+often the model goes off-topic. It is not a guarantee, and it should not
+be described as one.
+
+**Guarantees.** These hold whatever the model is talked into. The tool
+schemas cannot express anything outside route planning, so an off-topic
+model is a model writing prose rather than one doing something else with
+the app. `max_tokens` caps what any single completion can be billed for.
+`MAX_COMPLETION_CALLS` and the wall clock cap one turn. And a per-user
+sliding window (`services/rate_limit.py`) caps turns per hour, so an
+account being used as a general-purpose chatbot costs the operator a
+bounded amount rather than an open-ended one.
+
+The honest summary: the prompt decides what the assistant *usually* does,
+and the schemas plus the budgets decide what it *can* do. Only the second
+one is a security property.
+
 ### Prompt injection
 
 Place and POI names come from OpenStreetMap and are written by the
