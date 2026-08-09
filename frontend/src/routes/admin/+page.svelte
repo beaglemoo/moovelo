@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { admin, type AdminOverview } from '$lib/api';
+	import LLMSettingsPanel from '$lib/components/LLMSettingsPanel.svelte';
 
 	let overview: AdminOverview | null = $state(null);
 	let error: string | null = $state(null);
@@ -96,6 +97,8 @@
 				{/each}
 			</tbody>
 		</table>
+
+		<LLMSettingsPanel />
 	{/if}
 </div>
 

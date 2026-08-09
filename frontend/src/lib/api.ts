@@ -360,6 +360,73 @@ export const admin = {
 	deleteUser: (id: string) => request<void>(`/api/admin/users/${id}`, { method: 'DELETE' })
 };
 
+/** Routing modes the gateway offers. 'balanced' is its own default. */
+export type ProviderSort = 'balanced' | 'price' | 'throughput' | 'latency';
+
+export interface LLMSettings {
+	base_url: string | null;
+	model: string | null;
+	provider_order: string | null;
+	provider_sort: ProviderSort | null;
+	max_prompt_price: number | null;
+	/** Whether a key is stored. The key itself is never returned. */
+	api_key_set: boolean;
+	effective_base_url: string;
+	effective_model: string;
+	effective_providers: string[];
+	enabled: boolean;
+	/** True when the env vars alone would configure the assistant. */
+	env_configured: boolean;
+}
+
+export interface LLMSettingsPatch {
+	base_url?: string;
+	model?: string;
+	provider_order?: string;
+	provider_sort?: string;
+	max_prompt_price?: number | null;
+	/** Write-only. Send an empty string to clear a stored key. */
+	api_key?: string;
+}
+
+export interface LLMModelInfo {
+	id: string;
+	name: string;
+	/** Dollars per million tokens, or null when the gateway does not say. */
+	prompt_price: number | null;
+	completion_price: number | null;
+	context_length: number | null;
+	supports_tools: boolean;
+}
+
+export interface LLMProviderInfo {
+	name: string;
+	prompt_price: number | null;
+	completion_price: number | null;
+	context_length: number | null;
+}
+
+export interface LLMProbeResult {
+	ok: boolean;
+	latency_s: number;
+	model: string;
+	provider: string | null;
+	cost: number | null;
+	tool_called: boolean;
+	detail: string;
+}
+
+export const llmAdmin = {
+	get: () => request<LLMSettings>('/api/admin/llm'),
+	update: (patch: LLMSettingsPatch) =>
+		request<LLMSettings>('/api/admin/llm', { method: 'PATCH', body: JSON.stringify(patch) }),
+	models: (toolsOnly = true) =>
+		request<LLMModelInfo[]>(`/api/admin/llm/models?tools_only=${toolsOnly}`),
+	providers: (modelId: string) =>
+		request<LLMProviderInfo[]>(`/api/admin/llm/models/${modelId}/providers`),
+	test: () => request<LLMProbeResult>('/api/admin/llm/test', { method: 'POST' })
+};
+
 export interface CustomPreset {
 	id: string;
 	name: string;
