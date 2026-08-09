@@ -13,6 +13,7 @@ question over something the model could have fixed itself.
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,7 +21,7 @@ from app.schemas import Preset, RouteResponse, Waypoint
 from app.services.assistant.prompt import SYSTEM_PROMPT, build_context_note
 from app.services.assistant.refs import Handle
 from app.services.assistant.tools import ToolContext, run_tool, tool_schemas
-from app.services.llm import LLMClient, LLMError
+from app.services.llm import LLMClient, LLMError, TextDelta
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,41 @@ class AssistantTurn:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class ToolStarted:
+    name: str
+
+
+@dataclass(frozen=True)
+class ToolFinished:
+    name: str
+    # The tool's own error code ("unknown_reference", "unavailable", ...) when
+    # it failed recoverably, so the panel can say a step did not work rather
+    # than showing a silent pause.
+    error: str | None
+
+
+@dataclass(frozen=True)
+class Delta:
+    """A fragment of prose for the rider.
+
+    **Every word the rider should see arrives as one of these**, including
+    the messages this module writes itself when a budget runs out. A consumer
+    renders deltas and nothing else; `AssistantTurn.content` is the same text
+    joined up, for callers that want it whole.
+    """
+
+    text: str
+
+
+@dataclass(frozen=True)
+class Finished:
+    turn: "AssistantTurn"
+
+
+TurnEvent = ToolStarted | ToolFinished | Delta | Finished
+
+
 def build_messages(
     history: list[dict[str, Any]],
     ctx: ToolContext,
@@ -78,11 +114,38 @@ async def run_turn(
     history: list[dict[str, Any]],
     ctx: ToolContext,
 ) -> AssistantTurn:
+    """The whole turn, waited out. See `run_turn_events` for the live one."""
+    turn = AssistantTurn()
+    async for event in run_turn_events(llm, history, ctx):
+        if isinstance(event, Finished):
+            turn = event.turn
+    return turn
+
+
+async def run_turn_events(
+    llm: LLMClient,
+    history: list[dict[str, Any]],
+    ctx: ToolContext,
+    stream_text: bool = False,
+) -> AsyncIterator[TurnEvent]:
+    """One turn, reported as it happens.
+
+    Transport-agnostic on purpose: this is the only implementation of the
+    loop, and both the plain JSON endpoint and the SSE one consume it. The
+    single behavioural difference is `stream_text` - with it, prose is
+    fetched a fragment at a time and forwarded as it arrives; without it, one
+    completion is awaited whole and its text arrives as a single Delta. The
+    budgets, the recovery paths and the proposal are identical either way,
+    because there is only one copy of them.
+
+    Exactly one Finished is yielded, last, on every path.
+    """
     turn = AssistantTurn()
     messages = build_messages(history, ctx)
     tools = tool_schemas()
     deadline = time.monotonic() + WALL_CLOCK_S
     recent_errors: list[str] = []
+    streamed_any_text = False
 
     for _ in range(MAX_COMPLETION_CALLS):
         remaining = deadline - time.monotonic()
@@ -90,7 +153,18 @@ async def run_turn(
             turn.stopped_early = "timeout"
             break
         try:
-            response = await llm.complete(messages, tools=tools, timeout=remaining)
+            if stream_text:
+                response = None
+                async for chunk in llm.stream(messages, tools=tools, timeout=remaining):
+                    if isinstance(chunk, TextDelta):
+                        streamed_any_text = True
+                        yield Delta(chunk.text)
+                    else:
+                        response = chunk.response
+                if response is None:
+                    raise LLMError("The assistant service returned no reply")
+            else:
+                response = await llm.complete(messages, tools=tools, timeout=remaining)
         except LLMError as exc:
             # Keep anything already computed: a route planned two calls ago is
             # still a real route, and discarding it helps nobody.
@@ -99,11 +173,14 @@ async def run_turn(
 
         if not response.tool_calls:
             turn.content = response.content
+            if not stream_text and response.content:
+                yield Delta(response.content)
             break
 
         messages.append(response.message)
         for call in response.tool_calls:
             turn.tools_called.append(call.name)
+            yield ToolStarted(call.name)
             arguments, parse_error = _parse_arguments(call.arguments)
             if parse_error is not None:
                 result: dict[str, Any] = {
@@ -112,6 +189,8 @@ async def run_turn(
                 }
             else:
                 result = await run_tool(call.name, arguments, ctx)
+            error = result.get("error")
+            yield ToolFinished(call.name, error if isinstance(error, str) else None)
             messages.append(
                 {
                     "role": "tool",
@@ -142,8 +221,15 @@ async def run_turn(
         )
     turn.handles = ctx.handles.export()
     if not turn.content and turn.stopped_early and not turn.error:
+        # Written here rather than by the caller so a stopped turn costs no
+        # extra completion, and emitted as a Delta like everything else the
+        # rider reads - a consumer that renders deltas needs no special case.
         turn.content = _stopped_message(turn.stopped_early, turn.proposal is not None)
-    return turn
+        # Unless prose is already on screen, where appending a budget notice
+        # to a half-finished sentence reads worse than letting it stand.
+        if not streamed_any_text:
+            yield Delta(turn.content)
+    yield Finished(turn)
 
 
 def _parse_arguments(raw: str) -> tuple[dict[str, Any], str | None]:
