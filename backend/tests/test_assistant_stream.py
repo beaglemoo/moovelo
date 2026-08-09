@@ -235,3 +235,38 @@ async def test_stream_404s_when_unconfigured(client: AsyncClient) -> None:
     )
     assert response.status_code == 404
     assert response.headers["content-type"].startswith("application/json")
+
+
+# --- guardrails --------------------------------------------------------------
+
+
+@respx.mock
+async def test_a_rider_cannot_spend_without_limit(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The part of the scope guardrail that is not persuasion.
+
+    The system prompt asks the assistant to stay on route planning, which a
+    determined rider can talk it out of. This cannot be talked out of: past
+    the allowance the endpoint refuses regardless of what the model would
+    have been willing to do.
+    """
+    from app.services import rate_limit
+
+    monkeypatch.setattr(rate_limit.assistant, "max_events", 2)
+    await configure_llm(db)
+    respx.post(COMPLETIONS).mock(return_value=stream_response(text_delta("ok")))
+    await register(client)
+
+    for _ in range(2):
+        frames = await collect(client)
+        assert frames[-1][0] == "done"
+
+    blocked = await client.post(
+        "/api/assistant/chat/stream",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert blocked.status_code == 429
+    # Refused before the stream opens, so it is an ordinary HTTP error the
+    # client can act on rather than an in-band frame.
+    assert blocked.headers["content-type"].startswith("application/json")

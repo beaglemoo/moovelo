@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.schemas import Preset, RouteResponse, Waypoint
-from app.services.assistant.prompt import SYSTEM_PROMPT, build_context_note
+from app.services.assistant.prompt import SCOPE_REMINDER, SYSTEM_PROMPT, build_context_note
 from app.services.assistant.refs import Handle
 from app.services.assistant.tools import ToolContext, run_tool, tool_schemas
 from app.services.llm import LLMClient, LLMError, TextDelta
@@ -112,6 +112,11 @@ def build_messages(
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": note},
         *history,
+        # Last, after everything the rider and the tools have said. A leading
+        # instruction block is trivially talked past because every later
+        # message is more recent than it; this makes the rules the most
+        # recent thing in the conversation as well as the first.
+        {"role": "system", "content": SCOPE_REMINDER},
     ]
 
 
