@@ -100,3 +100,116 @@ test('avoid a road from the context menu, then remove it', async ({ page }) => {
 	await page.getByRole('button', { name: 'Undo', exact: true }).click();
 	await expect(page.getByRole('group', { name: 'Avoided roads' })).toBeVisible();
 });
+
+test('adding an avoid drops loop candidates found before it', async ({ page }) => {
+	const email = `e2e-loop-avoid-${Date.now()}@example.com`;
+	const status = await page.request.get('/api/auth/status').then((r) => r.json());
+	test.skip(
+		!(status.setup_required || (status.signups_enabled && status.password_login)),
+		'needs a fresh DB or SIGNUPS_ENABLED=true with password login'
+	);
+	expect(
+		(
+			await page.request.post('/api/auth/register', {
+				data: { email, password: 'e2e-loop-avoid-1' }
+			})
+		).ok()
+	).toBeTruthy();
+
+	await page.goto('/');
+	const canvas = page.locator('.map canvas').first();
+	await expect(canvas).toBeVisible();
+	await page.waitForTimeout(2500);
+
+	// A route to hang an avoid on.
+	await expect(async () => {
+		const box = (await canvas.boundingBox())!;
+		await page.mouse.click(box.x + box.width / 2 - 60, box.y + box.height / 2 - 40);
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(1, { timeout: 1_000 });
+	}).toPass({ timeout: 30_000 });
+	let box = (await canvas.boundingBox())!;
+	await page.mouse.click(box.x + box.width / 2 + 40, box.y + box.height / 2 + 30);
+	await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+	await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled({
+		timeout: 30_000
+	});
+
+	// Find loops from a third point, then avoid a road on the existing route.
+	box = (await canvas.boundingBox())!;
+	await page.mouse.click(box.x + box.width / 2 + 120, box.y + box.height / 2 - 90, {
+		button: 'right'
+	});
+	await page.getByRole('menuitem', { name: /Loop from here/i }).click();
+	const loopPanel = page.getByRole('dialog', { name: 'Loop from here' });
+	await expect(loopPanel).toBeVisible();
+	await loopPanel.getByRole('button', { name: /Find loops/i }).click();
+	await expect(loopPanel.getByRole('button', { name: /Use this loop/i }).first()).toBeVisible({
+		timeout: 60_000
+	});
+
+	// Those candidates were found without the avoid, so they must not survive
+	// it - adopting one would ride straight through the excluded road.
+	box = (await canvas.boundingBox())!;
+	await page.mouse.click(box.x + box.width / 2 - 10, box.y + box.height / 2 - 5, {
+		button: 'right'
+	});
+	const avoidItem = page.getByRole('menuitem', { name: /Avoid this road/i });
+	if (await avoidItem.count()) {
+		await avoidItem.click();
+		await expect(page.getByRole('group', { name: 'Avoided roads' })).toBeVisible({
+			timeout: 30_000
+		});
+		await expect(loopPanel.getByRole('button', { name: /Use this loop/i })).toHaveCount(0);
+	}
+});
+
+test('adding an avoid drops alternates found before it', async ({ page }) => {
+	const email = `e2e-alt-avoid-${Date.now()}@example.com`;
+	const status = await page.request.get('/api/auth/status').then((r) => r.json());
+	test.skip(
+		!(status.setup_required || (status.signups_enabled && status.password_login)),
+		'needs a fresh DB or SIGNUPS_ENABLED=true with password login'
+	);
+	expect(
+		(
+			await page.request.post('/api/auth/register', {
+				data: { email, password: 'e2e-alt-avoid-1' }
+			})
+		).ok()
+	).toBeTruthy();
+
+	await page.goto('/');
+	const canvas = page.locator('.map canvas').first();
+	await expect(canvas).toBeVisible();
+	await page.waitForTimeout(2500);
+
+	await expect(async () => {
+		const b = (await canvas.boundingBox())!;
+		await page.mouse.click(b.x + b.width / 2 - 60, b.y + b.height / 2 - 40);
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(1, { timeout: 1_000 });
+	}).toPass({ timeout: 30_000 });
+	let box = (await canvas.boundingBox())!;
+	await page.mouse.click(box.x + box.width / 2 + 40, box.y + box.height / 2 + 30);
+	await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+
+	const altBtn = page.getByRole('button', { name: 'Alternatives', exact: true });
+	await expect(altBtn).toBeEnabled({ timeout: 30_000 });
+	await altBtn.click();
+	const altPanel = page.getByRole('dialog', { name: 'Alternative routes' });
+	const useAlt = altPanel.getByRole('button', { name: 'Use', exact: true });
+	await expect(useAlt.first()).toBeVisible({ timeout: 60_000 });
+
+	// Same rule as loops: candidates predating the avoid must not survive it.
+	box = (await canvas.boundingBox())!;
+	await page.mouse.click(box.x + box.width / 2 - 10, box.y + box.height / 2 - 5, {
+		button: 'right'
+	});
+	const avoidItem = page.getByRole('menuitem', { name: /Avoid this road/i });
+	if (await avoidItem.count()) {
+		await avoidItem.click();
+		await expect(page.getByRole('group', { name: 'Avoided roads' })).toBeVisible({
+			timeout: 30_000
+		});
+		await expect(useAlt).toHaveCount(0);
+	}
+});

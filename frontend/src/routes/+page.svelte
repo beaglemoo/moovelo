@@ -155,6 +155,11 @@
 	let loopLoading = $state(false);
 	let loopError: string | null = $state(null);
 	let loopController: AbortController | null = null;
+	// The avoids `loopCandidates` was fetched under, as a plain (non-$state)
+	// snapshot - see the invalidation effect below. A candidate found before
+	// an avoid existed routes straight through it, and "Use this loop" adopts
+	// it verbatim.
+	let loopFetchedFor: { avoids: Waypoint[] } | null = null;
 	let hoveredLoopIndex: number | null = $state(null);
 
 	// Route alternates ("Alternatives" button). Valhalla's `alternates` only
@@ -827,6 +832,7 @@
 		loopError = null;
 		loopLoading = false;
 		hoveredLoopIndex = null;
+		loopFetchedFor = null;
 	}
 
 	async function findLoops() {
@@ -851,6 +857,7 @@
 			);
 			if (controller.signal.aborted) return;
 			loopCandidates = result.candidates;
+			loopFetchedFor = { avoids: avoids.map((wp) => ({ ...wp })) };
 		} catch (err) {
 			if (controller.signal.aborted) return;
 			loopError = err instanceof Error ? err.message : 'Loop search failed';
@@ -863,21 +870,36 @@
 		return a.length === b.length && a.every((wp, i) => wp.lat === b[i].lat && wp.lon === b[i].lon);
 	}
 
-	// Any edit to the inputs invalidates whatever alternates were fetched for
-	// the previous ones - reading `waypoints` and `avoids` is enough since
-	// every mutator reassigns or mutates these $state arrays. Guarded by
-	// comparing against alternatesFetchedFor (a plain snapshot, not itself
-	// reactive) so this does not fire the instant a search populates
-	// `alternates`.
+	// Both results panels hold routes fetched under the inputs of the moment,
+	// and both are adopted verbatim when the rider picks one - so both have to
+	// be dropped the moment those inputs move on. They are checked together
+	// here rather than one each: invalidating alternates on an avoid change
+	// while leaving the loop panel alone is precisely the bug this pass found,
+	// and one effect covering both is what stops the two drifting apart again.
+	// Guarded against the plain (non-$state) fetched-for snapshots so this
+	// never fires on the search populating its own results.
 	$effect(() => {
-		const currentWaypoints = waypoints;
-		const currentAvoids = avoids;
+		// Copied, not just referenced: `waypoints` and `avoids` are mutated in
+		// place (push/splice), so reading the binding alone subscribes to
+		// reassignment and nothing else. Mapping reads the length and every
+		// element, which is what actually registers the dependency - and it
+		// has to happen here, before the guards below, or a null fetched-for
+		// snapshot short-circuits past the read and the effect never wakes up
+		// again. Those snapshots are plain variables, so setting one cannot
+		// re-trigger this either.
+		const currentWaypoints = waypoints.map((wp) => wp);
+		const currentAvoids = avoids.map((wp) => wp);
 		if (
 			alternatesFetchedFor &&
 			(!sameWaypoints(currentWaypoints, alternatesFetchedFor.waypoints) ||
 				!sameWaypoints(currentAvoids, alternatesFetchedFor.avoids))
 		) {
 			dismissAlternates();
+		}
+		// Loops are anchored to their own origin rather than the waypoints
+		// they will replace, so only the avoids matter here.
+		if (loopFetchedFor && !sameWaypoints(currentAvoids, loopFetchedFor.avoids)) {
+			dismissLoop();
 		}
 	});
 
