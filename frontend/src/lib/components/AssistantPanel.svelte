@@ -18,12 +18,27 @@
 		/** Places the assistant looked up, with coordinates - for dropping
 		 * pins. Wired to the map in a later change. */
 		onHandles?: (handles: AssistantHandle[]) => void;
-		/** A route the assistant built and is offering. Ignored for now; the
-		 * preview and accept/discard controls land next. */
+		/** Raised when the assistant has built a route. The planner owns it
+		 * from there - it draws the preview and decides when it has gone
+		 * stale - and hands it back below for the card to render. */
 		onProposal?: (proposal: AssistantProposal) => void;
+		/** The offer currently on the table, or null. */
+		proposal?: AssistantProposal | null;
+		onAccept?: () => void;
+		onDiscard?: () => void;
 	}
 
-	let { waypoints, centre, preset, costingOptions, onHandles, onProposal }: Props = $props();
+	let {
+		waypoints,
+		centre,
+		preset,
+		costingOptions,
+		onHandles,
+		onProposal,
+		proposal = null,
+		onAccept,
+		onDiscard
+	}: Props = $props();
 
 	interface Entry {
 		role: 'user' | 'assistant';
@@ -176,6 +191,23 @@
 			<p class="assistant-error">{error}</p>
 		{/if}
 	</div>
+	{#if proposal}
+		<div class="assistant-proposal">
+			<!-- Every figure here is read off the snapshot Valhalla returned,
+			     never off the model's prose - the prompt forbids inventing
+			     numbers, but this is what makes it structurally impossible for
+			     an invented one to reach the rider as a measurement. -->
+			<p class="assistant-proposal-stats">
+				{(proposal.snapshot.distance_m / 1000).toFixed(1)} km, ↗ {Math.round(
+					proposal.snapshot.ascent_m
+				)} m
+			</p>
+			<div class="assistant-proposal-buttons">
+				<button type="button" class="primary" onclick={() => onAccept?.()}>Use this route</button>
+				<button type="button" onclick={() => onDiscard?.()}>Discard</button>
+			</div>
+		</div>
+	{/if}
 	<div class="assistant-ask">
 		<input
 			type="text"
@@ -235,6 +267,39 @@
 	.assistant-error {
 		margin: 0;
 		color: #dc322f;
+	}
+	.assistant-proposal {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+		padding: 0.4rem 0.5rem;
+		border: 1px solid #859900;
+		border-radius: 6px;
+		background: #8599001a;
+	}
+	.assistant-proposal-stats {
+		margin: 0;
+		font-size: 0.85rem;
+		color: #073642;
+	}
+	.assistant-proposal-buttons {
+		display: flex;
+		gap: 0.4rem;
+	}
+	.assistant-proposal-buttons button {
+		font: inherit;
+		font-size: 0.8rem;
+		padding: 0.25rem 0.6rem;
+		border: 1px solid #ccc;
+		border-radius: 6px;
+		background: #fff;
+		cursor: pointer;
+	}
+	.assistant-proposal-buttons .primary {
+		background: #859900;
+		border-color: #859900;
+		color: #fff;
 	}
 	.assistant-ask {
 		display: flex;
