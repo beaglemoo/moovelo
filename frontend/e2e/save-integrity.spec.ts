@@ -86,3 +86,36 @@ test('a failed reroute blocks saving the stale geometry', async ({ page }) => {
 	await expect(markers).toHaveCount(4);
 	await expect(saveBtn).toBeEnabled({ timeout: 30_000 });
 });
+
+test('redo does not restore a route captured while it was stale', async ({ page }) => {
+	await register(page, `e2e-redo-stale-${Date.now()}@example.com`);
+	await page.goto('/');
+	const markers = await plant(page, 2);
+
+	const saveBtn = page.getByRole('button', { name: 'Save', exact: true });
+	const undoBtn = page.getByRole('button', { name: 'Undo', exact: true });
+	const redoBtn = page.getByRole('button', { name: 'Redo', exact: true });
+	await expect(saveBtn).toBeEnabled({ timeout: 30_000 });
+
+	// Fail a reroute, so `route` belongs to the previous waypoints.
+	await page.route('**/api/route', (route) => route.abort());
+	const box = (await page.locator('.map canvas').first().boundingBox())!;
+	await page.mouse.click(box.x + box.width / 2 + 120, box.y + box.height / 2 - 90);
+	await expect(markers).toHaveCount(3);
+	await expect(saveBtn).toBeDisabled({ timeout: 30_000 });
+
+	// Recover and step back: undo captures the state we are leaving, which
+	// must NOT carry that stale route forward as a restorable output.
+	await page.unroute('**/api/route');
+	await undoBtn.click();
+	await expect(markers).toHaveCount(2);
+	await expect(saveBtn).toBeEnabled({ timeout: 30_000 });
+
+	// Redo with routing still failing: replaying the inputs must fail again
+	// and keep Save shut. While redo restored the stale route verbatim, it
+	// came back marked clean and Save was enabled on a mismatched pair.
+	await page.route('**/api/route', (route) => route.abort());
+	await redoBtn.click();
+	await expect(markers).toHaveCount(3);
+	await expect(saveBtn).toBeDisabled({ timeout: 30_000 });
+});

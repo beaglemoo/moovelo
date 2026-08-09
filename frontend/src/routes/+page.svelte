@@ -694,10 +694,17 @@
 	// routeOverride (mutators never do - their route is about to be
 	// replaced). Without it, redoing past an adopted alternate would replay
 	// reroute() and silently come back with the primary route instead of
-	// the alternate the rider picked. Skipped while a reroute is in flight,
-	// when `route` is stale for the current inputs and a replay is truer.
+	// the alternate the rider picked.
+	//
+	// Only ever a route that matches the inputs beside it: mid-reroute, and
+	// after one that failed, `route` still belongs to the PREVIOUS waypoints,
+	// and restoring it verbatim would hand redo a mismatched pair - with
+	// applySnapshot marking it clean, since a routeOverride is by definition
+	// a route that matched when captured. Replaying reroute() is truer in
+	// both cases: it either produces a route that really does match, or fails
+	// and sets routeStale again.
 	function timeTravelSnapshot(): PlannerSnapshot {
-		return { ...currentSnapshot(), routeOverride: loading ? null : route };
+		return { ...currentSnapshot(), routeOverride: loading || routeStale ? null : route };
 	}
 
 	function undo() {

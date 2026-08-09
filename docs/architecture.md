@@ -933,6 +933,12 @@ about extract coverage when no roads are found near a waypoint.
   is worse - so `loading` cannot be the guard: the catch that leaves the
   state inconsistent resets `loading` on its way out, and the rider is
   most likely to click Save precisely then, while reading the error.
+  `routeStale` also suppresses `routeOverride` capture in
+  `timeTravelSnapshot()`: a stale route restored verbatim by redo would
+  arrive marked clean, since a routeOverride is by definition a route that
+  matched when it was captured. Replaying `reroute()` is truer - it either
+  produces a route that really does match, or fails and sets the flag
+  again.
 - **Waypoint list reordering is native HTML5 drag-and-drop plus
   always-present up/down buttons**, not a drag library: no new dependency,
   and the buttons are not a fallback - HTML5 drag-and-drop fires no events
