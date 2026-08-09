@@ -280,3 +280,41 @@ class SearchIndexMeta(Base):
     cycle_way_count: Mapped[int] = mapped_column(Integer)
 
     __table_args__ = (CheckConstraint("id", name="ck_search_index_meta_singleton"),)
+
+
+class LLMSettings(Base):
+    """Install-wide assistant endpoint configuration, set from /admin.
+
+    A single row, following SearchIndexMeta: the question is "how is this
+    install configured" and there is only ever one answer.
+
+    Every column is nullable and NULL means "fall back to the environment
+    variable". That keeps a declarative install working untouched - the
+    table only exists to let an operator change endpoint, model or routing
+    without a redeploy, which matters because provider choice moves both
+    cost and latency substantially.
+
+    api_key is stored in plain text, as the OIDC and Wahoo secrets are in
+    their env vars. It is never returned by any endpoint.
+    """
+
+    __tablename__ = "llm_settings"
+
+    id: Mapped[bool] = mapped_column(Boolean, primary_key=True, default=True, server_default="true")
+    base_url: Mapped[str | None] = mapped_column(Text, default=None)
+    model: Mapped[str | None] = mapped_column(Text, default=None)
+    api_key: Mapped[str | None] = mapped_column(Text, default=None)
+    provider_order: Mapped[str | None] = mapped_column(Text, default=None)
+    # OpenRouter routing mode: balanced (default), price, throughput, latency.
+    # NULL leaves it to the gateway, which measured 2.4x more expensive than
+    # any explicit mode on the same model.
+    provider_sort: Mapped[str | None] = mapped_column(String(20), default=None)
+    # Optional ceiling in dollars per million prompt tokens. The same model
+    # can be served by providers an order of magnitude apart in price, so
+    # this is the only setting that actually caps spend.
+    max_prompt_price: Mapped[float | None] = mapped_column(Float, default=None)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (CheckConstraint("id", name="ck_llm_settings_singleton"),)
