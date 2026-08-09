@@ -770,3 +770,143 @@ export async function suggestRouteName(
 	});
 	return name;
 }
+
+/** A place the assistant looked up, with the coordinates the model never
+ * saw. Handles travel server-to-client only; they go back up as opaque refs
+ * so a later turn can resolve them without the server keeping conversation
+ * state. */
+export interface AssistantHandle {
+	ref: string;
+	kind: string;
+	name: string;
+	lat: number;
+	lon: number;
+	waypoints?: Waypoint[] | null;
+}
+
+export interface AssistantProposal {
+	waypoints: Waypoint[];
+	preset: Preset;
+	snapshot: RouteResponse;
+}
+
+export type AssistantEvent =
+	| { type: 'token'; text: string }
+	| { type: 'tool_call'; name: string }
+	| { type: 'tool_result'; name: string; error: string | null }
+	| { type: 'handles'; handles: AssistantHandle[] }
+	| { type: 'proposal'; proposal: AssistantProposal }
+	| { type: 'error'; message: string }
+	| { type: 'done'; stoppedEarly: string | null; toolsCalled: string[] };
+
+export interface AssistantChatRequest {
+	messages: { role: 'user' | 'assistant'; content: string }[];
+	waypoints?: Waypoint[];
+	centre?: Waypoint | null;
+	preset?: Preset;
+	costing_options?: BicycleCostingOptions | null;
+	known_handles?: AssistantHandle[];
+}
+
+/** The assistant's turn, yielded frame by frame.
+ *
+ * The only streaming call in the app. It cannot use EventSource, which is
+ * GET-only, and this needs a POST body carrying the whole conversation - so
+ * it is fetch plus a ReadableStream reader, parsing SSE by hand. That is
+ * about fifteen lines and avoids a dependency.
+ *
+ * Gating failures (401 unauthenticated, 404 not configured) resolve before
+ * the stream opens and arrive as ordinary HTTP errors, so they throw here
+ * exactly like any other request. Anything that goes wrong afterwards
+ * arrives as an `error` frame instead, because the 200 has already gone out.
+ * Exactly one `done` frame ends every turn.
+ */
+export async function* streamAssistantChat(
+	body: AssistantChatRequest,
+	signal?: AbortSignal
+): AsyncGenerator<AssistantEvent> {
+	const response = await fetch('/api/assistant/chat/stream', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(body),
+		signal
+	});
+	if (!response.ok) {
+		let detail = `Request failed (${response.status})`;
+		try {
+			const parsed = await response.json();
+			if (typeof parsed.detail === 'string') detail = parsed.detail;
+		} catch {
+			// keep the generic message
+		}
+		throw new ApiError(response.status, detail);
+	}
+	if (!response.body) throw new ApiError(500, 'The assistant returned no stream');
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = '';
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			// A frame is complete only at a blank line; a chunk boundary can
+			// land anywhere, including mid-word, so whatever trails stays in
+			// the buffer until the rest of it arrives.
+			let split = buffer.indexOf('\n\n');
+			while (split !== -1) {
+				const frame = parseFrame(buffer.slice(0, split));
+				buffer = buffer.slice(split + 2);
+				if (frame) yield frame;
+				split = buffer.indexOf('\n\n');
+			}
+		}
+	} finally {
+		// Abort leaves the response body open otherwise, and the backend keeps
+		// paying a model to finish a turn nobody is reading.
+		await reader.cancel().catch(() => {});
+	}
+}
+
+function parseFrame(raw: string): AssistantEvent | null {
+	let event = '';
+	let data = '{}';
+	for (const line of raw.split('\n')) {
+		if (line.startsWith('event:')) event = line.slice('event:'.length).trim();
+		else if (line.startsWith('data:')) data = line.slice('data:'.length).trim();
+	}
+	if (!event) return null;
+	let parsed: Record<string, unknown>;
+	try {
+		parsed = JSON.parse(data);
+	} catch {
+		return null;
+	}
+	switch (event) {
+		case 'token':
+			return { type: 'token', text: String(parsed.text ?? '') };
+		case 'tool_call':
+			return { type: 'tool_call', name: String(parsed.name ?? '') };
+		case 'tool_result':
+			return {
+				type: 'tool_result',
+				name: String(parsed.name ?? ''),
+				error: typeof parsed.error === 'string' ? parsed.error : null
+			};
+		case 'handles':
+			return { type: 'handles', handles: (parsed.handles ?? []) as AssistantHandle[] };
+		case 'proposal':
+			return { type: 'proposal', proposal: parsed as unknown as AssistantProposal };
+		case 'error':
+			return { type: 'error', message: String(parsed.message ?? 'The assistant failed') };
+		case 'done':
+			return {
+				type: 'done',
+				stoppedEarly: typeof parsed.stopped_early === 'string' ? parsed.stopped_early : null,
+				toolsCalled: (parsed.tools_called ?? []) as string[]
+			};
+		default:
+			return null;
+	}
+}
