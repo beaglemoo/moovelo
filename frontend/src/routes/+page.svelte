@@ -65,6 +65,14 @@
 	let savedId: string | null = $state(null);
 	let savedName: string | null = $state(null);
 	let dirty = $state(false);
+	// True whenever `route` no longer corresponds to `waypoints`. A failed
+	// reroute leaves the previous geometry on screen deliberately - a blank
+	// map on a transient 503 is worse than a stale line under an error
+	// banner - but that pair must never be persisted: the stored track would
+	// not match the stored waypoints, and nothing downstream cross-checks
+	// them. `loading` alone does not cover this, because the catch that
+	// leaves the state inconsistent resets `loading` on its way out.
+	let routeStale = $state(false);
 	// Bumped at every site that sets `dirty = true`. A save that started
 	// before a later edit landed must not clear `dirty` for that later edit -
 	// it captures this before its own await chain and only clears dirty if
@@ -270,6 +278,7 @@
 		savedName = snap.savedName;
 		if (snap.routeOverride) {
 			route = snap.routeOverride;
+			routeStale = false;
 			dirty = true;
 			editGeneration += 1;
 		} else {
@@ -291,6 +300,7 @@
 				// whatever avoids shaped it, and none carried over from before.
 				avoids = [];
 				route = saved;
+				routeStale = false;
 				savedId = saved.id;
 				savedName = saved.name;
 				dirty = false;
@@ -573,6 +583,7 @@
 		abortController?.abort();
 		if (waypoints.length < 2) {
 			route = null;
+			routeStale = false;
 			error = null;
 			// The abort above may have killed an in-flight reroute whose
 			// AbortError path never resets `loading` - without this the
@@ -592,11 +603,13 @@
 				abortController.signal
 			);
 			loading = false;
+			routeStale = false;
 			dirty = true;
 			editGeneration += 1;
 		} catch (err) {
 			if (err instanceof DOMException && err.name === 'AbortError') return;
 			loading = false;
+			routeStale = true;
 			error = err instanceof Error ? err.message : 'Routing failed';
 		}
 	}
@@ -844,6 +857,7 @@
 		// just fetch the current primary again.
 		history.push({ ...currentSnapshot(), routeOverride: route });
 		route = picked;
+		routeStale = false;
 		dirty = true;
 		editGeneration += 1;
 		dismissAlternates();
@@ -860,6 +874,7 @@
 		// itself does for every other edit.
 		waypoints = candidate.waypoints;
 		route = candidate.snapshot;
+		routeStale = false;
 		dirty = true;
 		editGeneration += 1;
 		dismissLoop();
@@ -909,11 +924,14 @@
 	const storedPreset = $derived<StoredPreset>(customCostingOptions ? 'custom' : preset);
 
 	async function save() {
-		// Never while a reroute is in flight: `route` still holds the OLD
-		// geometry while `waypoints` already holds the new ones, and saving
-		// that pair persists a route whose stored track does not match its
-		// stored waypoints. The button is disabled too; this is the backstop.
-		if (!route || waypoints.length < 2 || loading) return;
+		// Never while `route` and `waypoints` disagree: mid-reroute (`loading`)
+		// the geometry is still the pre-edit one, and after a FAILED reroute
+		// it stays that way with `loading` already back to false - which is
+		// the likelier click, since the user is looking at an error banner.
+		// Saving either pair persists a route whose stored track does not
+		// match its stored waypoints, and nothing downstream cross-checks the
+		// two. The button is disabled as well; this is the backstop.
+		if (!route || waypoints.length < 2 || loading || routeStale) return;
 		if (savedId === null) {
 			const fallback = savedName ?? defaultName();
 			saveNameInput = fallback;
@@ -962,8 +980,8 @@
 
 	async function confirmSave(event: SubmitEvent) {
 		event.preventDefault();
-		// Same in-flight guard as save() - see the comment there.
-		if (!route || !saveNameInput.trim() || loading) return;
+		// Same route-matches-waypoints guard as save() - see the comment there.
+		if (!route || !saveNameInput.trim() || loading || routeStale) return;
 		saving = true;
 		try {
 			await awaitSurfaceSettled();
@@ -1135,7 +1153,7 @@
 				type="button"
 				class="save"
 				onclick={save}
-				disabled={!route || saving || loading || (savedId !== null && !dirty)}
+				disabled={!route || saving || loading || routeStale || (savedId !== null && !dirty)}
 			>
 				{savedId === null ? 'Save' : dirty ? 'Save changes' : 'Saved'}
 			</button>
