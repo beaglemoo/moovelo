@@ -50,9 +50,18 @@ class LLMResponse:
     # next request. Reasoning models attach extra fields here and replaying
     # them unchanged is what the endpoints expect.
     message: dict[str, Any] = field(default_factory=dict)
+    # Gateway-reported usage and the provider that actually served the call.
+    # Both are optional extras rather than part of the OpenAI shape, so they
+    # are absent against a plain local endpoint.
+    raw_usage: dict[str, Any] = field(default_factory=dict)
+    provider: str | None = None
 
 
-def _parse_message(message: dict[str, Any]) -> LLMResponse:
+def _parse_message(
+    message: dict[str, Any],
+    usage: dict[str, Any] | None = None,
+    provider: str | None = None,
+) -> LLMResponse:
     raw_calls = message.get("tool_calls") or []
     calls: list[ToolCall] = []
     for raw in raw_calls:
@@ -78,6 +87,8 @@ def _parse_message(message: dict[str, Any]) -> LLMResponse:
         content=content if isinstance(content, str) else "",
         tool_calls=calls,
         message=message,
+        raw_usage=usage or {},
+        provider=provider,
     )
 
 
@@ -206,7 +217,13 @@ class LLMClient:
             message = choices[0].get("message") if isinstance(choices[0], dict) else None
             if not isinstance(message, dict):
                 raise LLMError("The assistant service returned no reply")
-            return _parse_message(message)
+            usage = body.get("usage")
+            provider = body.get("provider")
+            return _parse_message(
+                message,
+                usage if isinstance(usage, dict) else None,
+                provider if isinstance(provider, str) else None,
+            )
 
         raise LLMError("The assistant service is rate-limiting or unavailable - try again later")
 

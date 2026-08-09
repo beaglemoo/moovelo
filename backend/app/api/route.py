@@ -29,6 +29,7 @@ from app.schemas import (
     WeatherAlongRoute,
     WeatherQuery,
 )
+from app.services.llm_config import resolve_llm_config
 from app.services.loop import generate_loop_candidates
 from app.services.presets import resolve_costing
 from app.services.ride_time import compute_ride_time
@@ -61,7 +62,10 @@ async def config(db: DbDep) -> AppConfig:
         search_enabled=built_at is not None,
         search_index_version=str(int(built_at.timestamp())) if built_at else None,
         weather_enabled=settings.weather_enabled,
-        assistant_enabled=settings.assistant_enabled,
+        # Resolved, not the bare env flag: the assistant can be configured
+        # entirely from the admin page, and reading settings here would leave
+        # the panel hidden on an install that never set the env vars.
+        assistant_enabled=(await resolve_llm_config(db)).enabled,
     )
 
 
