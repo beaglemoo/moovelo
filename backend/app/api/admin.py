@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from app.api.deps import DbDep, current_user
 from app.config import settings
 from app.models import Route, User, WahooAccount
+from app.version import APP_VERSION
 
 router = APIRouter(prefix="/api/admin")
 
@@ -62,6 +63,7 @@ async def overview(db: DbDep, _admin: AdminDep) -> dict[str, Any]:
             "oidc_enabled": settings.oidc_enabled,
             "oidc_provider": settings.oidc_provider_name if settings.oidc_enabled else None,
             "wahoo_configured": settings.wahoo_enabled,
+            "version": APP_VERSION,
         },
     }
 

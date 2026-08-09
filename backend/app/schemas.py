@@ -122,6 +122,11 @@ class UserSettingsResponse(BaseModel):
     weight_kg: float
     flat_speed_kmh: float
     ftp_watts: float | None = None
+    # Only ever explicitly set by the /api/settings handlers, which are the
+    # sole callers whose response reaches a client. Internal uses of this
+    # model (e.g. resolving a rider's settings for ride-time math) never
+    # surface it, so the default is never seen outside a bug.
+    version: str = "unknown"
 
 
 class UserSettingsPatch(BaseModel):
