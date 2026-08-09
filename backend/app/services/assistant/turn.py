@@ -107,17 +107,27 @@ def build_messages(
         waypoint_count=len(ctx.waypoints),
         has_route=ctx.route is not None,
         has_search=ctx.search_enabled,
+        preset=ctx.preset,
+        custom_costing=ctx.costing_options is not None,
     )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": note},
         *history,
-        # Last, after everything the rider and the tools have said. A leading
-        # instruction block is trivially talked past because every later
-        # message is more recent than it; this makes the rules the most
-        # recent thing in the conversation as well as the first.
-        {"role": "system", "content": SCOPE_REMINDER},
     ]
+
+
+def _with_reminder(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The conversation with the scope rules restated last.
+
+    Built per request rather than once, because the loop appends the
+    assistant's tool calls and their results to `messages` as it goes: a
+    reminder added once ends up buried mid-conversation from the second
+    completion onward, behind the very tool result it says it outranks.
+    Since essentially every useful turn calls a tool, that left the
+    protection working only where it was least needed.
+    """
+    return [*messages, {"role": "system", "content": SCOPE_REMINDER}]
 
 
 async def run_turn(
@@ -159,7 +169,6 @@ async def run_turn_events(
     # Every fragment of prose the model produced this turn, including any that
     # accompanied tool calls rather than ending the turn.
     prose: list[str] = []
-    streamed_any_text = False
 
     for _ in range(MAX_COMPLETION_CALLS):
         remaining = deadline - time.monotonic()
@@ -169,16 +178,19 @@ async def run_turn_events(
         try:
             if stream_text:
                 response = None
-                async for chunk in llm.stream(messages, tools=tools, timeout=remaining):
+                async for chunk in llm.stream(
+                    _with_reminder(messages), tools=tools, timeout=remaining
+                ):
                     if isinstance(chunk, TextDelta):
-                        streamed_any_text = True
                         yield Delta(chunk.text)
                     else:
                         response = chunk.response
                 if response is None:
                     raise LLMError("The assistant service returned no reply")
             else:
-                response = await llm.complete(messages, tools=tools, timeout=remaining)
+                response = await llm.complete(
+                    _with_reminder(messages), tools=tools, timeout=remaining
+                )
         except LLMError as exc:
             # Keep anything already computed: a route planned two calls ago is
             # still a real route, and discarding it helps nobody.
@@ -193,10 +205,25 @@ async def run_turn_events(
             if not stream_text:
                 yield Delta(response.content)
 
+        if response.finish_reason == "length":
+            # Hit MAX_COMPLETION_TOKENS. The text stops mid-sentence, and a
+            # tool call truncated this way carries unparseable JSON - either
+            # way the rider must not be shown it as a finished answer.
+            turn.stopped_early = "truncated"
+            break
+
         if not response.tool_calls:
             break
 
         messages.append(response.message)
+        # The assistant message just announced every call the model asked
+        # for. Whatever happens below - the per-round cap, the deadline, a
+        # handler blowing up - each of those ids must come back with a reply,
+        # or the next request carries an assistant message referencing tool
+        # calls that were never answered and real gateways reject it with a
+        # 400. Tracked in one place rather than asking each exit path to
+        # remember.
+        answered: set[str] = set()
         for call in response.tool_calls[:MAX_TOOL_CALLS_PER_ROUND]:
             if time.monotonic() >= deadline:
                 # Checked per call, not just per round: one reply asking for
@@ -235,6 +262,7 @@ async def run_turn_events(
                     "content": json.dumps(result),
                 }
             )
+            answered.add(call.id)
             signature = _error_signature(call.name, result)
             if signature is None:
                 recent_errors.clear()
@@ -249,6 +277,24 @@ async def run_turn_events(
                 if len(recent) >= MAX_IDENTICAL_ERRORS and len(set(recent)) == 1:
                     turn.stopped_early = "repeated_error"
                     break
+        for call in response.tool_calls:
+            if call.id in answered:
+                continue
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": json.dumps(
+                        {
+                            "error": "not_run",
+                            "message": (
+                                "This call was not run - too many were requested at once. "
+                                "Ask for fewer tools in one go."
+                            ),
+                        }
+                    ),
+                }
+            )
         if turn.stopped_early or turn.error:
             break
     else:
@@ -262,15 +308,20 @@ async def run_turn_events(
         )
     turn.content = "".join(prose)
     turn.handles = ctx.handles.export()
-    if not turn.content and turn.stopped_early and not turn.error:
+    if turn.stopped_early and not turn.error:
         # Written here rather than by the caller so a stopped turn costs no
         # extra completion, and emitted as a Delta like everything else the
         # rider reads - a consumer that renders deltas needs no special case.
-        turn.content = _stopped_message(turn.stopped_early, turn.proposal is not None)
-        # Unless prose is already on screen, where appending a budget notice
-        # to a half-finished sentence reads worse than letting it stand.
-        if not streamed_any_text:
-            yield Delta(turn.content)
+        #
+        # Always, even when prose already arrived. This used to fire only
+        # when content was empty, which was structurally true until prose
+        # began accumulating across rounds; after that, a model that narrated
+        # anything before the turn was cut short left the rider with a
+        # dangling half-sentence and no explanation at all - indistinguishable
+        # from the UI breaking.
+        note = _stopped_message(turn.stopped_early, turn.proposal is not None)
+        yield Delta(note if not turn.content else f" {note}")
+        turn.content = f"{turn.content} {note}".strip() if turn.content else note
     yield Finished(turn)
 
 
@@ -298,6 +349,8 @@ def _stopped_message(reason: str, has_proposal: bool) -> str:
     )
     if reason == "timeout":
         return "That took too long, so I stopped." + tail
+    if reason == "truncated":
+        return "That answer got too long, so it was cut short." + tail
     if reason == "repeated_error":
         return "I got stuck repeating the same failed step, so I stopped." + tail
     return "That needed more steps than I am allowed in one go, so I stopped." + tail
