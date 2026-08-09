@@ -65,6 +65,14 @@
 	let savedId: string | null = $state(null);
 	let savedName: string | null = $state(null);
 	let dirty = $state(false);
+	// True whenever `route` no longer corresponds to `waypoints`. A failed
+	// reroute leaves the previous geometry on screen deliberately - a blank
+	// map on a transient 503 is worse than a stale line under an error
+	// banner - but that pair must never be persisted: the stored track would
+	// not match the stored waypoints, and nothing downstream cross-checks
+	// them. `loading` alone does not cover this, because the catch that
+	// leaves the state inconsistent resets `loading` on its way out.
+	let routeStale = $state(false);
 	// Bumped at every site that sets `dirty = true`. A save that started
 	// before a later edit landed must not clear `dirty` for that later edit -
 	// it captures this before its own await chain and only clears dirty if
@@ -256,16 +264,21 @@
 		customCostingOptions = snap.costingOptions ? { ...snap.costingOptions } : null;
 		source = snap.source;
 		avoids = snap.avoidLocations.map((wp) => ({ ...wp }));
-		// Re-attach only, never detach - see PlannerSnapshot.savedId. This is
-		// what makes an accidental Clear fully undoable: the restored route
-		// is still the library row it was, so Save offers "Save changes",
-		// not a duplicating "Save".
-		if (snap.savedId !== null) {
-			savedId = snap.savedId;
-			savedName = snap.savedName;
-		}
+		// Restored exactly, null included - see PlannerSnapshot.savedId.
+		// An accidental Clear stays fully undoable because clear() pushes its
+		// snapshot BEFORE nulling savedId, so the entry undo lands on already
+		// carries the library row and Save offers "Save changes".
+		// Re-attaching only (never clearing) was tried and is worse: undoing
+		// back past the point a route was saved would leave savedId pinned to
+		// that row while the waypoints on screen wandered off to something
+		// else entirely, and the next save would PUT the unrelated content
+		// over it. Detaching can at worst duplicate a row, which the user can
+		// see and delete; overwriting silently destroys a saved route.
+		savedId = snap.savedId;
+		savedName = snap.savedName;
 		if (snap.routeOverride) {
 			route = snap.routeOverride;
+			routeStale = false;
 			dirty = true;
 			editGeneration += 1;
 		} else {
@@ -287,6 +300,7 @@
 				// whatever avoids shaped it, and none carried over from before.
 				avoids = [];
 				route = saved;
+				routeStale = false;
 				savedId = saved.id;
 				savedName = saved.name;
 				dirty = false;
@@ -569,6 +583,7 @@
 		abortController?.abort();
 		if (waypoints.length < 2) {
 			route = null;
+			routeStale = false;
 			error = null;
 			// The abort above may have killed an in-flight reroute whose
 			// AbortError path never resets `loading` - without this the
@@ -588,11 +603,13 @@
 				abortController.signal
 			);
 			loading = false;
+			routeStale = false;
 			dirty = true;
 			editGeneration += 1;
 		} catch (err) {
 			if (err instanceof DOMException && err.name === 'AbortError') return;
 			loading = false;
+			routeStale = true;
 			error = err instanceof Error ? err.message : 'Routing failed';
 		}
 	}
@@ -677,10 +694,17 @@
 	// routeOverride (mutators never do - their route is about to be
 	// replaced). Without it, redoing past an adopted alternate would replay
 	// reroute() and silently come back with the primary route instead of
-	// the alternate the rider picked. Skipped while a reroute is in flight,
-	// when `route` is stale for the current inputs and a replay is truer.
+	// the alternate the rider picked.
+	//
+	// Only ever a route that matches the inputs beside it: mid-reroute, and
+	// after one that failed, `route` still belongs to the PREVIOUS waypoints,
+	// and restoring it verbatim would hand redo a mismatched pair - with
+	// applySnapshot marking it clean, since a routeOverride is by definition
+	// a route that matched when captured. Replaying reroute() is truer in
+	// both cases: it either produces a route that really does match, or fails
+	// and sets routeStale again.
 	function timeTravelSnapshot(): PlannerSnapshot {
-		return { ...currentSnapshot(), routeOverride: loading ? null : route };
+		return { ...currentSnapshot(), routeOverride: loading || routeStale ? null : route };
 	}
 
 	function undo() {
@@ -840,6 +864,7 @@
 		// just fetch the current primary again.
 		history.push({ ...currentSnapshot(), routeOverride: route });
 		route = picked;
+		routeStale = false;
 		dirty = true;
 		editGeneration += 1;
 		dismissAlternates();
@@ -856,6 +881,7 @@
 		// itself does for every other edit.
 		waypoints = candidate.waypoints;
 		route = candidate.snapshot;
+		routeStale = false;
 		dirty = true;
 		editGeneration += 1;
 		dismissLoop();
@@ -905,11 +931,14 @@
 	const storedPreset = $derived<StoredPreset>(customCostingOptions ? 'custom' : preset);
 
 	async function save() {
-		// Never while a reroute is in flight: `route` still holds the OLD
-		// geometry while `waypoints` already holds the new ones, and saving
-		// that pair persists a route whose stored track does not match its
-		// stored waypoints. The button is disabled too; this is the backstop.
-		if (!route || waypoints.length < 2 || loading) return;
+		// Never while `route` and `waypoints` disagree: mid-reroute (`loading`)
+		// the geometry is still the pre-edit one, and after a FAILED reroute
+		// it stays that way with `loading` already back to false - which is
+		// the likelier click, since the user is looking at an error banner.
+		// Saving either pair persists a route whose stored track does not
+		// match its stored waypoints, and nothing downstream cross-checks the
+		// two. The button is disabled as well; this is the backstop.
+		if (!route || waypoints.length < 2 || loading || routeStale) return;
 		if (savedId === null) {
 			const fallback = savedName ?? defaultName();
 			saveNameInput = fallback;
@@ -958,8 +987,8 @@
 
 	async function confirmSave(event: SubmitEvent) {
 		event.preventDefault();
-		// Same in-flight guard as save() - see the comment there.
-		if (!route || !saveNameInput.trim() || loading) return;
+		// Same route-matches-waypoints guard as save() - see the comment there.
+		if (!route || !saveNameInput.trim() || loading || routeStale) return;
 		saving = true;
 		try {
 			await awaitSurfaceSettled();
@@ -1131,7 +1160,7 @@
 				type="button"
 				class="save"
 				onclick={save}
-				disabled={!route || saving || loading || (savedId !== null && !dirty)}
+				disabled={!route || saving || loading || routeStale || (savedId !== null && !dirty)}
 			>
 				{savedId === null ? 'Save' : dirty ? 'Save changes' : 'Saved'}
 			</button>

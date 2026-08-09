@@ -662,8 +662,12 @@ no round-trip API of its own.
 
 For each of `LOOP_BEARINGS` (8) evenly spaced compass bearings around the
 origin, a via point is placed on a circle and its radius binary-searched
-(`LOOP_MAX_ITERS` = 6 halvings of a `[0.2, 2.0] * target/(2*pi)` radius
-window) until the out-and-back route through it (`origin -> via -> origin`)
+(`LOOP_MAX_ITERS` = 6 halvings of a `[0.4, 2.0] * target/2.5` radius
+window - an out-and-back through one via point measures roughly 2.5x that
+via's straight-line distance on real roads, measured rather than derived;
+seeding from a full circle's `2*pi*r` put the radius for larger targets
+outside the window entirely and every 60 km+ loop came back 15-23% short)
+until the out-and-back route through it (`origin -> via -> origin`)
 lands within `LOOP_TOLERANCE` (5%) of the target distance, or the iteration
 budget runs out - the best (closest-distance) attempt seen is kept either
 way, not just the last one tried. The 8 bearings run concurrently
@@ -677,9 +681,9 @@ distance error, a mild per-km ascent penalty, and a surface term from
 riding and rewarded for gravel, or ignored entirely when the breakdown
 degrades to `None`). All the constants live at the top of `loop.py`,
 deliberately in one place: distance error dominates by construction (a
-typical hilly ride's ascent term is ~0.45 against a 20% distance miss's
-0.20), so ascent and surface only ever break ties between similarly-close
-candidates.
+typical hilly ride at 30 m/km scores only `ASCENT_WEIGHT * 30/30` = 0.15
+against a 20% distance miss's 0.20), so ascent and surface only ever break
+ties between similarly-close candidates.
 
 The scored candidates are sorted and greedily deduplicated
 (`LOOP_DEDUP_KM` = 3 km between kept via points) down to `LOOP_CANDIDATES`
@@ -914,7 +918,27 @@ about extract coverage when no roads are found near a waypoint.
   `mayEdit()` confirm - time travel is not a fresh editorial decision -
   which is safe because `source` itself travels inside the snapshot, so
   undoing back into an imported route's territory still shows it as
-  imported.
+  imported. The saved-route identity (`savedId`/`savedName`) travels in
+  the snapshot too and is restored *exactly*, null included: undoing past
+  the point a route was saved detaches it, because what is on screen is no
+  longer that library row. Re-attaching without ever detaching was tried
+  and is worse - it leaves the row attached while the waypoints wander
+  off, and the next save overwrites a stored route with unrelated content.
+  A duplicate row is visible and deletable; a silent overwrite is not.
+- **A route is never persisted unless it matches its waypoints**:
+  `routeStale` is set when a reroute fails and cleared wherever a matching
+  route is assigned (reroute success, an adopted alternate, a chosen loop,
+  a route loaded by id), and it disables saving. The failed reroute leaves
+  the previous line on screen on purpose - a blank map on a transient 503
+  is worse - so `loading` cannot be the guard: the catch that leaves the
+  state inconsistent resets `loading` on its way out, and the rider is
+  most likely to click Save precisely then, while reading the error.
+  `routeStale` also suppresses `routeOverride` capture in
+  `timeTravelSnapshot()`: a stale route restored verbatim by redo would
+  arrive marked clean, since a routeOverride is by definition a route that
+  matched when it was captured. Replaying `reroute()` is truer - it either
+  produces a route that really does match, or fails and sets the flag
+  again.
 - **Waypoint list reordering is native HTML5 drag-and-drop plus
   always-present up/down buttons**, not a drag library: no new dependency,
   and the buttons are not a fallback - HTML5 drag-and-drop fires no events

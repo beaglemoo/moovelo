@@ -34,7 +34,7 @@ LOOP_BEARINGS = 8  # compass spread; the dedup pass collapses lookalikes
 # saturated at the upper bound and undershot by 15-23%. Measured live, not
 # derived: see review pass 2.
 OUT_AND_BACK_RATIO = 2.5
-LOOP_MAX_ITERS = 6  # halvings of a 10x radius window: ~3% resolution
+LOOP_MAX_ITERS = 6  # halvings of a 5x radius window: ~3% resolution
 LOOP_TOLERANCE = 0.05  # stop a bearing early within 5% of target
 LOOP_CANDIDATES = 3
 LOOP_DEDUP_KM = 3.0  # min via-point separation between returned loops

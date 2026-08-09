@@ -92,14 +92,18 @@ class ValhallaClient:
             ]
         return payload
 
-    async def route(self, request: RouteRequest) -> RouteResponse:
+    async def _post_route(self, payload: dict[str, Any], request: RouteRequest) -> dict[str, Any]:
+        """POST /route, rewriting the coverage hint when avoids are in play.
+
+        Shared by `route` and `route_alternates` so both report the same
+        thing: with avoids set, "no suitable edges" usually means an excluded
+        point sits on the only road under a waypoint, and the generic "is this
+        area covered?" hint would send the rider chasing a map problem that
+        does not exist.
+        """
         try:
-            data = await self._post("/route", self._route_payload(request))
+            return await self._post("/route", payload)
         except HTTPException as exc:
-            # With avoids in play, "no suitable edges" usually means an
-            # excluded point sits on the only road under a waypoint - the
-            # generic "is this area covered?" hint would send the rider
-            # chasing a map problem that does not exist.
             if (
                 request.exclude_locations
                 and exc.status_code == 422
@@ -113,6 +117,9 @@ class ValhallaClient:
                     ),
                 ) from exc
             raise
+
+    async def route(self, request: RouteRequest) -> RouteResponse:
+        data = await self._post_route(self._route_payload(request), request)
         return await self._parse_trip(data["trip"])
 
     async def route_alternates(
@@ -129,7 +136,7 @@ class ValhallaClient:
         """
         payload = self._route_payload(request)
         payload["alternates"] = count
-        data = await self._post("/route", payload)
+        data = await self._post_route(payload, request)
         primary = await self._parse_trip(data["trip"])
         alternates = [await self._parse_trip(alt["trip"]) for alt in data.get("alternates", [])]
         return primary, alternates
