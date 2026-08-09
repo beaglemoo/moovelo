@@ -458,6 +458,36 @@ once a fragment has been handed to the caller it is already on the
 rider's screen, so restarting the completion would repeat text rather
 than replace it. A failure mid-body is terminal.
 
+### Proposals
+
+A turn that routed anything ends with a `proposal` frame carrying the
+waypoints, the preset, and the `RouteResponse` Valhalla already returned
+for them. Nothing is saved and no server state changes: the assistant
+proposes, and the rider accepts or discards.
+
+`+page.svelte` owns the offer rather than the panel, because two other
+things need it - the ghost line on the map (`proposal-preview`, drawn
+like the loop and alternates previews so the real route stays on top)
+and the staleness check. Accepting runs `applyProposal()`, which mirrors
+`useLoop()` exactly: push the current snapshot onto the history stack,
+assign the waypoints and preset, `claimRoute()`, put the returned
+snapshot straight onto `route` rather than replanning it, and
+`markEdited()`. Undo therefore restores the pre-proposal planner like
+any other edit, and what lands is ordinary draggable waypoints.
+
+Staleness joins the single shared invalidation `$effect` rather than
+adding a second one - this subsystem has produced the same bug more than
+once, and the fix each time was to compare the whole `RoutingInputs`
+tuple in one place. Waypoints count for a proposal, unlike for a loop: a
+loop is anchored to its own origin, whereas a proposal is an offer to
+replace what is on screen, so once the rider edits their route the offer
+describes something they are no longer looking at.
+
+Every figure on the proposal card is read off the snapshot, never off
+the model's prose. The prompt forbids stating a number no tool returned,
+but this is what makes it structurally impossible for an invented one to
+reach the rider as a measurement.
+
 The browser side is `streamAssistantChat()` in `frontend/src/lib/api.ts`
 - `fetch` plus a `ReadableStream` reader, parsing SSE by hand.
 `EventSource` is GET-only and this needs a POST body carrying the whole
