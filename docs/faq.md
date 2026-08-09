@@ -55,6 +55,46 @@ URLs - point it at any Geofabrik region, or list several to cover more
 than one area in a single build. See [docs/data.md](data.md#choosing-an-extract)
 for the URL format and a note on Geofabrik's UK path change.
 
+## Why is the Alternatives button greyed out?
+
+Because your route has more than two waypoints. Alternate routes are a
+property of a straight A-to-B request - once you pin the line through
+via points, you've already said which way to go, and the router has no
+second opinion left to offer. Remove the via points, or plan the leg you
+want alternatives for on its own.
+
+## Why isn't my loop exactly the distance I asked for?
+
+Loops are built out of real roads. Moovelo searches outward from your
+point along several bearings, narrowing in on a distance that brings the
+round trip close to your target, but it can only pick from routes that
+exist - a target of 60 km typically lands within a few percent, and
+rural areas with sparse road networks land less precisely than dense
+ones. Each candidate shows its actual distance, and since picking one
+gives you ordinary editable waypoints, dragging one out a little is the
+fastest way to close a gap you care about.
+
+## Are avoided roads saved with a route?
+
+No, and this is deliberate. An avoid is an instruction to the router
+while you're planning, and the route you save already reflects it - the
+stored line goes the way your avoids shaped it. Reload that route and
+you get the same line; edit it and it re-plans without the avoid list,
+so re-add anything that still matters. Persisting avoids per route was
+considered and rejected: it would mean a saved route could silently
+re-plan differently later, which is worse than re-adding a point.
+
+## Why doesn't the isochrone agree with the app's ride time?
+
+They come from different models on purpose. The isochrone is drawn by
+the routing engine using its own flat speed assumption for the costing
+you picked; the ride time in the stats bar is computed per-rider from
+gradient, surface and your settings. Teaching the routing engine your
+personal speed curve isn't something it exposes a hook for, so the
+isochrone is presented as what it is - a rough reach at routing speed,
+useful for "which direction has more in it", not for "I'll be home by
+six".
+
 ## How do I update?
 
 Pull the new image (or rebuild) and restart - `docker compose --profile
