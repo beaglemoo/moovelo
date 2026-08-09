@@ -48,6 +48,18 @@
 			.filter(Boolean)
 	);
 
+	// What the fields were seeded with, so save() can tell an edited field from
+	// one merely showing the env-resolved default. Without this, every save
+	// pinned the current env value into the database as an explicit override
+	// and a later change to LLM_BASE_URL was silently ignored for ever after.
+	let seeded = {
+		baseUrl: '',
+		model: '',
+		sort: 'balanced',
+		providerOrder: '',
+		maxPrice: null as number | null
+	};
+
 	function seed(s: LLMSettings) {
 		settings = s;
 		baseUrl = s.base_url ?? s.effective_base_url;
@@ -56,6 +68,7 @@
 		providerOrder = s.provider_order ?? '';
 		maxPrice = s.max_prompt_price;
 		apiKey = '';
+		seeded = { baseUrl, model, sort, providerOrder, maxPrice };
 	}
 
 	async function load() {
@@ -95,13 +108,16 @@
 		error = null;
 		probe = null;
 		try {
-			const patch: LLMSettingsPatch = {
-				base_url: baseUrl,
-				model,
-				provider_order: providerOrder,
-				provider_sort: sort,
-				max_prompt_price: maxPrice
-			};
+			// Only changed fields are sent. The backend applies exclude_unset,
+			// so an omitted field keeps whatever it had - which for a field
+			// that was only ever showing the env default means it stays an env
+			// default rather than being frozen into the database.
+			const patch: LLMSettingsPatch = {};
+			if (baseUrl !== seeded.baseUrl) patch.base_url = baseUrl;
+			if (model !== seeded.model) patch.model = model;
+			if (providerOrder !== seeded.providerOrder) patch.provider_order = providerOrder;
+			if (sort !== seeded.sort) patch.provider_sort = sort;
+			if (maxPrice !== seeded.maxPrice) patch.max_prompt_price = maxPrice;
 			// Only send the key when one was typed - an untouched field must
 			// never clear a stored key.
 			if (apiKey) patch.api_key = apiKey;
