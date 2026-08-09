@@ -80,7 +80,7 @@ def test_prunes_and_stays_bounded_under_many_distinct_keys(
     set_now(monkeypatch, 0.0)
     for i in range(rate_limit.MAX_TRACKED_KEYS + 500):
         rate_limit.check_and_record(f"10.0.0.{i % 256}|user{i}@example.com")
-    assert len(rate_limit._attempts) == rate_limit.MAX_TRACKED_KEYS
+    assert len(rate_limit.login._attempts) == rate_limit.MAX_TRACKED_KEYS
 
     # Long after every one of those entries has aged out, a fresh key still
     # gets tracked rather than being permanently crowded out.
