@@ -15,6 +15,7 @@ Two rules hold throughout:
   model at all.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
@@ -67,10 +68,17 @@ PoiCategory = Literal[
 POI_RADIUS_M = 500.0
 
 
+# Bidi overrides and zero-width characters survive JSON encoding intact and
+# render as something other than what they are - a name can be made to read
+# backwards, or to hide text - in both the model's context and the rider's
+# chat panel. OSM names are public text, so this is an input, not a typo.
+_INVISIBLE = re.compile(r"[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
+
+
 def _clip(name: str | None) -> str:
     if not name:
         return "unnamed"
-    return name[:MAX_NAME_CHARS]
+    return _INVISIBLE.sub("", name)[:MAX_NAME_CHARS] or "unnamed"
 
 
 class SearchPlaceArgs(BaseModel):
@@ -88,14 +96,21 @@ class FindPoisArgs(BaseModel):
 class PlanRouteArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
     waypoint_refs: list[HandleRef] = Field(min_length=2, max_length=12)
-    preset: Preset = "road"
+    # None means "whatever the rider has selected", which is the right answer
+    # when the model does not say. Defaulting to "road" meant a rider with
+    # gravel showing on screen got a road-costed route back and no way to
+    # tell - the model omits the argument whenever it has no opinion, which
+    # is most of the time.
+    preset: Preset | None = None
 
 
 class GenerateLoopArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
     origin_ref: HandleRef
-    target_km: float = Field(gt=0, le=200)
-    preset: Preset = "road"
+    # Matches LoopQuery.target_km: below 5 km the bearing search looks for a
+    # loop shorter than the spacing between its own candidate waypoints.
+    target_km: float = Field(ge=5, le=200)
+    preset: Preset | None = None
 
 
 class RouteStatsArgs(BaseModel):
@@ -149,7 +164,8 @@ def tool_schemas() -> list[dict[str, Any]]:
         _schema(
             "plan_route",
             "Plan a cycling route through the given references, in order. "
-            "Returns the measured distance, climb and surface split.",
+            "Returns the measured distance and climb, and the surface split "
+            "when one is available.",
             PlanRouteArgs,
         ),
         _schema(
@@ -270,7 +286,16 @@ async def _find_pois(raw: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         )
     # Deliberately no `tags`: raw OpenStreetMap key/values are public-authored
     # free text and the largest untrusted surface here.
-    return {"results": results, "count": len(results)}
+    #
+    # `truncated` is said out loud rather than left implied: a model handed
+    # ten of forty cafes with no signal will tell the rider there are ten,
+    # which is a figure nothing measured. The backend's own cap counts too,
+    # not just ours.
+    return {
+        "results": results,
+        "count": len(results),
+        "truncated": found.truncated or len(found.pois) > args.max_results,
+    }
 
 
 async def _plan_route(raw: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -283,26 +308,29 @@ async def _plan_route(raw: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "error": "invalid_arguments",
             "message": "A route needs at least two distinct points.",
         }
+    # The rider's own selection unless the model deliberately overrode it.
+    preset = args.preset or ctx.preset
     route = await ctx.valhalla.route(
         RouteRequest(
             waypoints=waypoints,
-            preset=args.preset,
+            preset=preset,
             costing_options=ctx.costing_options,
         )
     )
     ctx.route = route
     ctx.proposed_waypoints = waypoints
-    ctx.preset = args.preset
+    ctx.preset = preset
     return _stats(route)
 
 
 async def _generate_loop(raw: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     args = GenerateLoopArgs.model_validate(raw)
     origin = ctx.handles.point(args.origin_ref)
+    preset = args.preset or ctx.preset
     candidates = await generate_loop_candidates(
         origin=origin,
         target_km=args.target_km,
-        preset=args.preset,
+        preset=preset,
         costing_options=ctx.costing_options,
         valhalla=ctx.valhalla,
     )
@@ -327,7 +355,7 @@ async def _generate_loop(raw: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     best = candidates[0]
     ctx.route = best.snapshot
     ctx.proposed_waypoints = list(best.waypoints)
-    ctx.preset = args.preset
+    ctx.preset = preset
     return {
         "candidates": results,
         "note": "The first candidate is currently selected. Call plan_route with "

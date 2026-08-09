@@ -37,6 +37,10 @@ MAX_BACKOFF_S = 60.0
 MAX_COMPLETION_TOKENS = 1024
 
 
+class _RetryStream(Exception):
+    """An in-band error frame that arrived before any output was emitted."""
+
+
 class LLMError(Exception):
     """Terminal failure talking to the model endpoint, safe to show a user."""
 
@@ -63,6 +67,11 @@ class LLMResponse:
     # are absent against a plain local endpoint.
     raw_usage: dict[str, Any] = field(default_factory=dict)
     provider: str | None = None
+    # "length" means the reply hit MAX_COMPLETION_TOKENS and stops mid
+    # sentence - or mid tool-call JSON. Discarding it presented a truncated
+    # answer as a finished one, which is the same failure shape as swallowing
+    # an error frame.
+    finish_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +95,7 @@ def _parse_message(
     message: dict[str, Any],
     usage: dict[str, Any] | None = None,
     provider: str | None = None,
+    finish_reason: str | None = None,
 ) -> LLMResponse:
     raw_calls = message.get("tool_calls") or []
     calls: list[ToolCall] = []
@@ -114,6 +124,7 @@ def _parse_message(
         message=message,
         raw_usage=usage or {},
         provider=provider,
+        finish_reason=finish_reason,
     )
 
 
@@ -210,6 +221,10 @@ class LLMClient:
                     headers=headers,
                     timeout=timeout if timeout is not None else REQUEST_TIMEOUT_S,
                 )
+            except _RetryStream as retry:
+                logger.warning("Assistant stream retry %d after %s", attempt, retry)
+                await asyncio.sleep(min(2**attempt, MAX_BACKOFF_S))
+                continue
             except httpx.TransportError as exc:
                 if attempt == MAX_ATTEMPTS:
                     raise LLMError("The assistant service is unreachable") from exc
@@ -248,10 +263,12 @@ class LLMClient:
                 raise LLMError("The assistant service returned no reply")
             usage = body.get("usage")
             provider = body.get("provider")
+            reason = choices[0].get("finish_reason")
             return _parse_message(
                 message,
                 usage if isinstance(usage, dict) else None,
                 provider if isinstance(provider, str) else None,
+                reason if isinstance(reason, str) else None,
             )
 
         raise LLMError("The assistant service is rate-limiting or unavailable - try again later")
@@ -328,8 +345,20 @@ class LLMClient:
                         # one, which is the worst shape a failure can take
                         # here: indistinguishable from a short reply.
                         if "error" in event:
-                            raise LLMError(_stream_error_message(event["error"]))
-                        if "choices" in event:
+                            # Before any output this is the same situation as
+                            # a 5xx - the sibling branch retries it, and a
+                            # transient upstream blip should not be terminal
+                            # here just because it arrived in-band. Once a
+                            # delta has shipped, retrying would repeat text,
+                            # so then it is terminal.
+                            stream_error = _stream_error_message(event["error"])
+                            if emitted or attempt == MAX_ATTEMPTS:
+                                raise LLMError(stream_error)
+                            raise _RetryStream(stream_error)
+                        # A trailing usage frame carries an empty choices
+                        # list; that is not a reply, and counting it meant an
+                        # endpoint that sent only that looked successful.
+                        if event.get("choices"):
                             saw_payload = True
                         text = _accumulate(event, content, calls)
                         if text:

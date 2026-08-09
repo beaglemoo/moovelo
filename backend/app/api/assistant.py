@@ -123,6 +123,11 @@ class AssistantChatResponse(BaseModel):
     error: str | None = None
 
 
+def _refund_a_turn(user_id: uuid.UUID) -> None:
+    """The endpoint was never reached, so the rider should not be charged."""
+    rate_limit.assistant.refund(f"assistant:{user_id}")
+
+
 def _spend_a_turn(user_id: uuid.UUID) -> None:
     """Bound what one account can spend at the configured endpoint.
 
@@ -222,6 +227,10 @@ async def chat(
     config, ctx, history = await _prepare(body, request, db, user)
     async with LLMClient(config) as llm:
         turn = await run_turn(llm, history, ctx)
+    if turn.error and not turn.tools_called:
+        # Nothing was reached and nothing was computed - charging for this
+        # would let a broken endpoint burn a rider's whole allowance.
+        _refund_a_turn(user.id)
 
     return AssistantChatResponse(
         content=turn.content,
@@ -290,6 +299,8 @@ async def chat_stream(
                         if proposal is not None:
                             yield _frame("proposal", proposal.model_dump(mode="json"))
                         if turn.error:
+                            if not turn.tools_called:
+                                _refund_a_turn(user.id)
                             yield _frame("error", {"message": turn.error})
                         done_sent = True
                         yield _frame(
