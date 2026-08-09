@@ -1,14 +1,14 @@
 import secrets as py_secrets
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Cookie, HTTPException, Response
+from fastapi import APIRouter, Cookie, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
 
 from app.api.deps import DbDep, UserDep
 from app.config import settings
 from app.services import auth as auth_service
-from app.services import oidc
+from app.services import oidc, rate_limit
 from app.services.auth import SESSION_COOKIE
 
 router = APIRouter(prefix="/api/auth")
@@ -67,10 +67,35 @@ async def register(body: Credentials, response: Response, db: DbDep) -> UserOut:
     return UserOut(email=user.email, is_admin=user.is_admin)
 
 
+def _login_rate_limit_key(request: Request, email: str) -> str:
+    """(peer address, submitted email).
+
+    The app runs with no proxy-header trust configured anywhere (no
+    ProxyHeadersMiddleware, no X-Forwarded-For parsing) - see main.py - so
+    `request.client` is whatever TCP peer connected to uvicorn. Behind the
+    documented prod deployment (deploy/README.md's Caddy `reverse_proxy`),
+    that peer is Caddy itself for every request, not the visitor's real
+    address: in that topology every login shares the same IP component, and
+    the email half of the key is what actually separates callers. Trusting a
+    forwarded-for header instead would need a configured, trusted proxy
+    allowlist - without one, a client can put any address it likes in that
+    header and pick its own rate-limit bucket, which is worse than ignoring
+    it. The IP component still earns its place for direct (non-proxied) dev
+    and test setups, and for any future deployment that exposes uvicorn
+    itself.
+    """
+    ip = request.client.host if request.client else "unknown"
+    return f"{ip}|{email.strip().lower()}"
+
+
 @router.post("/login")
-async def login(body: Credentials, response: Response, db: DbDep) -> UserOut:
+async def login(body: Credentials, request: Request, response: Response, db: DbDep) -> UserOut:
     if not settings.password_login_active:
         raise HTTPException(status_code=403, detail="Password login is disabled - use SSO")
+    if not rate_limit.check_and_record(_login_rate_limit_key(request, body.email)):
+        raise HTTPException(
+            status_code=429, detail="Too many login attempts - try again in a few minutes"
+        )
     user = await auth_service.get_user_by_email(db, body.email)
     if user is None or not auth_service.verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")

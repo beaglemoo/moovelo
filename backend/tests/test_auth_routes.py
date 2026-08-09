@@ -8,6 +8,7 @@ from httpx import AsyncClient
 
 from app.main import app
 from app.schemas import RouteResponse
+from app.services import rate_limit
 from app.services.polyline import encode_polyline6
 from app.services.presets import PRESETS
 from app.services.valhalla import ValhallaClient
@@ -76,6 +77,68 @@ async def test_login_logout_flow(client: AsyncClient) -> None:
     )
     assert good.status_code == 200
     assert (await client.get("/api/auth/me")).status_code == 200
+
+
+async def test_login_is_rate_limited_then_recovers(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await register(client)
+    await client.post("/api/auth/logout")
+
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: 0.0)
+    for _ in range(rate_limit.MAX_ATTEMPTS):
+        bad = await client.post(
+            "/api/auth/login", json={"email": "admin@example.com", "password": "wrong-password"}
+        )
+        assert bad.status_code == 401
+
+    # The threshold's worth of attempts is used up - even the *correct*
+    # password is refused without touching the database, because a
+    # credential-stuffing script sending the right guess is exactly what
+    # this defends against.
+    limited = await client.post(
+        "/api/auth/login", json={"email": "admin@example.com", "password": "correct-horse-9"}
+    )
+    assert limited.status_code == 429
+
+    # Hammering it further while blocked must not push the window out.
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: rate_limit.WINDOW_S - 1)
+    still_limited = await client.post(
+        "/api/auth/login", json={"email": "admin@example.com", "password": "correct-horse-9"}
+    )
+    assert still_limited.status_code == 429
+
+    # Once WINDOW_S has passed since the last *allowed* attempt, it recovers.
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: rate_limit.WINDOW_S + 1)
+    recovered = await client.post(
+        "/api/auth/login", json={"email": "admin@example.com", "password": "correct-horse-9"}
+    )
+    assert recovered.status_code == 200
+
+
+async def test_login_rate_limit_is_keyed_per_email_not_shared(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A different account is a different key, so one email's bad guesses
+    never lock out an unrelated account behind the same client."""
+    await register(client)
+    monkeypatch.setattr("app.api.auth.settings.signups_enabled", True)
+    await register(client, email="second@example.com")
+    await client.post("/api/auth/logout")
+
+    for _ in range(rate_limit.MAX_ATTEMPTS):
+        await client.post(
+            "/api/auth/login", json={"email": "admin@example.com", "password": "wrong-password"}
+        )
+    blocked = await client.post(
+        "/api/auth/login", json={"email": "admin@example.com", "password": "correct-horse-9"}
+    )
+    assert blocked.status_code == 429
+
+    unaffected = await client.post(
+        "/api/auth/login", json={"email": "second@example.com", "password": "correct-horse-9"}
+    )
+    assert unaffected.status_code == 200
 
 
 async def test_route_endpoints_require_auth(client: AsyncClient) -> None:

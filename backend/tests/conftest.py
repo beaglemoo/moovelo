@@ -11,6 +11,7 @@ from app.db import get_db
 from app.main import app
 from app.models import Base
 from app.schemas import RouteResponse
+from app.services import rate_limit
 from app.services.polyline import encode_polyline6
 
 TEST_DB_HOST = "127.0.0.1:5433"
@@ -65,6 +66,16 @@ def make_snapshot() -> RouteResponse:
 @pytest.fixture
 def snapshot() -> RouteResponse:
     return make_snapshot()
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_rate_limit() -> None:
+    """The login limiter's state (services/rate_limit.py) is a process-global
+    dict, not per-request - without this, unrelated tests that all log in as
+    the same email over the sandboxed client's fixed peer address (httpx's
+    ASGITransport always reports "127.0.0.1") would accumulate attempts
+    against each other and eventually 429 a test that expects success."""
+    rate_limit.reset()
 
 
 @pytest.fixture
