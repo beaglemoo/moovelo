@@ -28,6 +28,20 @@ if [ "$(git describe --tags --exact-match 2>/dev/null)" != "$VERSION" ]; then
 	[ "$yn" = "y" ] || exit 1
 fi
 
+# Refuse to build a release whose version manifests disagree with the tag -
+# a stale backend/pyproject.toml or frontend/package.json must never reach
+# an image tagged $VERSION.
+PY_V=$(grep -m1 '^version = ' backend/pyproject.toml | cut -d'"' -f2)
+FE_V=$(node -p "require('./frontend/package.json').version")
+for pair in "backend/pyproject.toml:$PY_V" "frontend/package.json:$FE_V"; do
+	f="${pair%%:*}"
+	v="${pair##*:}"
+	[ "$v" = "$V" ] || {
+		echo "error: $f says $v, releasing $VERSION" >&2
+		exit 1
+	}
+done
+
 # A docker-container builder is required for multi-platform + push.
 docker buildx inspect moovelo-release >/dev/null 2>&1 ||
 	docker buildx create --name moovelo-release --driver docker-container
