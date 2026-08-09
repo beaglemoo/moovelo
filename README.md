@@ -61,6 +61,13 @@ with turn-by-turn cues.
 - "Send to Wahoo": push routes to your Wahoo account over the Cloud API;
   they appear on the ELEMNT after its next WiFi sync. Queued in the
   background with per-route status; re-pushing updates the same course.
+- Optional AI route assistant, off unless you configure an endpoint: ask
+  for a route in the planner ("a 40 km gravel loop from here, with water
+  on it") and watch the answer stream back as it works. It calls the same
+  routing, search and loop primitives the rest of the app uses - it never
+  invents coordinates or distances - and whatever it produces lands as
+  ordinary waypoints you can drag. Points at any OpenAI-compatible
+  endpoint, including a local Ollama.
 - Public read-only share links per route - send a route to someone
   without an account. When the route assistant is configured, the share
   page also carries a short natural-language summary of the route,
