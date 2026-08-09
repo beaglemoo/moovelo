@@ -162,6 +162,14 @@ exceptions, and both are opt-in:
   press "Show wind" - it never fetches automatically. Your route's sample
   coordinates and a start time are sent to whatever forecast service you
   configured.
+- **The route assistant** - only if an endpoint and model are configured,
+  from `/admin` or the `LLM_*` variables. Whatever you type, plus place
+  names and route figures the assistant looks up for you, is sent to that
+  endpoint. Point it at Ollama or LM Studio on your own hardware and this
+  stops being an exception at all - it is the configuration the project
+  recommends. Note that the admin page's model browser and its **Test**
+  button also call the configured endpoint, so a hosted gateway sees
+  those even before anyone opens the planner.
 
 Worth being precise about one more thing: the **map basemap tiles**
 (CyclOSM/OSM raster tiles under your route) are, by default, fetched from

@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 
-from app.config import settings
+from app.services.llm_config import LLMConfig, config_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +50,18 @@ class LLMResponse:
     # next request. Reasoning models attach extra fields here and replaying
     # them unchanged is what the endpoints expect.
     message: dict[str, Any] = field(default_factory=dict)
+    # Gateway-reported usage and the provider that actually served the call.
+    # Both are optional extras rather than part of the OpenAI shape, so they
+    # are absent against a plain local endpoint.
+    raw_usage: dict[str, Any] = field(default_factory=dict)
+    provider: str | None = None
 
 
-def _parse_message(message: dict[str, Any]) -> LLMResponse:
+def _parse_message(
+    message: dict[str, Any],
+    usage: dict[str, Any] | None = None,
+    provider: str | None = None,
+) -> LLMResponse:
     raw_calls = message.get("tool_calls") or []
     calls: list[ToolCall] = []
     for raw in raw_calls:
@@ -78,6 +87,8 @@ def _parse_message(message: dict[str, Any]) -> LLMResponse:
         content=content if isinstance(content, str) else "",
         tool_calls=calls,
         message=message,
+        raw_usage=usage or {},
+        provider=provider,
     )
 
 
@@ -89,7 +100,14 @@ class LLMClient:
     not, given the assistant is off by default.
     """
 
-    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        config: LLMConfig | None = None,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        # Falling back to the environment keeps the client usable outside a
+        # request, where there is no database session to resolve against.
+        self.config = config if config is not None else config_from_env()
         self._client = client
         self._owns_client = client is None
 
@@ -109,24 +127,37 @@ class LLMClient:
         tools: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "model": settings.llm_model,
+            "model": self.config.model,
             "messages": messages,
             "temperature": 0,
         }
         if tools:
             payload["tools"] = tools
-        providers = settings.llm_providers
-        if providers:
+        provider: dict[str, Any] = {}
+        if self.config.providers:
             # A preference, never a constraint. allow_fallbacks stays true:
             # a strictly pinned provider that rejects a mid-conversation tool
             # replay fails the whole turn rather than routing around it.
-            payload["provider"] = {"order": providers, "allow_fallbacks": True}
+            provider["order"] = self.config.providers
+            provider["allow_fallbacks"] = True
+        if self.config.provider_sort and self.config.provider_sort != "balanced":
+            # "balanced" is the gateway's own default, expressed by sending
+            # nothing. Sending an explicit mode measured materially cheaper
+            # than letting it choose.
+            provider["sort"] = self.config.provider_sort
+        if self.config.max_prompt_price is not None:
+            # A hard ceiling in dollars per million prompt tokens. The same
+            # model can be served an order of magnitude apart in price, and
+            # this is the only setting that actually caps what a call costs.
+            provider["max_price"] = {"prompt": self.config.max_prompt_price}
+        if provider:
+            payload["provider"] = provider
         return payload
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        if settings.llm_api_key:
-            headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+        if self.config.api_key:
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
         return headers
 
     async def complete(
@@ -138,7 +169,7 @@ class LLMClient:
         """One completion, retrying only 429/5xx."""
         if self._client is None:
             raise LLMError("LLM client used outside its context manager")
-        url = settings.llm_base_url.rstrip("/") + "/chat/completions"
+        url = self.config.base_url.rstrip("/") + "/chat/completions"
         payload = self._payload(messages, tools)
         headers = self._headers()
 
@@ -186,7 +217,13 @@ class LLMClient:
             message = choices[0].get("message") if isinstance(choices[0], dict) else None
             if not isinstance(message, dict):
                 raise LLMError("The assistant service returned no reply")
-            return _parse_message(message)
+            usage = body.get("usage")
+            provider = body.get("provider")
+            return _parse_message(
+                message,
+                usage if isinstance(usage, dict) else None,
+                provider if isinstance(provider, str) else None,
+            )
 
         raise LLMError("The assistant service is rate-limiting or unavailable - try again later")
 
