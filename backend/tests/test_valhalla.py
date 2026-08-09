@@ -155,6 +155,55 @@ async def test_route_valhalla_error_maps_to_422() -> None:
     assert "No path" in exc.value.detail
 
 
+def make_avoid_request() -> RouteRequest:
+    request = make_request()
+    request.exclude_locations = [Waypoint(lat=53.7996, lon=-1.5491)]
+    return request
+
+
+# The coverage hint is the wrong advice when the rider set an avoid: both
+# route() and route_alternates() must say so, since the alternates panel
+# accepts avoids too and a rider hitting this there would otherwise be sent
+# to investigate their map extract instead of removing the avoid.
+@respx.mock
+async def test_route_with_avoids_reports_the_avoid_not_the_map_extract() -> None:
+    respx.post(f"{BASE}/route").respond(
+        status_code=400, json={"error": "No suitable edges near location"}
+    )
+    client = ValhallaClient(base_url=BASE)
+    with pytest.raises(HTTPException) as exc:
+        await client.route(make_avoid_request())
+    assert exc.value.status_code == 422
+    assert "avoided roads" in exc.value.detail
+    assert "map extract" not in exc.value.detail
+
+
+@respx.mock
+async def test_route_alternates_with_avoids_reports_the_avoid_too() -> None:
+    respx.post(f"{BASE}/route").respond(
+        status_code=400, json={"error": "No suitable edges near location"}
+    )
+    client = ValhallaClient(base_url=BASE)
+    with pytest.raises(HTTPException) as exc:
+        await client.route_alternates(make_avoid_request(), 2)
+    assert exc.value.status_code == 422
+    assert "avoided roads" in exc.value.detail
+    assert "map extract" not in exc.value.detail
+
+
+# Without avoids the hint is the useful one, on both paths.
+@respx.mock
+async def test_route_alternates_without_avoids_keeps_the_coverage_hint() -> None:
+    respx.post(f"{BASE}/route").respond(
+        status_code=400, json={"error": "No path could be found for input"}
+    )
+    client = ValhallaClient(base_url=BASE)
+    with pytest.raises(HTTPException) as exc:
+        await client.route_alternates(make_request(), 2)
+    assert exc.value.status_code == 422
+    assert "map extract" in exc.value.detail
+
+
 @respx.mock
 async def test_route_unreachable_maps_to_503() -> None:
     respx.post(f"{BASE}/route").mock(side_effect=httpx.ConnectError("refused"))
