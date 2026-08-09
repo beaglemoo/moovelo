@@ -1,15 +1,21 @@
-"""The route assistant endpoint.
+"""The route assistant endpoints.
 
-Non-streaming in this PR; the streamed variant and the chat panel follow.
+Two transports over one loop: `/chat` answers with plain JSON once the turn
+is over, `/chat/stream` reports the same turn as it happens over SSE. The
+loop itself lives in services/assistant/turn.py and knows about neither.
 
 Nothing here writes to the database. The assistant proposes, and whatever
 it produces comes back as ordinary waypoints plus a route the planner can
 adopt or discard - never a saved route and never a black box.
 """
 
+import json
+import logging
+from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
@@ -19,11 +25,21 @@ from app.schemas import BicycleCostingOptions, Preset, RouteResponse, Waypoint
 from app.services.assistant.naming import suggest_name as generate_name
 from app.services.assistant.refs import MAX_KNOWN_HANDLES, Handle, HandleTable
 from app.services.assistant.tools import ToolContext
-from app.services.assistant.turn import run_turn
+from app.services.assistant.turn import (
+    AssistantTurn,
+    Delta,
+    Finished,
+    ToolFinished,
+    ToolStarted,
+    run_turn,
+    run_turn_events,
+)
 from app.services.llm import LLMClient, LLMError
-from app.services.llm_config import resolve_llm_config
+from app.services.llm_config import LLMConfig, resolve_llm_config
 from app.services.places import reverse_geocode
 from app.services.valhalla import ValhallaClient
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/assistant")
 
@@ -90,13 +106,16 @@ class AssistantChatResponse(BaseModel):
     error: str | None = None
 
 
-@router.post("/chat")
-async def chat(
+async def _prepare(
     body: AssistantChatRequest,
     request: Request,
     db: DbDep,
-    _user: UserDep,
-) -> AssistantChatResponse:
+) -> tuple[LLMConfig, ToolContext, list[dict[str, Any]]]:
+    """Everything both chat transports need before the loop starts.
+
+    Shared so the streamed and non-streamed endpoints cannot drift on which
+    handles they adopt or what the tools are allowed to see.
+    """
     config = await resolve_llm_config(db)
     if not config.enabled:
         # 404 rather than 503, matching the weather and Wahoo gates: the
@@ -131,34 +150,139 @@ async def chat(
     )
 
     history: list[dict[str, Any]] = [{"role": m.role, "content": m.content} for m in body.messages]
+    return config, ctx, history
+
+
+def _proposal_of(turn: AssistantTurn) -> ProposalResponse | None:
+    if turn.proposal is None:
+        return None
+    return ProposalResponse(
+        waypoints=turn.proposal.waypoints,
+        preset=turn.proposal.preset,
+        snapshot=turn.proposal.route,
+    )
+
+
+def _handles_of(turn: AssistantTurn) -> list[HandleResponse]:
+    return [
+        HandleResponse(
+            ref=h.ref,
+            kind=h.kind,
+            name=h.name,
+            lat=h.lat,
+            lon=h.lon,
+            waypoints=list(h.waypoints) if h.waypoints else None,
+        )
+        for h in turn.handles
+    ]
+
+
+@router.post("/chat")
+async def chat(
+    body: AssistantChatRequest,
+    request: Request,
+    db: DbDep,
+    _user: UserDep,
+) -> AssistantChatResponse:
+    config, ctx, history = await _prepare(body, request, db)
     async with LLMClient(config) as llm:
         turn = await run_turn(llm, history, ctx)
 
     return AssistantChatResponse(
         content=turn.content,
-        proposal=(
-            ProposalResponse(
-                waypoints=turn.proposal.waypoints,
-                preset=turn.proposal.preset,
-                snapshot=turn.proposal.route,
-            )
-            if turn.proposal
-            else None
-        ),
-        handles=[
-            HandleResponse(
-                ref=h.ref,
-                kind=h.kind,
-                name=h.name,
-                lat=h.lat,
-                lon=h.lon,
-                waypoints=list(h.waypoints) if h.waypoints else None,
-            )
-            for h in turn.handles
-        ],
+        proposal=_proposal_of(turn),
+        handles=_handles_of(turn),
         tools_called=turn.tools_called,
         stopped_early=turn.stopped_early,
         error=turn.error,
+    )
+
+
+def _frame(event: str, data: dict[str, Any]) -> str:
+    """One SSE frame. Blank line terminates it; json.dumps keeps newlines in
+    model text from splitting one frame into two."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    body: AssistantChatRequest,
+    request: Request,
+    db: DbDep,
+    _user: UserDep,
+) -> StreamingResponse:
+    """The same turn as /chat, reported as it happens.
+
+    Auth and configuration are resolved before the response starts, so an
+    unauthenticated or unconfigured caller gets an ordinary 401/404 with a
+    JSON body rather than a 200 whose first frame is an apology. Only a
+    failure *after* the first byte has to be expressed in-band, as an `error`
+    frame.
+
+    Frames: `token` (prose, incremental), `tool_call` and `tool_result`
+    (progress, and the reason a step failed), `handles` (refs with their
+    coordinates - server to frontend only, never back into model context),
+    `proposal`, `error`, and exactly one `done` on every path, so the client
+    has one unambiguous stop signal.
+
+    The request-scoped session is used throughout the stream. FastAPI exits
+    `yield` dependencies only once the body is exhausted - measured on the
+    version in use, not assumed - and an AsyncSession would survive an early
+    exit anyway, since closing one only returns its connection to the pool.
+    """
+    config, ctx, history = await _prepare(body, request, db)
+
+    async def frames() -> AsyncIterator[str]:
+        done_sent = False
+        try:
+            async with LLMClient(config) as llm:
+                async for event in run_turn_events(llm, history, ctx, stream_text=True):
+                    if isinstance(event, Delta):
+                        yield _frame("token", {"text": event.text})
+                    elif isinstance(event, ToolStarted):
+                        yield _frame("tool_call", {"name": event.name})
+                    elif isinstance(event, ToolFinished):
+                        yield _frame("tool_result", {"name": event.name, "error": event.error})
+                    elif isinstance(event, Finished):
+                        turn = event.turn
+                        handles = _handles_of(turn)
+                        if handles:
+                            yield _frame(
+                                "handles",
+                                {"handles": [h.model_dump() for h in handles]},
+                            )
+                        proposal = _proposal_of(turn)
+                        if proposal is not None:
+                            yield _frame("proposal", proposal.model_dump(mode="json"))
+                        if turn.error:
+                            yield _frame("error", {"message": turn.error})
+                        done_sent = True
+                        yield _frame(
+                            "done",
+                            {
+                                "stopped_early": turn.stopped_early,
+                                "tools_called": turn.tools_called,
+                            },
+                        )
+        except Exception:
+            # The status line went out long ago, so a traceback here would
+            # reach the rider as a silently truncated stream. Log it properly
+            # and close the stream the same way every other path closes it.
+            logger.exception("Assistant stream failed")
+            if not done_sent:
+                yield _frame("error", {"message": "The assistant failed unexpectedly"})
+                yield _frame("done", {"stopped_early": "error", "tools_called": []})
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # Belt and braces for proxies that buffer by default. The
+            # documented Caddy deployment does not, but a self-hoster's nginx
+            # would turn this feature into a long pause and one big dump.
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
