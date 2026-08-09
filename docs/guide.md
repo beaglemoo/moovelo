@@ -374,5 +374,43 @@ a `/admin` page listing:
   and a **Delete** button (removes the user and all their routes; admins
   can't be deleted from here).
 
-It's read-only otherwise - configuration changes are still made through
-environment variables and a restart, not from the page.
+Everything above is read-only - that configuration is still set through
+environment variables and a restart. The one exception is the route
+assistant, below.
+
+### Configuring the route assistant
+
+The assistant is optional and off until you point it at a model. You can
+set it entirely from the admin page, or with `LLM_BASE_URL`, `LLM_MODEL`
+and friends if you'd rather keep your install declarative. The page wins
+where both are set, field by field, so you can override just the model
+and leave the endpoint to the environment.
+
+What's on the page:
+
+- **Endpoint** - OpenRouter, or any OpenAI-compatible URL. Point it at
+  Ollama or LM Studio on your own machine and nothing leaves your
+  network.
+- **API key** - optional; a local endpoint usually needs none. Once
+  saved it's never shown again, only reported as stored, and it's kept
+  in the database in plain text.
+- **Model** - **must support tool calling.** A model that can't call
+  tools will chat happily and never plan a route, so **Browse** lists
+  only capable models, with prices.
+- **Routing** (OpenRouter only) - which provider serves your request.
+  This is worth setting: the same model can be served by providers an
+  order of magnitude apart in price, and letting the gateway pick
+  measured over twice the cost of asking for the cheapest.
+- **Maximum input price** - a hard ceiling in dollars per million
+  tokens. The only setting that actually bounds what a request can cost.
+- **Preferred providers** - a preference, not a restriction. The gateway
+  still falls back elsewhere rather than failing a reply, which is
+  deliberate: some providers reject tool calls partway through a
+  conversation, and a strict pin turns that into a failed answer instead
+  of a slower one.
+
+**Test** runs one real completion and tells you three things: that the
+endpoint answers, how long it took, and whether the model actually
+called a tool. That last one is the useful part - a model that answers
+in prose looks perfectly healthy and is useless for planning, so the
+test reports it as a failure.
