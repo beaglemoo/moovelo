@@ -74,6 +74,10 @@
 		{/if}
 	</header>
 
+	{#if route?.summary}
+		<p class="summary">{route.summary}</p>
+	{/if}
+
 	{#if error}
 		<p class="error">{error}</p>
 	{:else}
@@ -146,6 +150,15 @@
 		font-size: 0.85rem;
 		text-decoration: none;
 		white-space: nowrap;
+	}
+	.summary {
+		flex-shrink: 0;
+		margin: 0;
+		padding: 0.55rem 0.9rem;
+		background: #002b36;
+		color: #eee8d5;
+		font-size: 0.9rem;
+		line-height: 1.4;
 	}
 	.map {
 		position: relative;

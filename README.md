@@ -62,7 +62,9 @@ with turn-by-turn cues.
   they appear on the ELEMNT after its next WiFi sync. Queued in the
   background with per-route status; re-pushing updates the same course.
 - Public read-only share links per route - send a route to someone
-  without an account.
+  without an account. When the route assistant is configured, the share
+  page also carries a short natural-language summary of the route,
+  generated once when the link is created.
 - Simple auth: email + password, first user becomes admin, signups gated
   by a flag. Optional OIDC single sign-on (Pocket ID, Authelia, Keycloak,
   ...), including an SSO-only mode, plus a minimal /admin page.

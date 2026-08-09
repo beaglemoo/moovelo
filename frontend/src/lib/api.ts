@@ -254,6 +254,10 @@ export interface SharedRoute extends RouteResponse {
 	name: string;
 	preset: Preset;
 	updated_at: string;
+	// Stored text, present only when it still describes the route's current
+	// geometry. Absent whenever the assistant was not configured at share
+	// time, or the route has been re-routed since.
+	summary: string | null;
 }
 
 export class ApiError extends Error {

@@ -37,8 +37,10 @@ from app.services.geo import concat_shapes
 from app.services.gpx import build_gpx
 from app.services.import_routes import import_route, match_or_keep
 from app.services.importer import MAX_FILE_BYTES, RouteImportError
+from app.services.llm_config import resolve_llm_config
 from app.services.polyline import decode_polyline6
 from app.services.ride_time import compute_ride_time
+from app.services.route_summary import generate_summary, route_geometry_signature
 from app.services.valhalla import ValhallaClient, ascent_descent
 
 router = APIRouter(prefix="/api/routes")
@@ -502,9 +504,23 @@ async def export_fit(route_id: uuid.UUID, db: DbDep, user: UserDep) -> Response:
 
 @router.post("/{route_id}/share")
 async def share_route(route_id: uuid.UUID, db: DbDep, user: UserDep) -> SavedRoute:
-    """Create (or rotate) the public share token for a route."""
+    """Create (or rotate) the public share token for a route.
+
+    This is the only place a summary is ever generated: an authenticated,
+    owner-triggered write. The public read path (get_shared, below) only
+    ever serves what was stored here - it must never itself call the LLM.
+    """
     route = await get_owned_route(db, user, route_id)
     route.share_token = secrets.token_urlsafe(16)
+    current_signature = route_geometry_signature(route)
+    # An unchanged route being re-shared (e.g. rotating the link without
+    # editing anything) already has a summary that matches its geometry -
+    # skip the call rather than spending on a summary that would read
+    # identically to the one already stored.
+    if route.summary_signature != current_signature:
+        config = await resolve_llm_config(db)
+        route.summary = await generate_summary(route, config)
+        route.summary_signature = current_signature if route.summary else None
     await db.commit()
     await db.refresh(route)
     return await _saved(route, db, user.id)
@@ -533,10 +549,18 @@ async def _shared_route(db: DbDep, token: str) -> Route:
 
 @shared_router.get("/{token}")
 async def get_shared(token: str, db: DbDep) -> SharedRoute:
+    """No LLM call happens anywhere on this path - this is a plain read of
+    whatever share_route already stored. `summary` is only ever included
+    when its stored signature still matches the route's current geometry;
+    a route re-routed since it was last shared has a summary that no
+    longer describes it, and that must be suppressed rather than shown."""
     route = await _shared_route(db, token)
     # An anonymous viewer has no rider settings of their own, and it would
     # not be the owner's business anyway: always the ride-time defaults.
     ride_time = await _ride_time_for(route, db, None)
+    summary = None
+    if route.summary and route.summary_signature == route_geometry_signature(route):
+        summary = route.summary
     return SharedRoute(
         name=route.name,
         preset=route.preset,
@@ -550,6 +574,7 @@ async def get_shared(token: str, db: DbDep) -> SharedRoute:
         climbs=route.climbs,
         ride_time=ride_time,
         updated_at=route.updated_at,
+        summary=summary,
     )
 
 
