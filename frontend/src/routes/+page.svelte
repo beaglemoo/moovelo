@@ -98,11 +98,6 @@
 		pendingRoute = null;
 		return routeToken;
 	}
-	// Bumped at every site that sets `dirty = true`. A save that started
-	// before a later edit landed must not clear `dirty` for that later edit -
-	// it captures this before its own await chain and only clears dirty if
-	// nothing has bumped it since.
-	let editGeneration = 0;
 	let saveDialogOpen = $state(false);
 	let saveNameInput = $state('');
 	let saving = $state(false);
@@ -200,7 +195,10 @@
 	let wahooGeneration = 0;
 
 	async function sendToWahoo() {
-		if (!savedId) return;
+		// Same rule as export, and the same backstop-behind-a-disabled-button
+		// pattern: the push sends whatever is STORED, so doing it with unsaved
+		// edits on screen puts the previous version on the head unit.
+		if (!savedId || dirty) return;
 		const generation = wahooGeneration;
 		wahooPush = 'working';
 		wahooPushError = null;
@@ -337,6 +335,7 @@
 				routeStale = false;
 				savedId = saved.id;
 				savedName = saved.name;
+				savedSignature = savedStateSignature();
 				dirty = false;
 				fitTrigger += 1;
 				// A freshly loaded route must not let undo reach back into
@@ -618,9 +617,27 @@
 	// marks the planner dirty - not just the successful one. An edit that
 	// routed badly, or that dropped below two waypoints, still means what is
 	// stored no longer matches what is on screen.
+	// What a save actually persists: the waypoints, the costing they were
+	// planned with, and the geometry that came back. Two states with the same
+	// signature are the same stored route.
+	function savedStateSignature(): string {
+		return JSON.stringify({
+			waypoints,
+			preset: storedPreset,
+			costingOptions: customCostingOptions,
+			geometry: route ? route.legs.map((leg) => leg.geometry) : null
+		});
+	}
+
+	// The signature of what is in the library row, or null when nothing is
+	// saved. Compared rather than trusted: `dirty` used to be a flag that no
+	// path could clear, so undoing all the way back to the saved state still
+	// counted as edited and left export and the Wahoo push disabled until the
+	// rider saved again or reloaded.
+	let savedSignature: string | null = null;
+
 	function markEdited() {
-		dirty = true;
-		editGeneration += 1;
+		dirty = savedId === null || savedSignature === null || savedStateSignature() !== savedSignature;
 	}
 
 	async function reroute() {
@@ -809,6 +826,7 @@
 		error = null;
 		savedId = null;
 		savedName = null;
+		savedSignature = null;
 		dirty = false;
 		hideIsochrone();
 		dismissLoop();
@@ -995,7 +1013,7 @@
 		history.push(currentSnapshot());
 		// Valhalla already ran for this candidate - reroute() would replan it
 		// from scratch for no reason, so the snapshot goes straight onto
-		// `route` instead, with the same dirty/editGeneration bump reroute()
+		// `route` instead, marking the planner edited exactly as reroute()
 		// itself does for every other edit.
 		waypoints = candidate.waypoints;
 		claimRoute();
@@ -1074,7 +1092,6 @@
 			// left dirty stuck true, blocking export and Wahoo push after a
 			// save that persisted exactly what was on screen. Only an edit
 			// landing during the HTTP round trip below is still unsaved.
-			const gen = editGeneration;
 			const snapshot = route;
 			if (!snapshot) return;
 			// Re-checked here, not only at entry: the wait above chases the
@@ -1086,13 +1103,20 @@
 			// persisted a row whose stored track belonged to different
 			// waypoints. Reproduced live: waypoints of 4 against 2 legs.
 			if (loading || routeStale || waypoints.length < 2) return;
+			const persisted = savedStateSignature();
 			await routes.update(savedId, {
 				waypoints,
 				preset: storedPreset,
 				costing_options: customCostingOptions,
 				snapshot
 			});
-			if (gen === editGeneration) dirty = false;
+			savedSignature = persisted;
+			// Compared, not assumed: an edit that landed during the round trip
+			// leaves the screen differing from what was just stored, and one
+			// that landed and was undone again does not. This replaces an
+			// edit-generation counter that could only ever answer "did
+			// anything happen", never "does it still differ".
+			dirty = savedStateSignature() !== savedSignature;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Save failed';
 		} finally {
@@ -1101,7 +1125,10 @@
 	}
 
 	// Exports come from the stored route, so unsaved edits would silently
-	// download the previous version.
+	// download the previous version. The Wahoo push is the same operation
+	// aimed at a head unit rather than a file, so it shares the gate: pushing
+	// while edits are on screen sends the rider out on the ride they can see
+	// they are not looking at.
 	const canExport = $derived(savedId !== null && !dirty);
 	const exportHint = $derived(
 		dirty ? 'Save your changes first - exports come from the saved route' : ''
@@ -1121,12 +1148,12 @@
 			await awaitSurfaceSettled();
 			// See save(): captured after the settle wait, beside the
 			// snapshot read - a mid-wait edit is in the snapshot and saved.
-			const gen = editGeneration;
 			const snapshot = route;
 			if (!snapshot) return;
 			// See save(): an edit made during the wait whose reroute has not
 			// landed leaves route and waypoints describing different rides.
 			if (loading || routeStale || waypoints.length < 2) return;
+			const persisted = savedStateSignature();
 			const saved = await routes.create({
 				name: saveNameInput.trim(),
 				waypoints,
@@ -1136,7 +1163,9 @@
 			});
 			savedId = saved.id;
 			savedName = saved.name;
-			if (gen === editGeneration) dirty = false;
+			savedSignature = persisted;
+			// See save(): compared rather than assumed.
+			dirty = savedStateSignature() !== savedSignature;
 			saveDialogOpen = false;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Save failed';
@@ -1318,8 +1347,12 @@
 					type="button"
 					class="wahoo"
 					onclick={sendToWahoo}
-					disabled={wahooPush === 'working'}
-					title={wahooPush === 'error' ? (wahooPushError ?? '') : 'Push to your Wahoo account'}
+					disabled={wahooPush === 'working' || !canExport}
+					title={wahooPush === 'error'
+						? (wahooPushError ?? '')
+						: dirty
+							? 'Save your changes first - the push comes from the saved route'
+							: 'Push to your Wahoo account'}
 				>
 					{wahooPush === 'working'
 						? 'Sending…'

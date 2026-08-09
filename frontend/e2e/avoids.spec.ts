@@ -83,14 +83,14 @@ test('avoid a road from the context menu, then remove it', async ({ page }) => {
 	}).toPass({ timeout: 30_000 });
 	await avoidItem.click();
 
-	// The chip row appears and the route recomputes (re-planned with the
-	// point excluded), turning "Saved" back into "Save changes".
+	// The chip row appears and the route recomputes with the point excluded.
+	// Deliberately no assertion on the Save button here: "unsaved changes"
+	// means the state differs from the stored route, and an avoid that the
+	// router can honour without moving the line leaves nothing to save. That
+	// distinction has its own spec in save-integrity.spec.ts.
 	const avoidedRoads = page.getByRole('group', { name: 'Avoided roads' });
 	await expect(avoidedRoads).toBeVisible();
 	await expect(avoidedRoads.getByText('Avoid 1')).toBeVisible();
-	await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toBeVisible({
-		timeout: 30_000
-	});
 
 	// Removing it via the chip's own button clears the row.
 	await page.getByRole('button', { name: 'Remove avoid 1' }).click();
