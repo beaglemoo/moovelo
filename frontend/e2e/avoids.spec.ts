@@ -213,3 +213,57 @@ test('adding an avoid drops alternates found before it', async ({ page }) => {
 		await expect(useAlt).toHaveCount(0);
 	}
 });
+
+test('undoing a preset change drops alternates costed under it', async ({ page }) => {
+	const email = `e2e-preset-undo-${Date.now()}@example.com`;
+	const status = await page.request.get('/api/auth/status').then((r) => r.json());
+	test.skip(
+		!(status.setup_required || (status.signups_enabled && status.password_login)),
+		'needs a fresh DB or SIGNUPS_ENABLED=true with password login'
+	);
+	expect(
+		(
+			await page.request.post('/api/auth/register', {
+				data: { email, password: 'e2e-preset-undo-1' }
+			})
+		).ok()
+	).toBeTruthy();
+
+	await page.goto('/');
+	const canvas = page.locator('.map canvas').first();
+	await expect(canvas).toBeVisible();
+	await page.waitForTimeout(2500);
+
+	await expect(async () => {
+		const b = (await canvas.boundingBox())!;
+		await page.mouse.click(b.x + b.width / 2 - 60, b.y + b.height / 2 - 40);
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(1, { timeout: 1_000 });
+	}).toPass({ timeout: 30_000 });
+	const box = (await canvas.boundingBox())!;
+	await page.mouse.click(box.x + box.width / 2 + 40, box.y + box.height / 2 + 30);
+	await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+	await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled({
+		timeout: 30_000
+	});
+
+	// Switch preset, then fetch alternates costed under the new one.
+	await page.getByRole('radio', { name: /Gravel/i }).click();
+	await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled({
+		timeout: 30_000
+	});
+	const altBtn = page.getByRole('button', { name: 'Alternatives', exact: true });
+	await expect(altBtn).toBeEnabled({ timeout: 30_000 });
+	await altBtn.click();
+	const panel = page.getByRole('dialog', { name: 'Alternative routes' });
+	const useAlt = panel.getByRole('button', { name: 'Use', exact: true });
+	await expect(useAlt.first()).toBeVisible({ timeout: 60_000 });
+
+	// Undo reverts the preset without touching the waypoints. The candidates
+	// were drawn for gravel, so adopting one now would store gravel geometry
+	// under a road label.
+	await page.getByRole('button', { name: 'Undo', exact: true }).click();
+	await expect(page.getByRole('radio', { name: /Road/i })).toHaveAttribute('aria-checked', 'true', {
+		timeout: 30_000
+	});
+	await expect(useAlt).toHaveCount(0);
+});

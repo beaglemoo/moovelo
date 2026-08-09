@@ -159,7 +159,7 @@
 	// snapshot - see the invalidation effect below. A candidate found before
 	// an avoid existed routes straight through it, and "Use this loop" adopts
 	// it verbatim.
-	let loopFetchedFor: { avoids: Waypoint[] } | null = null;
+	let loopFetchedFor: RoutingInputs | null = null;
 	let hoveredLoopIndex: number | null = $state(null);
 
 	// Route alternates ("Alternatives" button). Valhalla's `alternates` only
@@ -179,7 +179,7 @@
 	// guard. Avoids belong here as much as waypoints do: they travel in the
 	// alternates request, so a candidate fetched before an avoid existed
 	// routes straight through it.
-	let alternatesFetchedFor: { waypoints: Waypoint[]; avoids: Waypoint[] } | null = null;
+	let alternatesFetchedFor: RoutingInputs | null = null;
 	// Points to route around ("not that road"), from the map's context menu.
 	// Session-only planner memory - never persisted with a saved route, since
 	// the saved geometry already reflects whatever avoids shaped it.
@@ -857,7 +857,7 @@
 			);
 			if (controller.signal.aborted) return;
 			loopCandidates = result.candidates;
-			loopFetchedFor = { avoids: avoids.map((wp) => ({ ...wp })) };
+			loopFetchedFor = currentRoutingInputs();
 		} catch (err) {
 			if (controller.signal.aborted) return;
 			loopError = err instanceof Error ? err.message : 'Loop search failed';
@@ -873,11 +873,18 @@
 	// Both results panels hold routes fetched under the inputs of the moment,
 	// and both are adopted verbatim when the rider picks one - so both have to
 	// be dropped the moment those inputs move on. They are checked together
-	// here rather than one each: invalidating alternates on an avoid change
-	// while leaving the loop panel alone is precisely the bug this pass found,
-	// and one effect covering both is what stops the two drifting apart again.
-	// Guarded against the plain (non-$state) fetched-for snapshots so this
-	// never fires on the search populating its own results.
+	// here rather than one each: invalidating one panel while leaving the other
+	// alone is a bug this subsystem has now produced twice.
+	//
+	// The comparison covers EVERY routing input, not just the ones a given
+	// call site happens to change. Tracking waypoints and avoids alone missed
+	// undo/redo: applySnapshot restores `preset` and `customCostingOptions`
+	// directly, so time-travelling across a preset change with identical
+	// waypoints left a panel open whose candidates were costed under the
+	// preset being undone - and adopting one saved a library row declaring
+	// "road" over geometry Valhalla drew for gravel. changePreset() and
+	// changeCustomCosting() still dismiss eagerly for immediate feedback;
+	// this is the backstop that covers every path that does not.
 	$effect(() => {
 		// Copied, not just referenced: `waypoints` and `avoids` are mutated in
 		// place (push/splice), so reading the binding alone subscribes to
@@ -887,21 +894,45 @@
 		// snapshot short-circuits past the read and the effect never wakes up
 		// again. Those snapshots are plain variables, so setting one cannot
 		// re-trigger this either.
-		const currentWaypoints = waypoints.map((wp) => wp);
-		const currentAvoids = avoids.map((wp) => wp);
-		if (
-			alternatesFetchedFor &&
-			(!sameWaypoints(currentWaypoints, alternatesFetchedFor.waypoints) ||
-				!sameWaypoints(currentAvoids, alternatesFetchedFor.avoids))
-		) {
+		const current = currentRoutingInputs();
+		if (alternatesFetchedFor && !sameRoutingInputs(current, alternatesFetchedFor, true)) {
 			dismissAlternates();
 		}
 		// Loops are anchored to their own origin rather than the waypoints
-		// they will replace, so only the avoids matter here.
-		if (loopFetchedFor && !sameWaypoints(currentAvoids, loopFetchedFor.avoids)) {
+		// they will replace, so the waypoints are excluded for them - every
+		// other input still applies.
+		if (loopFetchedFor && !sameRoutingInputs(current, loopFetchedFor, false)) {
 			dismissLoop();
 		}
 	});
+
+	/** Everything that changes what a route request would come back with. */
+	interface RoutingInputs {
+		waypoints: Waypoint[];
+		avoids: Waypoint[];
+		preset: Preset;
+		costingOptions: BicycleCostingOptions | null;
+	}
+
+	function currentRoutingInputs(): RoutingInputs {
+		return {
+			waypoints: waypoints.map((wp) => ({ ...wp })),
+			avoids: avoids.map((wp) => ({ ...wp })),
+			preset,
+			costingOptions: customCostingOptions ? { ...customCostingOptions } : null
+		};
+	}
+
+	function sameRoutingInputs(
+		a: RoutingInputs,
+		b: RoutingInputs,
+		compareWaypoints: boolean
+	): boolean {
+		if (compareWaypoints && !sameWaypoints(a.waypoints, b.waypoints)) return false;
+		if (!sameWaypoints(a.avoids, b.avoids)) return false;
+		if (a.preset !== b.preset) return false;
+		return JSON.stringify(a.costingOptions) === JSON.stringify(b.costingOptions);
+	}
 
 	function dismissAlternates() {
 		alternatesOpen = false;
@@ -930,10 +961,7 @@
 				avoids.length ? avoids : null
 			);
 			alternates = result.alternates;
-			alternatesFetchedFor = {
-				waypoints: waypoints.map((wp) => ({ ...wp })),
-				avoids: avoids.map((wp) => ({ ...wp }))
-			};
+			alternatesFetchedFor = currentRoutingInputs();
 		} catch (err) {
 			alternatesError = err instanceof Error ? err.message : 'Alternate route search failed';
 		} finally {
