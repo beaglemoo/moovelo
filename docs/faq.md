@@ -179,6 +179,38 @@ traffic revealing roughly where you're looking. Run your own tile server
 and set `TILE_URL_CYCLOSM` if you want the map itself to stay fully
 internal too (see [docs/self-hosted-tiles.md](self-hosted-tiles.md)).
 
+## Which model should I use for the assistant?
+
+Anything that speaks the OpenAI chat-completions shape **and supports
+tool calling**. That second part is not optional: the assistant works
+entirely by calling tools, so a model without tool support produces a
+chatty, useless panel rather than an error. The model browser on
+**/admin** filters to tool-capable models by default, and the **Test**
+button makes one real call and tells you whether a tool came back.
+
+Correctness matters less than you would expect - several cheap models
+sequence the tools correctly and none of them can invent a coordinate,
+because the schemas will not carry one. What you actually feel is
+**latency**, and the biggest lever on it is not the model at all:
+
+- A full question that needs five tool calls lands somewhere around
+  13-30 seconds whatever you pick, because each round trip carries a
+  conversation that keeps growing. A model that answers a bare question
+  in one second does not answer *this* in one second.
+- On a gateway that routes between providers (OpenRouter and similar),
+  which provider serves you can matter more than which model you chose -
+  the same model measured about six times slower on one provider than
+  another. `LLM_PROVIDER_ORDER` expresses a preference, and the admin
+  page lists per-provider price and context.
+- That preference is deliberately never a hard pin. Constraining a
+  gateway to exactly one provider turns that provider's bad day into a
+  failed turn, and one provider was measured rejecting a multi-step tool
+  conversation partway through while handling single calls fine.
+
+If you are self-hosting the model, start by checking tool calling works
+at all - some local chat templates emit tool-call-shaped JSON as
+ordinary text, which this does not try to parse.
+
 ## Can I use it without a Wahoo?
 
 Yes. Wahoo integration is entirely optional - leave `WAHOO_CLIENT_ID`/`WAHOO_CLIENT_SECRET`

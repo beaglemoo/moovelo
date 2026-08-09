@@ -436,6 +436,81 @@ entirely, since the stored signature already matches. No assistant
 configured (see `services/llm_config.py`) or the call failing both
 degrade to no summary; sharing itself never fails because of this.
 
+## Route assistant
+
+Off unless configured. `LLM_BASE_URL` and `LLM_MODEL` (plus
+`LLM_API_KEY` where the endpoint wants one) enable it, from the
+environment or from `/admin`, which stores the same settings in a
+single-row `llm_settings` table and wins per field - so a declarative
+install never has to open the UI, and an operator changing model or
+provider never has to redeploy. `services/llm_config.py` resolves the
+two into one `LLMConfig`; `assistant_enabled` on `GET /api/config` is
+what the frontend gates the panel on.
+
+`services/llm.py` is a raw httpx client against
+`POST {base_url}/chat/completions` - no SDK, because the whole surface
+needed is one endpoint and the same shape works against OpenRouter,
+Ollama, LM Studio or anything else speaking it. Retries follow the house
+policy in `services/weather.py` and `services/wahoo.py`: 429 and 5xx
+only, `Retry-After` honoured when numeric.
+
+### The model never emits coordinates
+
+This is the design's load-bearing property, and it is structural rather
+than a matter of asking nicely. Tools return opaque handles -
+`place:1`, `poi:2`, `loop:1` - and every tool that places a point
+accepts only a string matching
+`^(place|poi|current|centre|loop):[A-Za-z0-9_-]+$`, validated by pydantic
+before any handler runs. A model that emits `51.7,-0.7` gets a
+validation error back as a tool result, exactly like any other bad
+argument, and corrects itself. `services/assistant/refs.py` holds the
+per-request `HandleTable` that resolves handles to real coordinates;
+what is on the rider's screen is seeded into it as `current:N` and
+`centre:map`, so "from here" works without the model ever seeing a
+number.
+
+The constraint has to be on the *item* type. `Field(pattern=...)` on a
+`list[str]` silently omits the pattern from the generated JSON schema
+and raises `TypeError` at validation time, so it is
+`Annotated[str, StringConstraints(pattern=...)]`, and a test asserts on
+the schema the model actually receives rather than on the Python model.
+
+Conversation state lives on the client, which echoes back the handles it
+was given; the server keeps no session and adds no table. Those
+coordinates come from the client, never from the model, so accepting
+them adds nothing a rider could not already POST to `/api/route`.
+
+### Tools and budgets
+
+Six tools, each calling the service layer directly rather than making
+HTTP calls back into the app: `search_place`, `find_pois`, `plan_route`,
+`generate_loop`, `route_stats` and `modify_route`. Every one is a
+primitive phases 5-8 already built - Valhalla still routes, PostGIS
+still searches, and the model only chooses what to call and in what
+order.
+
+`services/assistant/turn.py` runs the loop, bounded by
+`MAX_COMPLETION_CALLS = 9` and `WALL_CLOCK_S = 120`. Malformed
+arguments, unknown tool names and handler `HTTPException`s all become a
+tool-result message describing the error, so the model can correct
+itself rather than the turn failing over something recoverable; each
+consumes budget, so a broken model does not retry for free. If the same
+tool fails the same way twice the turn stops without another completion,
+because a weak model repeats a bad call verbatim rather than fixing it.
+Budget exhaustion writes its own closing message and never spends
+another completion on one.
+
+### Prompt injection
+
+Place and POI names come from OpenStreetMap and are written by the
+public, so they are treated as untrusted data throughout: raw OSM `tags`
+are never serialised into a tool result, model-facing strings are length
+capped, and results are JSON objects with fixed keys rather than prose.
+The system prompt says as much too, but the prompt is not the defence -
+the injection's *goal* (a coordinate waypoint, a state change) is
+unreachable through the tool schemas whether or not the model is fooled.
+Nothing in this phase writes to the database.
+
 ### Chat transport
 
 `POST /api/assistant/chat/stream` is the only streaming endpoint in the
@@ -864,8 +939,18 @@ frontend/src/
     ├── map/MapView.svelte       # MapLibre init, layers, interactions, basemap toggle
     └── components/
         ├── PresetSelector.svelte
+        ├── PresetSlidersPopover.svelte  # per-option costing sliders + saved presets
         ├── ElevationProfile.svelte   # custom SVG chart, no chart library
         ├── SurfaceBar.svelte         # paved/gravel/path stacked bar + cycleway %
+        ├── ClimbsList.svelte         # categorised climbs, hover-synced with the profile
+        ├── PlaceSearch.svelte        # keyboard-navigable search box
+        ├── PoiPanel.svelte           # category chips + results along the route
+        ├── WeatherPanel.svelte       # per-segment head/tailwind (env-gated)
+        ├── LoopPanel.svelte          # loop candidates + preview
+        ├── AlternatesPanel.svelte    # Valhalla alternates
+        ├── ImportResults.svelte      # per-file upload result rows
+        ├── LLMSettingsPanel.svelte   # /admin: endpoint, model browser, provider routing, test
+        ├── AssistantPanel.svelte     # chat log, tool status, stop, proposal card
         └── WaypointList.svelte       # route-order list: reorder (drag or up/down), remove, reverse-geocoded names
 ```
 
@@ -887,7 +972,8 @@ backend/app/
 ├── db.py                    # async engine + session factory
 ├── version.py               # APP_VERSION, read from pyproject.toml (never installed as a package)
 ├── models.py                # User, Session, Route, CustomPreset, WahooAccount,
-│                            #   Place, Poi, CycleWay, SearchIndexMeta
+│                            #   Place, Poi, CycleWay, SearchIndexMeta,
+│                            #   UserSettings, LLMSettings
 ├── schemas.py               # request/response models
 ├── api/
 │   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface,
@@ -897,6 +983,9 @@ backend/app/
 │   ├── routes.py            # route CRUD, GPX/FIT export, share links, ride-time wiring
 │   ├── custom_presets.py    # CRUD for saved costing-slider bundles
 │   ├── settings.py          # GET/PATCH /api/settings, get_or_default_settings
+│   ├── deps.py              # DbDep / UserDep - session and current-user dependencies
+│   ├── assistant.py         # /api/assistant: chat, chat/stream (SSE), suggest-name
+│   ├── llm_admin.py         # /api/admin/llm: settings, model + provider browser, test probe
 │   ├── wahoo.py             # connect/callback/status/push
 │   └── admin.py             # /api/admin (admin accounts only)
 ├── alembic/                 # migrations, run on startup
@@ -909,6 +998,17 @@ backend/app/
     ├── auth.py, oidc.py     # password hashing, sessions, OIDC client
     ├── gpx.py, fit.py       # exporters (FIT embeds maneuvers as course points)
     ├── importer.py          # GPX/TCX/FIT parsing for uploaded files
+    ├── import_routes.py     # map matching an imported track back onto the network
+    ├── places.py            # place search, reverse geocode, POIs along a route
+    ├── climbs.py            # profile segmentation + HC/1-4 categorisation
+    ├── geo.py               # shape concatenation and distance helpers
+    ├── weather.py           # Open-Meteo-compatible forecast client (env-gated)
+    ├── rate_limit.py        # in-process sliding window for the login endpoint
+    ├── route_summary.py     # the stored share-page summary
+    ├── llm.py               # OpenAI-compatible client: complete() and stream()
+    ├── llm_config.py        # DB-over-env resolution into one LLMConfig
+    ├── assistant/           # refs.py (handles), tools.py, turn.py (the loop),
+    │                        #   prompt.py, naming.py
     └── wahoo.py, wahoo_queue.py  # Wahoo client + background push worker
 ```
 
@@ -932,6 +1032,13 @@ about extract coverage when no roads are found near a waypoint.
 
 ## Design decisions
 
+- **The assistant is handed handles, never coordinates**: every tool that
+  places a point takes an opaque ref the server minted, validated against
+  a pattern before any handler runs. A model that invents a latitude gets
+  a validation error, not a waypoint. Prompts are the wrong place for a
+  guarantee - this one holds whether or not the model cooperates, and it
+  is what makes an OSM place name carrying an injection harmless: the
+  thing it would need to do is unreachable through the schemas.
 - **Valhalla behind the backend**: the routing engine is never exposed;
   one origin serves everything in prod, so no CORS in production and the
   Valhalla admin surface stays private.
