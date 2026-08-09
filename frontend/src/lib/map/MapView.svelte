@@ -76,6 +76,9 @@
 		 * drawn as ghost lines while its card is open. */
 		loopPreviews?: { index: number; coords: [number, number][] }[] | null;
 		hoveredLoopIndex?: number | null;
+		/** A route the assistant has offered but the rider has not accepted,
+		 * drawn as a ghost line while its card is open. Only ever one. */
+		proposalPreview?: [number, number][] | null;
 		/** Up to a few Valhalla `alternates`, drawn as ghost lines while the
 		 * Alternatives list is open. Unlike loopPreviews these are never
 		 * colour-coded per candidate (they are all one A-to-B pair) - hover
@@ -120,6 +123,7 @@
 		onLoop,
 		loopPreviews = null,
 		hoveredLoopIndex = null,
+		proposalPreview = null,
 		alternateLines = null,
 		hoveredAlternateIndex = null,
 		onAlternateClick,
@@ -288,6 +292,22 @@
 				properties: { candidate: preview.index, hovered: preview.index === hoveredIndex },
 				geometry: { type: 'LineString', coordinates: preview.coords }
 			}))
+		};
+	}
+
+	function proposalPreviewGeoJSON(coords: [number, number][] | null): FeatureCollection {
+		return {
+			type: 'FeatureCollection',
+			features:
+				coords && coords.length
+					? [
+							{
+								type: 'Feature',
+								properties: {},
+								geometry: { type: 'LineString', coordinates: coords }
+							}
+						]
+					: []
 		};
 	}
 
@@ -490,6 +510,26 @@
 					'line-width': ['case', ['get', 'hovered'], 5, 3],
 					'line-opacity': 0.65,
 					'line-dasharray': [2, 1.5]
+				}
+			});
+			// The assistant's proposed route, previewed until the rider accepts
+			// or discards it. Solid green rather than loop-preview's dashed
+			// palette: there is only ever one, and it is an offer to replace
+			// what is on screen rather than one of several candidates.
+			map.addSource('proposal-preview', {
+				type: 'geojson',
+				data: proposalPreviewGeoJSON(null)
+			});
+			map.addLayer({
+				id: 'proposal-preview-line',
+				type: 'line',
+				source: 'proposal-preview',
+				layout: { 'line-cap': 'round', 'line-join': 'round' },
+				paint: {
+					'line-color': '#859900',
+					'line-width': 4,
+					'line-opacity': 0.75,
+					'line-dasharray': [3, 1.5]
 				}
 			});
 			// Ghost lines for Valhalla's own route alternatives, shown while the
@@ -932,6 +972,11 @@
 		if (!map || !mapReady) return;
 		void hoveredLoopIndex;
 		setSourceData(map, 'loop-preview', loopPreviewGeoJSON(loopPreviews, hoveredLoopIndex));
+	});
+
+	$effect(() => {
+		if (!map || !mapReady) return;
+		setSourceData(map, 'proposal-preview', proposalPreviewGeoJSON(proposalPreview));
 	});
 
 	// Sync route alternates, for the same reason loop previews above do.
