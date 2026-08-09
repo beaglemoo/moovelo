@@ -480,19 +480,17 @@ export interface RouteSurfaceResult {
  * decorative, never blocking. */
 export async function routeSurface(
 	legs: [number, number][][],
-	preset: Preset,
 	elevation: ElevationPoint[] | null,
-	costingOptions: BicycleCostingOptions | null = null,
 	signal?: AbortSignal
 ): Promise<RouteSurfaceResult> {
 	const response = await fetch('/api/route/surface', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ legs, preset, costing_options: costingOptions, elevation }),
+		body: JSON.stringify({ legs, elevation }),
 		signal
 	});
 	if (!response.ok) return { surface: null, ride_time: [] };
-	return await response.json();
+	return response.json();
 }
 
 /** Wind sampled along a route line for a chosen start time. Only ever
@@ -656,6 +654,7 @@ export async function routeAlternates(
 	waypoints: [Waypoint, Waypoint],
 	preset: Preset,
 	costingOptions: BicycleCostingOptions | null = null,
+	excludeLocations: Waypoint[] | null = null,
 	count = 2,
 	signal?: AbortSignal
 ): Promise<AlternatesResult> {
@@ -665,6 +664,7 @@ export async function routeAlternates(
 			waypoints,
 			preset,
 			costing_options: costingOptions,
+			exclude_locations: excludeLocations,
 			count
 		}),
 		signal

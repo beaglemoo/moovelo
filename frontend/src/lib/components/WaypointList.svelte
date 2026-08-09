@@ -26,26 +26,29 @@
 	// repaints its row without a separate $state mirror.
 	const nameCache = new SvelteMap<string, string | null>();
 
-	// Bumped on every waypoints change. A fetch whose batch has since been
-	// superseded (a waypoint added, moved or removed while it was in flight)
-	// must not write into the cache - the same supersede rule the POI effect
-	// in +page.svelte enforces with an AbortController, but keyed by
-	// generation here because one batch fires several concurrent
-	// per-waypoint requests rather than a single cancellable one.
-	let generation = 0;
+	// No generation guard, deliberately: a result is keyed by its own
+	// coordinates, so it can never be stale for that key - a reorder just
+	// re-renders rows against the same cache. The earlier generation-counter
+	// version dropped any in-flight result the moment the array changed
+	// (even a reorder of identical points), while its already-written null
+	// placeholder blocked every retry - the row was stuck positional
+	// forever. In-flight keys live in `pending` instead of a cache
+	// placeholder, so a dropped fetch never poisons future attempts.
+	// A plain Set, not SvelteSet: the $effect below both reads and writes
+	// it, so reactivity would make the effect re-trigger itself on every
+	// fetch start and completion. Rows repaint via nameCache alone.
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity
+	const pending = new Set<string>();
 
 	$effect(() => {
 		const wps = waypoints;
-		const enabled = searchEnabled;
-		generation += 1;
-		const current = generation;
-		if (!enabled) return;
+		if (!searchEnabled) return;
 		for (const wp of wps) {
 			const k = key(wp);
-			if (nameCache.has(k)) continue;
-			nameCache.set(k, null); // placeholder: don't fetch the same point twice
+			if (nameCache.has(k) || pending.has(k)) continue;
+			pending.add(k);
 			places.reverse(wp.lat, wp.lon).then((result) => {
-				if (current !== generation) return;
+				pending.delete(k);
 				nameCache.set(k, result?.name ?? null);
 			});
 		}

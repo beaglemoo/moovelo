@@ -452,7 +452,7 @@ async def reverse_route(
     # blocking the reverse, so it is fetched after the snapshot is settled.
     # Legs, not one concatenated shape - see ValhallaClient.trace_attributes.
     surface = await valhalla.trace_attributes(
-        [decode_polyline6(leg.geometry) for leg in snapshot.legs], base_preset, costing
+        [decode_polyline6(leg.geometry) for leg in snapshot.legs]
     )
     if surface is not None:
         snapshot = snapshot.model_copy(update={"surface": surface})

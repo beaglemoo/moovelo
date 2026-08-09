@@ -36,9 +36,9 @@ HEIGHT_RESPONSE = {"range_height": []}
 # Out-and-back distance as a plain multiple of the via's straight-line
 # radius from the origin - independent of bearing, so every one of the
 # 8 bearings the generator tries converges identically and deterministically.
-# Chosen so the achievable range [0.2*r0, 2*r0] brackets the target: at r0 the
-# route comes in under target (forcing the search to grow the radius), and at
-# the upper bound it clears it.
+# Chosen so the achievable range [0.4*r0, 2*r0] (with r0 = target /
+# OUT_AND_BACK_RATIO) brackets the target: the converging radius sits at
+# 0.625*r0, so the search must shrink from its over-target first guess.
 DISTANCE_SCALE = 4.0
 
 
@@ -80,7 +80,7 @@ def _failing_bearing_zero_side_effect(request: httpx.Request) -> httpx.Response:
 
 @pytest.fixture(autouse=True)
 def no_surface(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _none(self: ValhallaClient, legs: list, preset: str, costing_options=None) -> None:
+    async def _none(self: ValhallaClient, legs: list) -> None:
         return None
 
     monkeypatch.setattr(ValhallaClient, "trace_attributes", _none)

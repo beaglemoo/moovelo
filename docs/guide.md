@@ -23,7 +23,10 @@ drawing a straight line.
   *Clear route* depending on what you clicked. If the place index is built
   (see [Place search and POIs](#place-search-and-pois) below), the menu
   also shows the name of the place you right-clicked.
-- **Undo** removes the last waypoint; **Clear** empties the route.
+- **Undo** and **Redo** step through your whole editing history -
+  waypoint changes, preset switches, reordering, avoids, even Clear
+  (Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z work too). **Clear** empties the
+  route; if that was an accident, Undo brings it back.
 
 ### Presets
 

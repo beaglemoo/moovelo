@@ -26,6 +26,14 @@ from app.services.polyline import decode_polyline6
 from app.services.valhalla import ValhallaClient
 
 LOOP_BEARINGS = 8  # compass spread; the dedup pass collapses lookalikes
+# An out-and-back through one via point measures roughly 2.5x the via's
+# straight-line radius on real roads (outbound + a mostly-different return,
+# each a wiggly ~1.25x of the crow-flies distance). The first guess assumed
+# a full circle (2*pi*r) instead, which put the radius that actually hits
+# larger targets entirely outside the search window - every 60 km+ candidate
+# saturated at the upper bound and undershot by 15-23%. Measured live, not
+# derived: see review pass 2.
+OUT_AND_BACK_RATIO = 2.5
 LOOP_MAX_ITERS = 6  # halvings of a 10x radius window: ~3% resolution
 LOOP_TOLERANCE = 0.05  # stop a bearing early within 5% of target
 LOOP_CANDIDATES = 3
@@ -118,8 +126,10 @@ async def _search_bearing(
     the caller treats a whole bearing failing as "nothing this way", not a
     hard error.
     """
-    r0 = target_m / (2 * math.pi)
-    lo, hi = 0.2 * r0, 2.0 * r0
+    r0 = target_m / OUT_AND_BACK_RATIO
+    # Covers road networks from ratio ~1.25 (grid-perfect loops) to ~6
+    # (dense trail webs) around the 2.5 seed.
+    lo, hi = 0.4 * r0, 2.0 * r0
     r = r0
     best: _Attempt | None = None
     best_error = math.inf
@@ -173,7 +183,7 @@ async def _attach_surface_and_score(
     snapshot = attempt.snapshot
     actual_km = snapshot.distance_m / 1000.0
     legs = [decode_polyline6(leg.geometry) for leg in snapshot.legs]
-    surface = await valhalla.trace_attributes(legs, preset, costing_options)
+    surface = await valhalla.trace_attributes(legs)
     unpaved_fraction = 0.0
     if surface is not None and surface.total_m > 0:
         paved_m = sum(surface.surface_m.get(key, 0.0) for key in PAVED_SURFACES)

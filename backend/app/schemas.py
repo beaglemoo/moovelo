@@ -279,13 +279,19 @@ class RouteSaveRequest(BaseModel):
     snapshot: RouteResponse
 
     @model_validator(mode="after")
-    def _custom_requires_options(self) -> "RouteSaveRequest":
+    def _custom_and_options_travel_together(self) -> "RouteSaveRequest":
         # "custom" is a marker for "the stored costing_options bundle", not a
         # PRESETS key - stored without one, the next re-route (reverse, say)
-        # would KeyError inside PRESETS["custom"]. The planner always sends
-        # both together; this holds the API to the same invariant.
+        # would KeyError inside PRESETS["custom"]. The converse holds too: a
+        # NAMED preset stored beside a bundle would let the bundle silently
+        # win every future re-route while the preset field claims otherwise
+        # (docs/architecture.md documents costing_options as null unless
+        # preset is "custom"). The planner always sends a coherent pair;
+        # this holds the API to the same invariant in both directions.
         if self.preset == "custom" and self.costing_options is None:
             raise ValueError('preset "custom" requires costing_options.')
+        if self.preset != "custom" and self.costing_options is not None:
+            raise ValueError('costing_options requires preset "custom".')
         return self
 
 
@@ -302,11 +308,15 @@ class RoutePatchRequest(BaseModel):
     costing_options: BicycleCostingOptions | None = None
 
     @model_validator(mode="after")
-    def _custom_requires_options(self) -> "RoutePatchRequest":
-        # Same invariant as RouteSaveRequest: "custom" without a bundle would
-        # store a preset that KeyErrors on the next re-route.
+    def _custom_and_options_travel_together(self) -> "RoutePatchRequest":
+        # Same two-way invariant as RouteSaveRequest: "custom" without a
+        # bundle KeyErrors on the next re-route, and a bundle beside a named
+        # preset would silently drive every re-route while the preset field
+        # claims otherwise.
         if self.preset == "custom" and self.costing_options is None:
             raise ValueError('preset "custom" requires costing_options.')
+        if self.preset is not None and self.preset != "custom" and self.costing_options is not None:
+            raise ValueError('costing_options requires preset "custom".')
         return self
 
     snapshot: RouteResponse | None = None
@@ -456,7 +466,10 @@ class IsochroneContour(BaseModel):
     both - Valhalla's own `/isochrone` takes a list of contours each keyed
     by exactly one of `time` (minutes) or `distance` (km)."""
 
-    minutes: float | None = Field(default=None, gt=0, le=240)
+    # 120 is Valhalla's own service_limits.isochrone.max_time_contour -
+    # anything above it always fails downstream, so it is rejected here with
+    # a clear message instead.
+    minutes: float | None = Field(default=None, gt=0, le=120)
     km: float | None = Field(default=None, gt=0, le=200)
     # Valhalla wants this sans "#"; the frontend strips it before sending.
     color: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{6}$")
@@ -537,6 +550,10 @@ class AlternatesQuery(BaseModel):
     preset: Preset = "road"
     # Overrides `preset` entirely when set - see resolve_costing.
     costing_options: BicycleCostingOptions | None = None
+    # The planner's avoids apply to alternates exactly as they do to the
+    # primary route - alternates that route straight through an avoided
+    # road would be adoptable lies. Same cap as RouteRequest.
+    exclude_locations: list[Waypoint] | None = Field(default=None, max_length=10)
     count: int = Field(default=2, ge=1, le=3)
 
 

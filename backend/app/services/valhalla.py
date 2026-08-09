@@ -10,7 +10,6 @@ from fastapi import HTTPException
 
 from app.config import settings
 from app.schemas import (
-    BicycleCostingOptions,
     ElevationPoint,
     IsochroneContour,
     Preset,
@@ -94,7 +93,26 @@ class ValhallaClient:
         return payload
 
     async def route(self, request: RouteRequest) -> RouteResponse:
-        data = await self._post("/route", self._route_payload(request))
+        try:
+            data = await self._post("/route", self._route_payload(request))
+        except HTTPException as exc:
+            # With avoids in play, "no suitable edges" usually means an
+            # excluded point sits on the only road under a waypoint - the
+            # generic "is this area covered?" hint would send the rider
+            # chasing a map problem that does not exist.
+            if (
+                request.exclude_locations
+                and exc.status_code == 422
+                and "covered by the loaded map extract" in str(exc.detail)
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "No route found with these avoided roads - an avoid may "
+                        "overlap the start or finish. Remove it and try again."
+                    ),
+                ) from exc
+            raise
         return await self._parse_trip(data["trip"])
 
     async def route_alternates(
@@ -262,12 +280,7 @@ class ValhallaClient:
         trip: dict[str, Any] = (await self._post("/trace_route", payload))["trip"]
         return trip
 
-    async def trace_attributes(
-        self,
-        legs: list[list[Point]],
-        preset: Preset,
-        costing_options: BicycleCostingOptions | None = None,
-    ) -> SurfaceBreakdown | None:
+    async def trace_attributes(self, legs: list[list[Point]]) -> SurfaceBreakdown | None:
         """Per-edge surface, road class, use and cycle-lane presence along a
         route's own legs, aggregated into metres per bucket.
 
@@ -301,9 +314,7 @@ class ValhallaClient:
         # leg produced them, so they are flattened and gathered together.
         chunks = [chunk for leg in usable_legs for chunk in _plain_chunks(leg, TRACE_MAX_POINTS)]
         try:
-            results = await asyncio.gather(
-                *(self._attributes_chunk(chunk, preset, costing_options) for chunk in chunks)
-            )
+            results = await asyncio.gather(*(self._attributes_chunk(chunk) for chunk in chunks))
         except HTTPException:
             return None
 
@@ -341,17 +352,18 @@ class ValhallaClient:
             cycle_lane_m=cycle_lane_m,
         )
 
-    async def _attributes_chunk(
-        self,
-        chunk: list[Point],
-        preset: Preset,
-        costing_options: BicycleCostingOptions | None = None,
-    ) -> dict[str, Any]:
+    async def _attributes_chunk(self, chunk: list[Point]) -> dict[str, Any]:
+        # Always the road bundle, whatever the rider routes with: edge_walk
+        # follows the shape's own edges, so costing cannot change WHICH edges
+        # come back for any in-range value - but an extreme custom bundle
+        # (avoid_bad_surfaces=1.0) can make Valhalla reject the route's own
+        # real unpaved edges outright, nulling the whole breakdown and with
+        # it the surface-aware ride time. Proven live in review pass 2.
         payload: dict[str, Any] = {
             "shape": [{"lat": lat, "lon": lon} for lat, lon in chunk],
             "shape_match": "edge_walk",
             "costing": "bicycle",
-            "costing_options": {"bicycle": resolve_costing(preset, costing_options)},
+            "costing_options": {"bicycle": PRESETS["road"]},
             "units": "kilometers",
             "filters": {
                 "action": "include",

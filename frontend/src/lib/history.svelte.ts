@@ -7,6 +7,13 @@ export interface PlannerSnapshot {
 	preset: Preset;
 	costingOptions: BicycleCostingOptions | null;
 	source: RouteSource;
+	/** The saved-route identity at capture time. Restored by applySnapshot
+	 * only when non-null - time travel can re-attach a route to its library
+	 * row (undoing an accidental Clear) but never detaches one, so undoing
+	 * past the save point cannot turn "Save changes" into a duplicating
+	 * "Save". */
+	savedId: string | null;
+	savedName: string | null;
 	/** Points to route around - see reroute()'s exclude_locations. Session-
 	 * only, same as the rest of this snapshot: not persisted with a saved
 	 * route. */
@@ -30,6 +37,8 @@ function cloneSnapshot(snap: PlannerSnapshot): PlannerSnapshot {
 		costingOptions: snap.costingOptions ? { ...snap.costingOptions } : null,
 		source: snap.source,
 		avoidLocations: snap.avoidLocations.map((wp) => ({ ...wp })),
+		savedId: snap.savedId,
+		savedName: snap.savedName,
 		routeOverride: snap.routeOverride
 	};
 }

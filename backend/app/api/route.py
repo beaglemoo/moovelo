@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
@@ -14,7 +15,6 @@ from app.schemas import (
     AlternatesQuery,
     AlternatesResponse,
     AppConfig,
-    BicycleCostingOptions,
     ElevationPoint,
     IsochroneQuery,
     IsochroneResponse,
@@ -22,7 +22,6 @@ from app.schemas import (
     Longitude,
     LoopCandidatesResponse,
     LoopQuery,
-    Preset,
     RideTimePoint,
     RouteRequest,
     RouteResponse,
@@ -86,9 +85,10 @@ class RouteSurfaceQuery(BaseModel):
     # ValhallaClient.trace_attributes fails outright on a chunk straddling
     # that discontinuity.
     legs: list[list[tuple[Longitude, Latitude]]] = Field(min_length=1)
-    preset: Preset = "road"
-    # Overrides `preset` entirely when set - see resolve_costing.
-    costing_options: BicycleCostingOptions | None = None
+    # No preset or costing here deliberately: edge_walk follows the shape's
+    # own edges, so costing cannot change the breakdown - it could only break
+    # it (see ValhallaClient._attributes_chunk). Unknown extra fields from
+    # older clients are ignored by pydantic's default config.
     # When given, the response also carries a surface-aware ride_time -
     # otherwise plan_route's own paved-equivalent estimate is the only one
     # the planner has until the route is saved.
@@ -124,7 +124,7 @@ async def route_surface(
     # [lon, lat] per leg (GeoJSON order) in; ValhallaClient legs are
     # (lat, lon), matching PoiQuery's handling of the same ordering.
     legs = [[(lat, lon) for lon, lat in leg] for leg in body.legs]
-    surface = await client.trace_attributes(legs, body.preset, body.costing_options)
+    surface = await client.trace_attributes(legs)
     ride_time: list[RideTimePoint] = []
     if body.elevation is not None:
         # Computed even when surface is None (factor 1.0), matching
@@ -152,6 +152,38 @@ async def route_weather(body: WeatherQuery, _user: UserDep) -> WeatherAlongRoute
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+def _isochrone_reaches_anywhere(data: dict[str, Any]) -> bool:
+    """Whether any contour spans more than ~500 m in either axis.
+
+    Coordinates are walked structurally (rings of [lon, lat] pairs) so both
+    polygon and linestring output shapes are covered without caring which.
+    """
+    min_lon = min_lat = float("inf")
+    max_lon = max_lat = float("-inf")
+
+    def walk(node: Any) -> None:
+        nonlocal min_lon, min_lat, max_lon, max_lat
+        if (
+            isinstance(node, list)
+            and len(node) == 2
+            and all(isinstance(v, (int, float)) for v in node)
+        ):
+            lon, lat = node
+            min_lon, max_lon = min(min_lon, lon), max(max_lon, lon)
+            min_lat, max_lat = min(min_lat, lat), max(max_lat, lat)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    for feature in data.get("features", []):
+        walk(feature.get("geometry", {}).get("coordinates", []))
+    if min_lon == float("inf"):
+        return False
+    # ~500 m in degrees: generous at any UK latitude, and a real contour of
+    # even a few minutes is kilometres across.
+    return (max_lat - min_lat) > 0.0045 or (max_lon - min_lon) > 0.0045
+
+
 @router.post("/route/isochrone")
 async def route_isochrone(
     request: Request, body: IsochroneQuery, _user: UserDep
@@ -170,6 +202,19 @@ async def route_isochrone(
         denoise=body.denoise,
         generalize=body.generalize,
     )
+    # An origin in open water or outside the extract does not error - Valhalla
+    # snaps to nothing and returns a degenerate ~50 m placeholder ring as a
+    # cheerful 200. Even one minute of cycling covers hundreds of metres, so
+    # a bounding box under that across every feature means the origin found
+    # no roads, and saying so beats drawing an invisible speck.
+    if not _isochrone_reaches_anywhere(data):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No reachable roads at that point - is it on land, and covered "
+                "by the loaded map extract?"
+            ),
+        )
     return IsochroneResponse.model_validate(data)
 
 
@@ -185,7 +230,10 @@ async def route_alternates(
     """
     client: ValhallaClient = request.app.state.valhalla
     route_request = RouteRequest(
-        waypoints=body.waypoints, preset=body.preset, costing_options=body.costing_options
+        waypoints=body.waypoints,
+        preset=body.preset,
+        costing_options=body.costing_options,
+        exclude_locations=body.exclude_locations,
     )
     primary, alternates = await client.route_alternates(route_request, body.count)
     # One settings read for all candidates - the same row cannot change
@@ -202,7 +250,9 @@ async def route_alternates(
 
 
 @router.post("/route/loop")
-async def route_loop(request: Request, body: LoopQuery, _user: UserDep) -> LoopCandidatesResponse:
+async def route_loop(
+    request: Request, body: LoopQuery, db: DbDep, user: UserDep
+) -> LoopCandidatesResponse:
     """Up to three candidate loops from `body.origin`, each an ordinary
     out-and-back route through one via point (services/loop.py). Bounded so
     a rider is never left staring at a spinner indefinitely; partial results
@@ -220,4 +270,13 @@ async def route_loop(request: Request, body: LoopQuery, _user: UserDep) -> LoopC
         raise HTTPException(
             status_code=504, detail="Loop search timed out - try a shorter target distance."
         ) from exc
+    # Every sibling route endpoint attaches a rider-settings ride_time;
+    # without this, picking a candidate silently reverted the displayed
+    # duration to Valhalla's flat estimate. One settings read for all three.
+    rider = await _settings_for(db, user.id)
+    for candidate in candidates:
+        snap = candidate.snapshot
+        candidate.snapshot = snap.model_copy(
+            update={"ride_time": compute_ride_time(snap.elevation, snap.surface, rider)}
+        )
     return LoopCandidatesResponse(candidates=candidates)
