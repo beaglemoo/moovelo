@@ -1057,7 +1057,15 @@
 	 * already in the box is left exactly as it was, same as suggestName()
 	 * finding no place names. */
 	async function suggestNameFromAssistant() {
+		// Same `loading`/`routeStale` guard as save(), for the same reason: this
+		// reads `route.distance_m`/`route.ascent_m` and `waypoints` together, and
+		// mid-reroute (or after a failed one, where `loading` is already back to
+		// false) those two disagree. The result would be a name built from the
+		// new waypoints' place names and the old route's numbers - wrong in a way
+		// the rider cannot see, since a plausible name is exactly what they
+		// expected. The button is disabled as well; this is the backstop.
 		if (!config?.assistant_enabled || !route || waypoints.length < 2) return;
+		if (loading || routeStale) return;
 		suggestingName = true;
 		try {
 			saveNameInput = await suggestRouteName(waypoints, route.distance_m, route.ascent_m);
@@ -1433,7 +1441,7 @@
 								type="button"
 								class="suggest-name"
 								onclick={suggestNameFromAssistant}
-								disabled={suggestingName}
+								disabled={suggestingName || !route || loading || routeStale}
 								title="Ask the assistant to suggest a name"
 							>
 								{suggestingName ? '…' : 'Suggest'}
