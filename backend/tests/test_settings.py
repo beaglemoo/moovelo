@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.api.settings import update_settings
 from app.models import User, UserSettings
 from app.schemas import UserSettingsPatch
+from app.version import APP_VERSION
 from tests.conftest import register
 
 
@@ -20,7 +21,12 @@ async def test_get_before_any_patch_returns_defaults_and_creates_no_row(
 
     response = await client.get("/api/settings")
     assert response.status_code == 200
-    assert response.json() == {"weight_kg": 78.0, "flat_speed_kmh": 22.0, "ftp_watts": None}
+    assert response.json() == {
+        "weight_kg": 78.0,
+        "flat_speed_kmh": 22.0,
+        "ftp_watts": None,
+        "version": APP_VERSION,
+    }
 
     rows = (await db.execute(select(UserSettings))).scalars().all()
     assert rows == []
@@ -86,7 +92,12 @@ async def test_settings_are_scoped_per_user(
 
     await register(client, "stranger@example.com")
     default = (await client.get("/api/settings")).json()
-    assert default == {"weight_kg": 78.0, "flat_speed_kmh": 22.0, "ftp_watts": None}
+    assert default == {
+        "weight_kg": 78.0,
+        "flat_speed_kmh": 22.0,
+        "ftp_watts": None,
+        "version": APP_VERSION,
+    }
 
     await client.patch("/api/settings", json={"weight_kg": 95.0})
     stranger = (await client.get("/api/settings")).json()
