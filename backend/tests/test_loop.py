@@ -99,6 +99,24 @@ async def test_binary_search_converges_within_tolerance() -> None:
         assert candidate.distance_error_km / 20.0 <= LOOP_TOLERANCE + 1e-9
 
 
+# A loop is adopted as the working route, so one generated through a road the
+# rider had already excluded would land as a route that ignores an avoid the
+# UI still shows as active.
+@respx.mock
+async def test_avoids_reach_every_route_call_the_search_makes() -> None:
+    routed = respx.post(f"{BASE}/route").mock(side_effect=_well_behaved_route_side_effect)
+    respx.post(f"{BASE}/height").respond(json=HEIGHT_RESPONSE)
+    avoid = Waypoint(lat=53.81, lon=-1.56)
+
+    client = ValhallaClient(base_url=BASE)
+    await generate_loop_candidates(ORIGIN, 20.0, "road", None, client, [avoid])
+
+    assert routed.call_count > 0
+    for call in routed.calls:
+        payload = json.loads(call.request.content)
+        assert payload["exclude_locations"] == [{"lat": avoid.lat, "lon": avoid.lon}]
+
+
 @respx.mock
 async def test_a_bearing_that_always_fails_is_skipped_and_others_survive() -> None:
     respx.post(f"{BASE}/route").mock(side_effect=_failing_bearing_zero_side_effect)

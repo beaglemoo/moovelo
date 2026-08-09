@@ -262,7 +262,12 @@ async def route_loop(
     try:
         candidates = await asyncio.wait_for(
             generate_loop_candidates(
-                body.origin, body.target_km, body.preset, body.costing_options, client
+                body.origin,
+                body.target_km,
+                body.preset,
+                body.costing_options,
+                client,
+                body.exclude_locations,
             ),
             timeout=LOOP_TIMEOUT_S,
         )

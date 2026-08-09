@@ -846,6 +846,7 @@
 				loopTargetKm,
 				preset,
 				customCostingOptions,
+				avoids.length ? avoids : null,
 				controller.signal
 			);
 			if (controller.signal.aborted) return;
