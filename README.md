@@ -65,8 +65,9 @@ with turn-by-turn cues.
   for a route in the planner ("a 40 km gravel loop from here, with water
   on it") and watch the answer stream back as it works. It calls the same
   routing, search and loop primitives the rest of the app uses - it never
-  invents coordinates or distances - and whatever it produces lands as
-  ordinary waypoints you can drag. Points at any OpenAI-compatible
+  invents coordinates or distances - and whatever it produces arrives as
+  a previewed offer you accept or discard, landing as ordinary waypoints
+  you can drag and undo like any other edit. Points at any OpenAI-compatible
   endpoint, including a local Ollama.
 - Public read-only share links per route - send a route to someone
   without an account. When the route assistant is configured, the share
