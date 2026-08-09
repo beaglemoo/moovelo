@@ -51,5 +51,26 @@ class Settings(BaseSettings):
     def weather_enabled(self) -> bool:
         return bool(self.weather_api_url)
 
+    # OpenAI-compatible chat-completions base URL for the route assistant,
+    # e.g. https://openrouter.ai/api/v1 or http://ollama-host:11434/v1.
+    # Empty hides the assistant entirely - nothing reaches outside the LAN
+    # unless this is set. The API key is optional: a local Ollama needs none.
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+    # Comma-separated OpenRouter provider preference, e.g. "Fireworks,Together".
+    # Sent as a preference with fallbacks left on, never as a hard constraint:
+    # pinning strictly turns one provider's multi-turn tool-call bug into a
+    # failed conversation. Ignored by non-OpenRouter endpoints.
+    llm_provider_order: str = ""
+
+    @property
+    def assistant_enabled(self) -> bool:
+        return bool(self.llm_base_url and self.llm_model)
+
+    @property
+    def llm_providers(self) -> list[str]:
+        return [name.strip() for name in self.llm_provider_order.split(",") if name.strip()]
+
 
 settings = Settings()
