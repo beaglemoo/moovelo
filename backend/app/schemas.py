@@ -516,6 +516,10 @@ class LoopQuery(BaseModel):
     preset: Preset = "road"
     # Overrides `preset` entirely when set - see resolve_costing.
     costing_options: BicycleCostingOptions | None = None
+    # The rider's avoids apply here too: a loop is adopted as the working
+    # route, so one generated through a road they had already excluded lands
+    # as a route that quietly ignores a constraint still shown as active.
+    exclude_locations: list[Waypoint] | None = Field(default=None, max_length=10)
 
 
 class LoopCandidate(BaseModel):

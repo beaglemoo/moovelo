@@ -53,7 +53,12 @@
 	let customCostingOptions: BicycleCostingOptions | null = $state(null);
 	let customPopoverOpen = $state(false);
 	let route: RouteResponse | null = $state(null);
-	let loading = $state(false);
+	// The reroute whose response still owns the route, or null when none is
+	// outstanding. `loading` is derived from it rather than assigned, so it
+	// cannot be left true by a path that returns early: claiming the route
+	// (below) releases it, and every superseding action claims.
+	let pendingRoute: number | null = $state(null);
+	const loading = $derived(pendingRoute !== null);
 	let error: string | null = $state(null);
 	let hoverPoint: [number, number] | null = $state(null);
 	let config: AppConfig | null = $state(null);
@@ -73,6 +78,26 @@
 	// them. `loading` alone does not cover this, because the catch that
 	// leaves the state inconsistent resets `loading` on its way out.
 	let routeStale = $state(false);
+	// Ownership of `route`. Every path that puts a route on screen claims a
+	// token first; an in-flight reroute whose token has been superseded throws
+	// its response away instead of applying it. Cancellation used to be the
+	// only defence and lived solely inside reroute(), so Clear, a chosen loop,
+	// an adopted alternate and time travel each left a request running that
+	// could land afterwards and resurrect geometry for waypoints that were no
+	// longer on screen - undetectably, since the response set routeStale
+	// false on its way in. A claim is checked at the point of use rather than
+	// remembered at each call site, so a new path cannot forget it: the worst
+	// a caller that forgets to claim can do is let its own route be replaced.
+	let routeToken = 0;
+	function claimRoute(): number {
+		routeToken += 1;
+		// Whatever was in flight no longer owns the route, so it no longer
+		// owns the "Routing..." state either. Without this, a response dropped
+		// for being superseded would leave the banner and every loading-gated
+		// button stuck until reload.
+		pendingRoute = null;
+		return routeToken;
+	}
 	// Bumped at every site that sets `dirty = true`. A save that started
 	// before a later edit landed must not clear `dirty` for that later edit -
 	// it captures this before its own await chain and only clears dirty if
@@ -143,10 +168,13 @@
 	let alternatesLoading = $state(false);
 	let alternatesError: string | null = $state(null);
 	let hoveredAlternateIndex: number | null = $state(null);
-	// The waypoints `alternates` was fetched against, as a plain (non-$state)
-	// snapshot - compared by value in the invalidation effect below, so
-	// populating `alternates` itself never trips that effect's own guard.
-	let alternatesFetchedFor: Waypoint[] | null = null;
+	// The routing inputs `alternates` was fetched against, as a plain
+	// (non-$state) snapshot - compared by value in the invalidation effect
+	// below, so populating `alternates` itself never trips that effect's own
+	// guard. Avoids belong here as much as waypoints do: they travel in the
+	// alternates request, so a candidate fetched before an avoid existed
+	// routes straight through it.
+	let alternatesFetchedFor: { waypoints: Waypoint[]; avoids: Waypoint[] } | null = null;
 	// Points to route around ("not that road"), from the map's context menu.
 	// Session-only planner memory - never persisted with a saved route, since
 	// the saved geometry already reflects whatever avoids shaped it.
@@ -277,10 +305,10 @@
 		savedId = snap.savedId;
 		savedName = snap.savedName;
 		if (snap.routeOverride) {
+			claimRoute();
 			route = snap.routeOverride;
 			routeStale = false;
-			dirty = true;
-			editGeneration += 1;
+			markEdited();
 		} else {
 			reroute();
 		}
@@ -299,6 +327,7 @@
 				// Session-only: a loaded route's geometry already reflects
 				// whatever avoids shaped it, and none carried over from before.
 				avoids = [];
+				claimRoute();
 				route = saved;
 				routeStale = false;
 				savedId = saved.id;
@@ -579,38 +608,55 @@
 		isochroneOrigin = null;
 	}
 
+	// reroute() is only ever called as the tail of an edit (the mutators via
+	// planEdit, and time travel via applySnapshot), so every one of its exits
+	// marks the planner dirty - not just the successful one. An edit that
+	// routed badly, or that dropped below two waypoints, still means what is
+	// stored no longer matches what is on screen.
+	function markEdited() {
+		dirty = true;
+		editGeneration += 1;
+	}
+
 	async function reroute() {
+		const token = claimRoute();
 		abortController?.abort();
 		if (waypoints.length < 2) {
 			route = null;
 			routeStale = false;
 			error = null;
-			// The abort above may have killed an in-flight reroute whose
-			// AbortError path never resets `loading` - without this the
-			// "Routing..." banner and the loading-gated buttons wedge forever.
-			loading = false;
+			markEdited();
 			return;
 		}
 		abortController = new AbortController();
-		loading = true;
+		pendingRoute = token;
 		error = null;
 		try {
-			route = await planRoute(
+			const next = await planRoute(
 				waypoints,
 				preset,
 				customCostingOptions,
 				avoids.length ? avoids : null,
 				abortController.signal
 			);
-			loading = false;
+			// Anything that replaced the route while this was in flight - Clear,
+			// a chosen loop, an adopted alternate, time travel - has claimed a
+			// newer token, and this response now describes waypoints that are no
+			// longer on screen. Dropping it is the whole point: aborting is a
+			// courtesy that races, and every one of those callers would
+			// otherwise have to remember to abort.
+			if (token !== routeToken) return;
+			pendingRoute = null;
+			route = next;
 			routeStale = false;
-			dirty = true;
-			editGeneration += 1;
+			markEdited();
 		} catch (err) {
 			if (err instanceof DOMException && err.name === 'AbortError') return;
-			loading = false;
+			if (token !== routeToken) return;
+			pendingRoute = null;
 			routeStale = true;
 			error = err instanceof Error ? err.message : 'Routing failed';
+			markEdited();
 		}
 	}
 
@@ -703,8 +749,18 @@
 	// a route that matched when captured. Replaying reroute() is truer in
 	// both cases: it either produces a route that really does match, or fails
 	// and sets routeStale again.
+	// The live route, but only when it genuinely describes the current inputs -
+	// null while a reroute is in flight or after one failed, when it still
+	// belongs to the previous waypoints. Anything storing a route for later
+	// restoration goes through this: a routeOverride is taken on trust when it
+	// comes back (applySnapshot marks it clean), so a stale one put into
+	// history resurfaces as a mismatched pair that every guard believes.
+	function restorableRoute(): RouteResponse | null {
+		return loading || routeStale ? null : route;
+	}
+
 	function timeTravelSnapshot(): PlannerSnapshot {
-		return { ...currentSnapshot(), routeOverride: loading || routeStale ? null : route };
+		return { ...currentSnapshot(), routeOverride: restorableRoute() };
 	}
 
 	function undo() {
@@ -742,7 +798,9 @@
 		source = 'planned';
 		waypoints = [];
 		avoids = [];
+		claimRoute();
 		route = null;
+		routeStale = false;
 		error = null;
 		savedId = null;
 		savedName = null;
@@ -788,6 +846,7 @@
 				loopTargetKm,
 				preset,
 				customCostingOptions,
+				avoids.length ? avoids : null,
 				controller.signal
 			);
 			if (controller.signal.aborted) return;
@@ -804,14 +863,20 @@
 		return a.length === b.length && a.every((wp, i) => wp.lat === b[i].lat && wp.lon === b[i].lon);
 	}
 
-	// Any waypoint edit invalidates whatever alternates were fetched for the
-	// previous pair - reading `waypoints` is enough since every mutator
-	// reassigns or mutates this $state array. Guarded by comparing against
-	// alternatesFetchedFor (a plain snapshot, not itself reactive) so this
-	// does not fire the instant a search populates `alternates`.
+	// Any edit to the inputs invalidates whatever alternates were fetched for
+	// the previous ones - reading `waypoints` and `avoids` is enough since
+	// every mutator reassigns or mutates these $state arrays. Guarded by
+	// comparing against alternatesFetchedFor (a plain snapshot, not itself
+	// reactive) so this does not fire the instant a search populates
+	// `alternates`.
 	$effect(() => {
-		const current = waypoints;
-		if (alternatesFetchedFor && !sameWaypoints(current, alternatesFetchedFor)) {
+		const currentWaypoints = waypoints;
+		const currentAvoids = avoids;
+		if (
+			alternatesFetchedFor &&
+			(!sameWaypoints(currentWaypoints, alternatesFetchedFor.waypoints) ||
+				!sameWaypoints(currentAvoids, alternatesFetchedFor.avoids))
+		) {
 			dismissAlternates();
 		}
 	});
@@ -843,7 +908,10 @@
 				avoids.length ? avoids : null
 			);
 			alternates = result.alternates;
-			alternatesFetchedFor = waypoints.map((wp) => ({ ...wp }));
+			alternatesFetchedFor = {
+				waypoints: waypoints.map((wp) => ({ ...wp })),
+				avoids: avoids.map((wp) => ({ ...wp }))
+			};
 		} catch (err) {
 			alternatesError = err instanceof Error ? err.message : 'Alternate route search failed';
 		} finally {
@@ -862,11 +930,11 @@
 		// exactly what produced this one too - so undo has to restore that
 		// prior response verbatim rather than replay reroute(), which would
 		// just fetch the current primary again.
-		history.push({ ...currentSnapshot(), routeOverride: route });
+		history.push({ ...currentSnapshot(), routeOverride: restorableRoute() });
+		claimRoute();
 		route = picked;
 		routeStale = false;
-		dirty = true;
-		editGeneration += 1;
+		markEdited();
 		dismissAlternates();
 	}
 
@@ -880,10 +948,10 @@
 		// `route` instead, with the same dirty/editGeneration bump reroute()
 		// itself does for every other edit.
 		waypoints = candidate.waypoints;
+		claimRoute();
 		route = candidate.snapshot;
 		routeStale = false;
-		dirty = true;
-		editGeneration += 1;
+		markEdited();
 		dismissLoop();
 		fitTrigger += 1;
 	}
@@ -959,6 +1027,15 @@
 			const gen = editGeneration;
 			const snapshot = route;
 			if (!snapshot) return;
+			// Re-checked here, not only at entry: the wait above chases the
+			// surface refetch a completed reroute starts, but an edit made
+			// during it whose reroute has NOT landed leaves `route` on the
+			// pre-edit geometry while `waypoints` already holds the edit.
+			// Nothing stops the rider editing the map while a save is in
+			// flight, and the server cross-checks neither - so this window
+			// persisted a row whose stored track belonged to different
+			// waypoints. Reproduced live: waypoints of 4 against 2 legs.
+			if (loading || routeStale || waypoints.length < 2) return;
 			await routes.update(savedId, {
 				waypoints,
 				preset: storedPreset,
@@ -997,6 +1074,9 @@
 			const gen = editGeneration;
 			const snapshot = route;
 			if (!snapshot) return;
+			// See save(): an edit made during the wait whose reroute has not
+			// landed leaves route and waypoints describing different rides.
+			if (loading || routeStale || waypoints.length < 2) return;
 			const saved = await routes.create({
 				name: saveNameInput.trim(),
 				waypoints,
@@ -1148,7 +1228,7 @@
 			<button
 				type="button"
 				onclick={findAlternates}
-				disabled={waypoints.length !== 2 || loading}
+				disabled={waypoints.length !== 2 || loading || routeStale}
 				title={waypoints.length !== 2
 					? "Alternate routes are only available for routes with a single start and finish - Valhalla's own limitation"
 					: undefined}

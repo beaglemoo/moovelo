@@ -60,6 +60,7 @@ async def generate_loop_candidates(
     preset: Preset,
     costing_options: BicycleCostingOptions | None,
     valhalla: ValhallaClient,
+    exclude_locations: list[Waypoint] | None = None,
 ) -> list[LoopCandidate]:
     target_m = target_km * 1000.0
     bearings = [i * (360.0 / LOOP_BEARINGS) for i in range(LOOP_BEARINGS)]
@@ -67,7 +68,9 @@ async def generate_loop_candidates(
     # another - only the binary search *within* a bearing is sequential.
     results = await asyncio.gather(
         *(
-            _search_bearing(origin, b, target_m, preset, costing_options, valhalla)
+            _search_bearing(
+                origin, b, target_m, preset, costing_options, valhalla, exclude_locations
+            )
             for b in bearings
         ),
         return_exceptions=True,
@@ -117,6 +120,7 @@ async def _search_bearing(
     preset: Preset,
     costing_options: BicycleCostingOptions | None,
     valhalla: ValhallaClient,
+    exclude_locations: list[Waypoint] | None = None,
 ) -> _Attempt:
     """Binary search a via point's radius along `bearing_deg` until the
     out-and-back route through it lands near `target_m`, keeping the best
@@ -143,6 +147,7 @@ async def _search_bearing(
                     waypoints=[origin, via, origin],
                     preset=preset,
                     costing_options=costing_options,
+                    exclude_locations=exclude_locations,
                 )
             )
         except HTTPException as exc:

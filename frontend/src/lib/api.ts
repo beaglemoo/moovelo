@@ -625,6 +625,7 @@ export async function routeLoop(
 	targetKm: number,
 	preset: Preset,
 	costingOptions: BicycleCostingOptions | null = null,
+	excludeLocations: Waypoint[] | null = null,
 	signal?: AbortSignal
 ): Promise<LoopCandidatesResponse> {
 	return request<LoopCandidatesResponse>('/api/route/loop', {
@@ -633,7 +634,8 @@ export async function routeLoop(
 			origin,
 			target_km: targetKm,
 			preset,
-			costing_options: costingOptions
+			costing_options: costingOptions,
+			exclude_locations: excludeLocations
 		}),
 		signal
 	});
