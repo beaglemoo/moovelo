@@ -86,7 +86,13 @@ returned.\
 """
 
 
-def build_context_note(waypoint_count: int, has_route: bool, has_search: bool) -> str:
+def build_context_note(
+    waypoint_count: int,
+    has_route: bool,
+    has_search: bool,
+    preset: str = "road",
+    custom_costing: bool = False,
+) -> str:
     """A short factual preamble about what is on screen.
 
     Written by us rather than the model so the references it is offered are
@@ -103,6 +109,16 @@ def build_context_note(waypoint_count: int, has_route: bool, has_search: bool) -
     else:
         lines.append("No route is planned yet.")
     lines.append('The centre of their map is "centre:map".')
+    if custom_costing:
+        # Otherwise the model reasons about a preset that is not actually in
+        # force: ctx.costing_options overrides it for every request.
+        lines.append(
+            "The rider has their own costing sliders set, which override the "
+            "presets entirely - routes will use those whichever preset you name, "
+            "so do not tell the rider you have switched to one."
+        )
+    else:
+        lines.append(f'Their selected preset is "{preset}"; omit the preset argument to keep it.')
     if not has_search:
         lines.append(
             "The place index is not built on this install, so search_place and "
