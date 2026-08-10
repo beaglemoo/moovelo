@@ -1628,10 +1628,15 @@
 		flex-direction: column;
 		height: 100%;
 	}
+	/* The floor is load-bearing, not cosmetic. The panel below grows a card
+	   per feature - elevation, stats, POIs, climbs, waypoints, the assistant -
+	   and with flex: 1 alone the map is whatever is left over: measured at
+	   204px on a 720px laptop with two cards open, which is barely taller
+	   than the floating controls sitting on top of it. */
 	.map-area {
 		position: relative;
 		flex: 1;
-		min-height: 0;
+		min-height: 260px;
 	}
 	/* Its own row below the toolbar rather than centred beside it: the
 	   toolbar grows as buttons appear (Save, GPX, FIT, Wahoo, the route
@@ -1887,10 +1892,14 @@
 		background: #dc322f;
 		color: #fff;
 	}
+	/* Paired with .map-area's floor: the panel yields first and scrolls
+	   internally, rather than pushing the map out of the viewport. */
 	.panel {
 		background: #fdf6e3;
 		border-top: 1px solid #eee8d5;
 		padding: 0.4rem 0.8rem 0.2rem;
+		max-height: 55vh;
+		overflow-y: auto;
 	}
 	/* Chart and POI list side by side on a desktop, stacked on a phone -
 	   the chart needs width, the list needs height, and neither wins on a
@@ -1922,13 +1931,6 @@
 		min-width: 0;
 	}
 	@media (max-width: 760px) {
-		/* Without a ceiling the panel's natural height exceeds the viewport
-		   and squeezes .map-area to exactly 0px: the map is not merely small,
-		   it is gone, and tapping where it was does nothing. */
-		.panel {
-			max-height: 55vh;
-			overflow-y: auto;
-		}
 		.panel-body {
 			flex-direction: column;
 			gap: 0.2rem;
