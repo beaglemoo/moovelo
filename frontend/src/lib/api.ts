@@ -269,20 +269,35 @@ export class ApiError extends Error {
 	}
 }
 
+/** The backend's own message where it offers one.
+ *
+ * FastAPI returns validation errors as an ARRAY of objects, never a string,
+ * so only handling the string case meant every 422 in the app surfaced as
+ * "Request failed (422)" - including ones the rider could act on, like a
+ * value being too long. */
+async function errorDetail(response: Response): Promise<string> {
+	try {
+		const body = await response.json();
+		if (typeof body.detail === 'string') return body.detail;
+		if (Array.isArray(body.detail)) {
+			const messages = body.detail
+				.map((item: { msg?: unknown }) => (typeof item?.msg === 'string' ? item.msg : ''))
+				.filter(Boolean);
+			if (messages.length) return messages.join('; ');
+		}
+	} catch {
+		// fall through to the generic message
+	}
+	return `Request failed (${response.status})`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const response = await fetch(path, {
 		headers: typeof init?.body === 'string' ? { 'Content-Type': 'application/json' } : undefined,
 		...init
 	});
 	if (!response.ok) {
-		let detail = `Request failed (${response.status})`;
-		try {
-			const body = await response.json();
-			if (typeof body.detail === 'string') detail = body.detail;
-		} catch {
-			// keep the generic message
-		}
-		throw new ApiError(response.status, detail);
+		throw new ApiError(response.status, await errorDetail(response));
 	}
 	if (response.status === 204) return undefined as T;
 	return response.json();
@@ -832,14 +847,7 @@ export async function* streamAssistantChat(
 		signal
 	});
 	if (!response.ok) {
-		let detail = `Request failed (${response.status})`;
-		try {
-			const parsed = await response.json();
-			if (typeof parsed.detail === 'string') detail = parsed.detail;
-		} catch {
-			// keep the generic message
-		}
-		throw new ApiError(response.status, detail);
+		throw new ApiError(response.status, await errorDetail(response));
 	}
 	if (!response.body) throw new ApiError(500, 'The assistant returned no stream');
 

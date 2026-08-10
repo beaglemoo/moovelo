@@ -158,7 +158,11 @@ test('a reroute that lands after Clear does not resurrect the route', async ({ p
 	// stats panel back onto an empty map.
 	await page.waitForTimeout(4500);
 	await expect(markers).toHaveCount(0);
-	await expect(page.locator('.panel')).toHaveCount(0);
+	// The stats bar, not `.panel`: the panel container now also hosts the
+	// assistant, so it legitimately outlives the route it used to be a proxy
+	// for. `.stats` renders only when a route exists, which is the thing this
+	// test actually cares about.
+	await expect(page.locator('.stats')).toHaveCount(0);
 });
 
 test('redo does not restore a route captured while it was stale', async ({ page }) => {
