@@ -1,8 +1,13 @@
 """Parsing of uploaded GPX, TCX and FIT files."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from fit_tool.fit_file_builder import FitFileBuilder
+from fit_tool.profile.messages.file_id_message import FileIdMessage
+from fit_tool.profile.messages.record_message import RecordMessage
+from fit_tool.profile.profile_type import FileType, Manufacturer
 
 from app.services.geo import cumulative_distances
 from app.services.importer import (
@@ -16,6 +21,8 @@ from app.services.importer import (
 from app.services.valhalla import ascent_descent
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
+
+_RIDE_START_MS = int(datetime(2026, 5, 3, 8, 0, 0, tzinfo=UTC).timestamp() * 1000)
 
 GPX_TRACK = b"""<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="Komoot" xmlns="http://www.topografix.com/GPX/1/1">
@@ -42,6 +49,52 @@ GPX_ROUTE_V10 = b"""<?xml version="1.0" encoding="UTF-8"?>
     <rtept lat="51.7961" lon="-0.6572"/>
   </rte>
 </gpx>
+"""
+
+# A recorded ride: one minute of riding, one standing at a junction, then a
+# thirteen-minute hole where the recording was paused over lunch.
+GPX_RIDE = b"""<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Wahoo" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Tuesday morning</name>
+    <trkseg>
+      <trkpt lat="51.7955" lon="-0.6580"><ele>128.0</ele><time>2026-05-03T08:00:00Z</time></trkpt>
+      <trkpt lat="51.8000" lon="-0.6580"><ele>131.5</ele><time>2026-05-03T08:01:00Z</time></trkpt>
+      <trkpt lat="51.8000" lon="-0.6580"><ele>131.5</ele><time>2026-05-03T08:02:00Z</time></trkpt>
+      <trkpt lat="51.8045" lon="-0.6580"><ele>140.0</ele><time>2026-05-03T08:15:00Z</time></trkpt>
+    </trkseg>
+  </trk>
+</gpx>
+"""
+
+TCX_ACTIVITY = b"""<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">
+  <Activities>
+    <Activity Sport="Biking">
+      <Id>2026-05-03T08:00:00Z</Id>
+      <Lap>
+        <Track>
+          <Trackpoint>
+            <Time>2026-05-03T08:00:00Z</Time>
+            <Position>
+              <LatitudeDegrees>51.8412</LatitudeDegrees>
+              <LongitudeDegrees>-0.6047</LongitudeDegrees>
+            </Position>
+            <AltitudeMeters>210.4</AltitudeMeters>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2026-05-03T08:00:30Z</Time>
+            <Position>
+              <LatitudeDegrees>51.8420</LatitudeDegrees>
+              <LongitudeDegrees>-0.6039</LongitudeDegrees>
+            </Position>
+            <AltitudeMeters>223.1</AltitudeMeters>
+          </Trackpoint>
+        </Track>
+      </Lap>
+    </Activity>
+  </Activities>
+</TrainingCenterDatabase>
 """
 
 TCX_COURSE = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -197,3 +250,113 @@ def test_elevation_profile_is_capped() -> None:
     assert len(profile) == MAX_ELEVATION_SAMPLES
     assert profile[0].dist_m == 0.0
     assert profile[-1].dist_m == pytest.approx(cumulative_distances(track.shape)[-1])
+
+
+# --- Timestamps and the course/activity distinction -------------------------
+
+
+def test_reads_gpx_timestamps() -> None:
+    track = parse_route_file("ride.gpx", GPX_RIDE)
+    assert track.started_at == datetime(2026, 5, 3, 8, 0, 0, tzinfo=UTC)
+    assert track.ended_at == datetime(2026, 5, 3, 8, 15, 0, tzinfo=UTC)
+    assert track.elapsed_time_s == 900.0
+    assert track.is_activity
+
+
+def test_a_track_without_timestamps_is_not_an_activity() -> None:
+    track = parse_route_file("planned.gpx", GPX_ROUTE_V10)
+    assert track.started_at is None
+    assert track.ended_at is None
+    assert track.elapsed_time_s is None
+    assert track.moving_time_s is None
+    assert not track.is_activity
+
+
+def test_moving_time_excludes_a_stop_and_a_paused_recording() -> None:
+    """Fifteen minutes elapsed, one of them actually spent riding.
+
+    08:00-08:01 covers 500 m, so it counts. 08:01-08:02 does not move at all -
+    standing at a junction. 08:02-08:15 is a thirteen-minute jump, which is a
+    paused recording rather than a very slow quarter hour, and counting it
+    would turn every lunch stop into ride time.
+    """
+    track = parse_route_file("ride.gpx", GPX_RIDE)
+    assert track.elapsed_time_s == 900.0
+    assert track.moving_time_s == pytest.approx(60.0)
+
+
+def test_unreadable_and_implausible_timestamps_are_dropped_not_fatal() -> None:
+    gpx = b"""<?xml version="1.0"?>
+<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
+  <trkpt lat="51.7955" lon="-0.6580"><time>not a date</time></trkpt>
+  <trkpt lat="51.7961" lon="-0.6572"><time>1904-01-01T00:00:00Z</time></trkpt>
+  <trkpt lat="51.7970" lon="-0.6559"><time>2026-05-03T08:00:00Z</time></trkpt>
+</trkseg></trk></gpx>"""
+    track = parse_route_file("ride.gpx", gpx)
+    assert len(track.points) == 3
+    assert [p.time for p in track.points[:2]] == [None, None]
+    assert track.started_at == datetime(2026, 5, 3, 8, 0, 0, tzinfo=UTC)
+
+
+def test_naive_timestamps_are_read_as_utc() -> None:
+    gpx = GPX_RIDE.replace(b"2026-05-03T08:00:00Z", b"2026-05-03T08:00:00")
+    track = parse_route_file("ride.gpx", gpx)
+    assert track.started_at == datetime(2026, 5, 3, 8, 0, 0, tzinfo=UTC)
+
+
+def test_tcx_declares_which_it_is() -> None:
+    assert parse_route_file("course.tcx", TCX_COURSE).declared_kind == "course"
+    assert parse_route_file("ride.tcx", TCX_ACTIVITY).declared_kind == "activity"
+    assert parse_route_file("ride.tcx", TCX_ACTIVITY).is_activity
+
+
+def test_our_own_course_export_is_not_mistaken_for_a_ride() -> None:
+    """The regression this whole discriminator exists for.
+
+    services/fit.py stamps every RecordMessage with a time derived from the
+    routing duration, so a course Moovelo exported carries a full set of
+    timestamps. Judging by timestamps alone would file it as a ride someone
+    went out and did.
+    """
+    track = parse_route_file("route.fit", (GOLDEN_DIR / "route.fit").read_bytes())
+    assert track.started_at is not None, "the golden course does carry timestamps"
+    assert track.declared_kind == "course"
+    assert not track.is_activity
+
+
+def test_fit_activity_is_recognised_from_its_file_id() -> None:
+    track = parse_route_file("ride.fit", _fit_activity())
+    assert track.declared_kind == "activity"
+    assert track.is_activity
+    assert track.started_at == datetime(2026, 5, 3, 8, 0, 0, tzinfo=UTC)
+    assert track.ended_at == datetime(2026, 5, 3, 8, 0, 20, tzinfo=UTC)
+
+
+def _fit_activity() -> bytes:
+    """A minimal FIT activity.
+
+    Synthesised rather than captured, unusually for this suite. What is being
+    tested is our reading of one standardised enum in file_id, not tolerance
+    of a vendor's quirks, and no real ride file is in the repo to capture
+    from. A head unit's own export is still worth exercising on staging.
+    """
+    builder = FitFileBuilder(auto_define=True)
+
+    file_id = FileIdMessage()
+    file_id.type = FileType.ACTIVITY
+    file_id.manufacturer = Manufacturer.DEVELOPMENT.value
+    file_id.product = 0
+    file_id.serial_number = 0x1234
+    file_id.time_created = _RIDE_START_MS
+    builder.add(file_id)
+
+    for i in range(3):
+        record = RecordMessage()
+        record.timestamp = _RIDE_START_MS + i * 10_000
+        record.position_lat = 51.7955 + i * 0.001
+        record.position_long = -0.6580 + i * 0.001
+        record.altitude = 120.0 + i
+        builder.add(record)
+
+    data: bytes = builder.build().to_bytes()
+    return data
