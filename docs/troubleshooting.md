@@ -111,6 +111,74 @@ horizon is about 16 days. Pick a start time within that window. This
 isn't a Moovelo limit; the weather service itself rejects the request and
 the panel reports it rather than showing wrong numbers.
 
+## Route assistant panel is missing
+
+Both `LLM_BASE_URL` and `LLM_MODEL` must be set - either one alone leaves
+the assistant off. The API key is deliberately not part of that check, so
+a local endpoint that needs no key still enables the panel.
+
+If you set them and the panel is still absent, check the variables are
+actually reaching the container rather than only sitting in `.env`:
+
+```sh
+docker compose --profile prod exec backend printenv | grep '^LLM_'
+```
+
+An empty result on a deployment that copies files to the server rather
+than pulling the repo usually means `docker-compose.yml` itself is out of
+date - the four `LLM_*` passthrough lines arrived in v0.6.0, and without
+them `.env` is read but never forwarded.
+
+The endpoint can also be configured entirely from `/admin`, which
+overrides the environment per field.
+
+## Assistant replies "The assistant service rejected the request"
+
+The endpoint refused the call, and the message after the colon is its own
+wording passed through. Almost always the API key: missing, wrong, or
+lacking credit. Gateways word this confusingly - OpenRouter answers an
+unauthenticated request with "No cookie auth credentials found", which
+means no valid key, not a cookie problem.
+
+`/admin` has a test button that sends one tiny completion and reports
+latency, cost, and whether tool calls came back.
+
+## Assistant can't find places, or ignores the ones you name
+
+The place index isn't built. The assistant is told so and will say it
+plainly rather than inventing coordinates, but it can then only work from
+the map centre and waypoints already on screen. Build the index (see
+"Search box is missing" above) and it gains place lookup.
+
+## Assistant never proposes a route, and just describes one instead
+
+The model is not calling tools - either it does not support tool calling,
+or its provider is not honouring it. Moovelo never accepts a route from
+the model's prose, so a model that cannot call tools produces conversation
+and nothing else. `/admin`'s model picker filters to tool-capable models
+by default; pick one from that list.
+
+## Assistant is slow
+
+Latency is dominated by the number of tool round trips, not by the model's
+raw speed - each one grows the conversation. A route-planning turn takes
+roughly 10-25 seconds depending on model and provider, and that is normal.
+
+On a gateway that routes between providers, which provider serves you
+matters as much as the model: the same model can differ severalfold in
+both speed and price. `LLM_PROVIDER_ORDER` expresses a preference (never a
+hard pin - fallbacks stay on), and `/admin` lists per-provider price and
+context. A model that streams its answer in many small pieces also *feels*
+faster than one that delivers everything in a single chunk at the end,
+even for the same total time.
+
+## Assistant stops responding after a lot of use
+
+Each account is limited to 30 assistant turns an hour. The limit exists
+because every turn spends real money at whatever endpoint you configured,
+and one turn can involve several completions. It clears on a rolling
+window; nothing needs restarting.
+
 ## The first account I registered became admin - is that right?
 
 Yes, by design: the first user to register on a fresh instance is made
