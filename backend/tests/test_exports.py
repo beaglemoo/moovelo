@@ -50,11 +50,12 @@ def test_fit_decodes_with_expected_course_points(snapshot: RouteResponse) -> Non
         for record in decoded.records
         if isinstance(record.message, CoursePointMessage)
     ]
-    # Start maneuvers are skipped; destination of leg 1, left turn, continue,
-    # right turn, and final destination remain.
+    # Start maneuvers are skipped, and so is leg 1's destination maneuver -
+    # an arrival at a via point is not an arrival, and this assertion used to
+    # encode the opposite. Left turn, continue, right turn, and the one real
+    # destination remain.
     assert [cp.type for cp in course_points] == [
         CoursePoint.LEFT.value,
-        CoursePoint.GENERIC.value,
         CoursePoint.STRAIGHT.value,
         CoursePoint.RIGHT.value,
         CoursePoint.GENERIC.value,
@@ -197,10 +198,11 @@ def test_roundabout_spanning_a_leg_boundary_is_still_one_cue() -> None:
         for record in FitFile.from_bytes(fit).records
         if isinstance(record.message, CoursePointMessage)
     ]
-    # One roundabout cue, and no leftover "Exit the roundabout" beside it.
+    # One roundabout cue, no leftover "Exit the roundabout" beside it - and no
+    # arrival cue, because the destination maneuver here ends leg 1, not the
+    # route. This previously asserted "You have arrived." partway through.
     assert [p.course_point_name for p in points] == [
         "3rd exit onto Bulbourne Road",
-        "You have arrived.",
     ]
     assert points[0].type == CoursePoint.RIGHT.value
 
@@ -255,3 +257,22 @@ def test_course_points_stay_aligned_when_legs_do_not_share_a_vertex() -> None:
     # final vertex rather than one short of it.
     assert len(records) == 6
     assert points[-1].distance == pytest.approx(records[-1].distance)
+
+
+def test_only_the_final_leg_produces_an_arrival_cue(snapshot: RouteResponse) -> None:
+    """Valhalla ends EVERY leg with a destination maneuver, not just the last.
+
+    Mapping them all made a head unit announce the destination partway
+    through the ride - at 4.1 km of a 12.1 km route with a single via point.
+    Three review passes and the whole suite missed it because the golden
+    fixture and the decode assertion both recorded the wrong output as
+    expected.
+    """
+    _, fit = build_outputs(snapshot)
+    names = [
+        record.message.course_point_name
+        for record in FitFile.from_bytes(fit).records
+        if isinstance(record.message, CoursePointMessage)
+    ]
+    arrivals = [n for n in names if n and "arrived" in n.lower()]
+    assert len(arrivals) <= 1, f"an arrival cue per leg: {names}"

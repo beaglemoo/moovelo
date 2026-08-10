@@ -29,7 +29,7 @@ COURSE_POINT_NAME_MAX = 32
 # Valhalla maneuver type -> FIT course point type. Unlisted types fall back to
 # GENERIC; start maneuvers (0-3) produce no course point at all.
 MANEUVER_TYPE_MAP: dict[int, CoursePoint] = {
-    4: CoursePoint.GENERIC,  # destination
+    4: CoursePoint.GENERIC,  # destination - see DESTINATION_MANEUVER_TYPES
     5: CoursePoint.GENERIC,
     6: CoursePoint.GENERIC,
     7: CoursePoint.STRAIGHT,  # becomes
@@ -170,6 +170,13 @@ def _folded_roundabout_exits(flat: list[tuple[dict[str, Any], int]]) -> set[int]
     return folded
 
 
+# Valhalla ends EVERY leg with one of these, not just the last: a route with
+# two via points carries three "you have arrived". On a course file that means
+# the head unit announces the destination partway through the ride. Only the
+# final leg's arrival is real.
+DESTINATION_MANEUVER_TYPES = {4, 5, 6}
+
+
 def _course_points(
     legs: list[RouteLeg],
     shapes: list[list[Point]],
@@ -184,10 +191,16 @@ def _course_points(
     # waypoint sits on it: the enter maneuver ends one leg and the exit starts
     # the next. Folding per-leg would miss those and emit two vague cues.
     flat: list[tuple[dict[str, Any], int]] = []
-    for offset, leg in zip(_leg_offsets(shapes), legs, strict=True):
+    # Which leg each entry came from, parallel to `flat` rather than part of
+    # it: the roundabout folding below navigates by position and must not
+    # have its tuple shape changed underneath it.
+    leg_of: list[int] = []
+    for leg_index, (offset, leg) in enumerate(zip(_leg_offsets(shapes), legs, strict=True)):
         for maneuver in leg.maneuvers:
             begin_index: int = maneuver.get("begin_shape_index", 0)
             flat.append((maneuver, min(offset + begin_index, len(merged) - 1)))
+            leg_of.append(leg_index)
+    last_leg = len(legs) - 1
 
     # Identified by position rather than a running flag: Valhalla puts a
     # destination maneuver between the two halves of a roundabout that a
@@ -196,6 +209,11 @@ def _course_points(
     for position, (maneuver, index) in enumerate(flat):
         m_type = int(maneuver.get("type", 0))
         if m_type in SKIPPED_MANEUVER_TYPES or position in folded_exits:
+            continue
+        if m_type in DESTINATION_MANEUVER_TYPES and leg_of[position] != last_leg:
+            # An arrival at a via point is not an arrival. Dropped rather than
+            # retyped: there is nothing useful to tell the rider here, and the
+            # next real turn cue follows within metres.
             continue
         if m_type == ROUNDABOUT_ENTER:
             exit_maneuver = _paired_exit(flat, position)
