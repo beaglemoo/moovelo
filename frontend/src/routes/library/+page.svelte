@@ -212,7 +212,15 @@
 
 	let copiedId: string | null = $state(null);
 
+	// Generating the public summary made sharing take seconds rather than
+	// milliseconds, and nothing stopped a second click landing inside that
+	// window: two requests each minted a token, only the slower commit
+	// survived, and the link the rider had already copied 404'd.
+	let sharingId: string | null = $state(null);
+
 	async function share(item: RouteSummary) {
+		if (sharingId) return;
+		sharingId = item.id;
 		try {
 			const updated = item.share_token ? item : await routes.share(item.id);
 			items = items.map((r) => (r.id === updated.id ? { ...r, ...updated } : r));
@@ -222,6 +230,8 @@
 			setTimeout(() => (copiedId = null), 2000);
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Share failed';
+		} finally {
+			sharingId = null;
 		}
 	}
 
@@ -422,8 +432,12 @@
 								{@const b = badge(item)}
 								<span class="badge {b.cls}" title={b.title}>{b.label}</span>
 							{/if}
-							<button type="button" onclick={() => share(item)}>
-								{copiedId === item.id ? 'Copied!' : item.share_token ? 'Copy link' : 'Share'}
+							<button type="button" onclick={() => share(item)} disabled={sharingId !== null}>
+								{#if sharingId === item.id}
+									Sharing…
+								{:else}
+									{copiedId === item.id ? 'Copied!' : item.share_token ? 'Copy link' : 'Share'}
+								{/if}
 							</button>
 							{#if item.share_token}
 								<button
