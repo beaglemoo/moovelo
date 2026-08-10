@@ -95,7 +95,15 @@ class FindPoisArgs(BaseModel):
 
 class PlanRouteArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    waypoint_refs: list[HandleRef] = Field(min_length=2, max_length=12)
+    # One ref is legal, because a loop handle expands to a whole waypoint
+    # sequence on its own - and generate_loop's own result tells the model to
+    # plan with a single "loop:N". Requiring two made that instruction
+    # impossible to obey, so a real model padded the list with a ref that
+    # duplicated the loop's origin: a phantom zero-length leg, stacked
+    # markers, and a spurious point baked into every GPX and FIT export.
+    # A single ref that does NOT expand is still rejected below, with a
+    # message saying why.
+    waypoint_refs: list[HandleRef] = Field(min_length=1, max_length=12)
     # None means "whatever the rider has selected", which is the right answer
     # when the model does not say. Defaulting to "road" meant a rider with
     # gravel showing on screen got a road-costed route back and no way to
