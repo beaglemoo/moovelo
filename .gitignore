@@ -21,6 +21,15 @@ frontend/vite.config.ts.timestamp-*
 # Playwright
 frontend/test-results/
 frontend/playwright-report/
+# Ad-hoc QA screenshots. The ones the README uses are docs/screenshots/,
+# which is tracked - this is the scratch directory a local run writes to.
+frontend/screenshots/
+
+# Local scratch kept deliberately out of the repo: probe scripts and
+# one-off harnesses written while chasing a bug. Name them *.local.*
+# rather than leaving them to be caught by a stray `git add`.
+*.local.*
+!.env.example
 
 # Coverage
 .coverage
