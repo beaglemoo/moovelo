@@ -283,6 +283,7 @@ async def save_route(body: RouteSaveRequest, db: DbDep, user: UserDep) -> SavedR
     route = Route(
         user_id=user.id,
         name=body.name,
+        notes=body.notes,
         preset=body.preset,
         costing_options=body.costing_options.model_dump() if body.costing_options else None,
         waypoints=[wp.model_dump() for wp in body.waypoints],

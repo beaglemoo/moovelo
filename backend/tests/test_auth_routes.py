@@ -548,3 +548,21 @@ async def test_reverse_of_a_custom_costed_route_sends_the_custom_bundle(
     # bundle (see ValhallaClient._attributes_chunk).
     attrs_sent = json.loads(attrs_mock.calls.last.request.content)
     assert attrs_sent["costing_options"]["bicycle"] == PRESETS["road"]
+
+
+async def test_a_note_can_be_written_when_the_route_is_saved(
+    client: AsyncClient, snapshot: RouteResponse
+) -> None:
+    """The library's search advertises "names and notes", and until now there
+    was nowhere in the app to write one: the field existed end to end in the
+    backend, with no UI and no create-time path to reach it."""
+    await register(client)
+    body = save_body(snapshot)
+    body["notes"] = "Cafe at the halfway point closes at 3."
+    created = await client.post("/api/routes", json=body)
+    assert created.status_code == 201, created.text
+    assert created.json()["notes"] == "Cafe at the halfway point closes at 3."
+
+    # And it is findable, which is the point of storing it.
+    found = await client.get("/api/routes", params={"q": "halfway"})
+    assert [r["id"] for r in found.json()] == [created.json()["id"]]
