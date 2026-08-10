@@ -1874,6 +1874,19 @@
 		gap: 1rem;
 		align-items: flex-start;
 	}
+	/* The side panels are pinned at a fixed basis, so without this the
+	   elevation chart is the only flexible child and absorbs every pixel of
+	   overflow - collapsing to nothing on an ordinary laptop once four or
+	   five panels are open. It wraps instead now. */
+	.panel-body > :global(svg) {
+		flex: 1 1 22rem;
+		min-width: 18rem;
+	}
+	@media (min-width: 761px) {
+		.panel-body {
+			flex-wrap: wrap;
+		}
+	}
 	.panel-body :global(.pois),
 	.panel-body :global(.climbs),
 	.panel-body :global(.weather),
@@ -1883,6 +1896,13 @@
 		min-width: 0;
 	}
 	@media (max-width: 760px) {
+		/* Without a ceiling the panel's natural height exceeds the viewport
+		   and squeezes .map-area to exactly 0px: the map is not merely small,
+		   it is gone, and tapping where it was does nothing. */
+		.panel {
+			max-height: 55vh;
+			overflow-y: auto;
+		}
 		.panel-body {
 			flex-direction: column;
 			gap: 0.2rem;
