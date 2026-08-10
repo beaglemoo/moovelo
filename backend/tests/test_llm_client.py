@@ -8,7 +8,7 @@ import respx
 from httpx import AsyncClient, ConnectError, Response
 
 from app.config import settings
-from app.services.llm import LLMClient, LLMError
+from app.services.llm import Completed, LLMClient, LLMError
 from tests.conftest import register
 
 LLM_URL = "https://llm.test/v1"
@@ -234,3 +234,55 @@ async def test_assistant_needs_both_url_and_model(monkeypatch: pytest.MonkeyPatc
     # The API key is deliberately not part of it - a local Ollama needs none.
     monkeypatch.setattr(settings, "llm_api_key", "")
     assert settings.assistant_enabled is True
+
+
+# --- the two transports share one parser and one retry policy ---------------
+
+
+@respx.mock
+async def test_streamed_replies_carry_finish_reason(llm_settings: None) -> None:
+    """The truncation guard reads finish_reason, and the chat panel only ever
+    uses the streamed path - so a streamed reply that dropped it left the
+    guard dead exactly where max_tokens matters most."""
+    body = (
+        'data: {"choices": [{"delta": {"content": "cut off"}, "finish_reason": "length"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    respx.post(COMPLETIONS).mock(
+        return_value=Response(
+            200, content=body.encode(), headers={"content-type": "text/event-stream"}
+        )
+    )
+    async with LLMClient() as llm:
+        chunks = [chunk async for chunk in llm.stream([{"role": "user", "content": "hi"}])]
+    final = [c for c in chunks if isinstance(c, Completed)]
+    assert final and final[0].response.finish_reason == "length"
+
+
+@respx.mock
+async def test_an_in_band_error_retries_before_any_output(llm_settings: None) -> None:
+    """Raised inside stream() and caught inside stream().
+
+    The first attempt at this raised the retry from stream() while the only
+    handler sat in complete(), so it escaped uncaught and killed the turn -
+    a fix that never ran on the path that raises it.
+    """
+    good = (
+        'data: {"choices": [{"delta": {"content": "recovered"}, "finish_reason": "stop"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    route = respx.post(COMPLETIONS).mock(
+        side_effect=[
+            Response(
+                200,
+                content=b'data: {"error": {"message": "upstream blip"}}\n\n',
+                headers={"content-type": "text/event-stream"},
+            ),
+            Response(200, content=good.encode(), headers={"content-type": "text/event-stream"}),
+        ]
+    )
+    async with LLMClient() as llm:
+        chunks = [chunk async for chunk in llm.stream([{"role": "user", "content": "hi"}])]
+    assert route.call_count == 2, "the in-band error was not retried"
+    final = [c for c in chunks if isinstance(c, Completed)]
+    assert final and final[0].response.content == "recovered"

@@ -37,8 +37,23 @@ MAX_BACKOFF_S = 60.0
 MAX_COMPLETION_TOKENS = 1024
 
 
-class _RetryStream(Exception):
-    """An in-band error frame that arrived before any output was emitted."""
+NO_REPLY = "The assistant service returned no reply"
+RATE_LIMITED = "The assistant service is rate-limiting or unavailable - try again later"
+
+
+class _Retry(Exception):
+    """Ask the attempt loop to try again.
+
+    Raised from wherever the decision is actually made - an HTTP status, or an
+    in-band error frame - and always caught by the loop in the same method.
+    An earlier version raised this from `stream()` while the only handler sat
+    in `complete()`, so the exception escaped uncaught and killed the turn;
+    keeping the raise and the catch in one shape is what stops that recurring.
+    """
+
+    def __init__(self, reason: str, delay: float) -> None:
+        super().__init__(reason)
+        self.delay = delay
 
 
 class LLMError(Exception):
@@ -206,7 +221,7 @@ class LLMClient:
         tools: list[dict[str, Any]] | None = None,
         timeout: float | None = None,
     ) -> LLMResponse:
-        """One completion, retrying only 429/5xx."""
+        """One completion, waited out. Retries only 429/5xx."""
         if self._client is None:
             raise LLMError("LLM client used outside its context manager")
         url = self.config.base_url.rstrip("/") + "/chat/completions"
@@ -221,57 +236,21 @@ class LLMClient:
                     headers=headers,
                     timeout=timeout if timeout is not None else REQUEST_TIMEOUT_S,
                 )
-            except _RetryStream as retry:
-                logger.warning("Assistant stream retry %d after %s", attempt, retry)
-                await asyncio.sleep(min(2**attempt, MAX_BACKOFF_S))
-                continue
+                _check_status(response, attempt)
+                try:
+                    body = response.json()
+                except ValueError as exc:
+                    raise LLMError("The assistant service returned an unreadable response") from exc
+                return _completion_from_body(body)
+            except _Retry as retry:
+                logger.warning("Assistant request retry %d after %s", attempt, retry)
+                await asyncio.sleep(min(retry.delay, MAX_BACKOFF_S))
             except httpx.TransportError as exc:
                 if attempt == MAX_ATTEMPTS:
                     raise LLMError("The assistant service is unreachable") from exc
                 await asyncio.sleep(min(2**attempt, MAX_BACKOFF_S))
-                continue
 
-            if response.status_code == 429 or response.status_code >= 500:
-                if attempt == MAX_ATTEMPTS:
-                    break
-                # Retry-After may legally be an HTTP-date rather than
-                # delay-seconds; anything non-numeric falls back to the
-                # exponential default instead of crashing the request.
-                try:
-                    retry_after = float(response.headers.get("Retry-After", 2**attempt))
-                except ValueError:
-                    retry_after = float(2**attempt)
-                logger.warning(
-                    "Assistant request retry %d after HTTP %d", attempt, response.status_code
-                )
-                await asyncio.sleep(min(retry_after, MAX_BACKOFF_S))
-                continue
-
-            if response.status_code >= 400:
-                raise LLMError(_error_message(response))
-
-            try:
-                body = response.json()
-            except ValueError as exc:
-                raise LLMError("The assistant service returned an unreadable response") from exc
-
-            choices = body.get("choices") if isinstance(body, dict) else None
-            if not isinstance(choices, list) or not choices:
-                raise LLMError("The assistant service returned no reply")
-            message = choices[0].get("message") if isinstance(choices[0], dict) else None
-            if not isinstance(message, dict):
-                raise LLMError("The assistant service returned no reply")
-            usage = body.get("usage")
-            provider = body.get("provider")
-            reason = choices[0].get("finish_reason")
-            return _parse_message(
-                message,
-                usage if isinstance(usage, dict) else None,
-                provider if isinstance(provider, str) else None,
-                reason if isinstance(reason, str) else None,
-            )
-
-        raise LLMError("The assistant service is rate-limiting or unavailable - try again later")
+        raise LLMError(RATE_LIMITED)
 
     async def stream(
         self,
@@ -282,16 +261,15 @@ class LLMClient:
         """One completion, delivered as it arrives.
 
         Yields TextDelta for each fragment of prose and exactly one Completed
-        at the end, carrying the same LLMResponse `complete()` would have
-        returned. Tool calls cannot be streamed usefully - the arguments are
-        a JSON string that is only valid once whole - so they accumulate
-        silently and appear on the Completed.
+        carrying the same LLMResponse `complete()` would have returned - the
+        same object, built by the same parser, because the two used to build
+        it separately and drifted three times running (tool-call ids, then
+        error frames, then finish_reason, each fixed in one path only).
 
-        Retries are narrower than `complete()`'s deliberately: once a single
-        delta has been handed to the caller it has already reached the
-        rider's screen, and starting the completion again would repeat text
-        rather than replace it. So a failure mid-body is terminal, and only
-        one that happens before any output can be retried.
+        Retries are narrower than `complete()`'s deliberately: once a delta
+        has been handed to the caller it has reached the rider's screen, and
+        starting again would repeat text rather than replace it. So a failure
+        mid-body is terminal, and only one before any output is retried.
         """
         if self._client is None:
             raise LLMError("LLM client used outside its context manager")
@@ -306,6 +284,7 @@ class LLMClient:
             # calls interleaves their fragments rather than finishing one
             # before starting the next.
             calls: dict[int, dict[str, str]] = {}
+            finish_reason: str | None = None
             try:
                 async with self._client.stream(
                     "POST",
@@ -314,24 +293,11 @@ class LLMClient:
                     headers=headers,
                     timeout=timeout if timeout is not None else REQUEST_TIMEOUT_S,
                 ) as response:
-                    if response.status_code == 429 or response.status_code >= 500:
-                        await response.aread()
-                        if attempt == MAX_ATTEMPTS:
-                            break
-                        try:
-                            retry_after = float(response.headers.get("Retry-After", 2**attempt))
-                        except ValueError:
-                            retry_after = float(2**attempt)
-                        logger.warning(
-                            "Assistant stream retry %d after HTTP %d",
-                            attempt,
-                            response.status_code,
-                        )
-                        await asyncio.sleep(min(retry_after, MAX_BACKOFF_S))
-                        continue
                     if response.status_code >= 400:
+                        # _error_message needs a body, which a streamed
+                        # response has not read yet.
                         await response.aread()
-                        raise LLMError(_error_message(response))
+                    _check_status(response, attempt)
 
                     saw_payload = False
                     async for line in response.aiter_lines():
@@ -340,35 +306,33 @@ class LLMClient:
                             continue
                         # Gateways report a mid-generation failure - quota,
                         # rate limit, content policy - as an error frame on a
-                        # 200 that has already gone out. Ignoring it handed
-                        # the rider a truncated answer presented as a whole
-                        # one, which is the worst shape a failure can take
-                        # here: indistinguishable from a short reply.
+                        # 200 that has already gone out. Before any output
+                        # that is the same situation as a 5xx, so it retries
+                        # like one; after, retrying would repeat text.
                         if "error" in event:
-                            # Before any output this is the same situation as
-                            # a 5xx - the sibling branch retries it, and a
-                            # transient upstream blip should not be terminal
-                            # here just because it arrived in-band. Once a
-                            # delta has shipped, retrying would repeat text,
-                            # so then it is terminal.
-                            stream_error = _stream_error_message(event["error"])
+                            message = _stream_error_message(event["error"])
                             if emitted or attempt == MAX_ATTEMPTS:
-                                raise LLMError(stream_error)
-                            raise _RetryStream(stream_error)
+                                raise LLMError(message)
+                            raise _Retry(message, float(2**attempt))
                         # A trailing usage frame carries an empty choices
                         # list; that is not a reply, and counting it meant an
-                        # endpoint that sent only that looked successful.
-                        if event.get("choices"):
+                        # endpoint sending only that looked successful.
+                        choices = event.get("choices")
+                        if choices:
                             saw_payload = True
+                            reason = choices[0].get("finish_reason")
+                            if isinstance(reason, str):
+                                finish_reason = reason
                         text = _accumulate(event, content, calls)
                         if text:
                             emitted = True
                             yield TextDelta(text)
                     if not saw_payload:
-                        # complete() has the same guard. A stream that closes
-                        # having carried nothing is a failure, not an empty
-                        # but successful answer.
-                        raise LLMError("The assistant service returned no reply")
+                        raise LLMError(NO_REPLY)
+            except _Retry as retry:
+                logger.warning("Assistant stream retry %d after %s", attempt, retry)
+                await asyncio.sleep(min(retry.delay, MAX_BACKOFF_S))
+                continue
             except httpx.TransportError as exc:
                 if emitted:
                     raise LLMError("The assistant service disconnected mid-reply") from exc
@@ -377,10 +341,53 @@ class LLMClient:
                 await asyncio.sleep(min(2**attempt, MAX_BACKOFF_S))
                 continue
 
-            yield Completed(_assemble(content, calls))
+            yield Completed(_assemble(content, calls, finish_reason))
             return
 
-        raise LLMError("The assistant service is rate-limiting or unavailable - try again later")
+        raise LLMError(RATE_LIMITED)
+
+
+def _retry_after(response: httpx.Response, attempt: int) -> float:
+    """Retry-After may legally be an HTTP-date rather than delay-seconds;
+    anything non-numeric falls back to the exponential default."""
+    try:
+        return float(response.headers.get("Retry-After", 2**attempt))
+    except ValueError:
+        return float(2**attempt)
+
+
+def _check_status(response: httpx.Response, attempt: int) -> None:
+    """The single place an HTTP status decides retry, fail, or proceed.
+
+    Both transports call this, so neither can quietly grow its own policy -
+    which is how they came to disagree about in-band errors and truncation.
+    """
+    if response.status_code == 429 or response.status_code >= 500:
+        if attempt == MAX_ATTEMPTS:
+            raise LLMError(RATE_LIMITED)
+        raise _Retry(f"HTTP {response.status_code}", _retry_after(response, attempt))
+    if response.status_code >= 400:
+        raise LLMError(_error_message(response))
+
+
+def _completion_from_body(body: Any) -> LLMResponse:
+    """A whole (non-streamed) response body, through the shared parser."""
+    choices = body.get("choices") if isinstance(body, dict) else None
+    if not isinstance(choices, list) or not choices:
+        raise LLMError(NO_REPLY)
+    first = choices[0] if isinstance(choices[0], dict) else {}
+    message = first.get("message")
+    if not isinstance(message, dict):
+        raise LLMError(NO_REPLY)
+    usage = body.get("usage")
+    provider = body.get("provider")
+    reason = first.get("finish_reason")
+    return _parse_message(
+        message,
+        usage if isinstance(usage, dict) else None,
+        provider if isinstance(provider, str) else None,
+        reason if isinstance(reason, str) else None,
+    )
 
 
 def _parse_sse_line(line: str) -> dict[str, Any] | None:
@@ -443,7 +450,11 @@ def _accumulate(
     return ""
 
 
-def _assemble(content: list[str], calls: dict[int, dict[str, str]]) -> LLMResponse:
+def _assemble(
+    content: list[str],
+    calls: dict[int, dict[str, str]],
+    finish_reason: str | None = None,
+) -> LLMResponse:
     """Rebuild the assistant message the non-streaming path would have got.
 
     Only the standard fields survive a stream - `complete()` replays the
@@ -470,7 +481,9 @@ def _assemble(content: list[str], calls: dict[int, dict[str, str]]) -> LLMRespon
         )
     if tool_calls:
         message["tool_calls"] = tool_calls
-    return _parse_message(message)
+    # Same parser as the non-streamed path, so finish_reason, tool-call
+    # parsing and content extraction cannot diverge between transports again.
+    return _parse_message(message, finish_reason=finish_reason)
 
 
 def _stream_error_message(error: Any) -> str:
