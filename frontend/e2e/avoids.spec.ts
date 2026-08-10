@@ -34,6 +34,15 @@ test('avoid a road from the context menu, then remove it', async ({ page }) => {
 		return [box.x + box.width / 2 + dx, box.y + box.height / 2 + dy];
 	}
 
+	// A fixed pixel offset from the centre is not safe for anything far out:
+	// the map is only a few hundred pixels tall once the panel below it has
+	// grown, so the old (150, -150) landed above the canvas entirely and the
+	// right-click went to the toolbar. Fractions of the live box stay inside.
+	async function canvasFraction(fx: number, fy: number): Promise<[number, number]> {
+		const box = (await canvas.boundingBox())!;
+		return [box.x + box.width * fx, box.y + box.height * fy];
+	}
+
 	// Two waypoints on a diagonal - the first click retries until it lands:
 	// MapView only attaches its interaction handlers on the map's `load`
 	// event, so an early click silently no-ops when tiles are still arriving.
@@ -58,7 +67,7 @@ test('avoid a road from the context menu, then remove it', async ({ page }) => {
 
 	// An empty-canvas right-click, off the route line, must not offer
 	// "Avoid this road" - only "Isochrone from here" and friends live there.
-	await page.mouse.click(...(await canvasPoint(150, -150)), { button: 'right' });
+	await page.mouse.click(...(await canvasFraction(0.85, 0.25)), { button: 'right' });
 	await expect(page.getByRole('menuitem', { name: 'Route from here' })).toBeVisible();
 	await expect(page.getByRole('menuitem', { name: 'Avoid this road' })).toHaveCount(0);
 	await page.keyboard.press('Escape');

@@ -750,27 +750,43 @@
 			if (typeof index === 'number') onAlternateClick?.(index);
 		});
 
-		const startDrag = (
-			grab: maplibregl.LngLat,
-			moveEvent: 'mousemove' | 'touchmove',
-			endEvent: 'mouseup' | 'touchend'
-		) => {
+		// The gesture is tracked on `window`, not on the map. The map only sees
+		// a pointer release over its own canvas container, and floating
+		// controls sit on top of that canvas - the basemap switch, the toolbar,
+		// the panel cards. Letting go of a dragged line over any of them used
+		// to drop the gesture silently: no via inserted, the ghost point left
+		// on the map, and the move listener never detached. On a laptop the map
+		// is short enough that those controls cover a real share of it, so this
+		// was not an edge case.
+		const startDrag = (grab: maplibregl.LngLat, kind: 'mouse' | 'touch') => {
 			const grabIndex = nearestVertexIndex(routeLine, [grab.lng, grab.lat]);
+			// Unprojecting needs canvas-relative coordinates, and the canvas
+			// moves as the panel below it grows, so the rect is re-read per move.
+			const canvas = m.getCanvas();
+			const moveEvent = kind === 'mouse' ? 'mousemove' : 'touchmove';
+			const endEvent = kind === 'mouse' ? 'mouseup' : 'touchend';
 			let last = grab;
-			const onMove = (ev: maplibregl.MapMouseEvent | maplibregl.MapTouchEvent) => {
-				last = ev.lngLat;
+			const onMove = (ev: MouseEvent | TouchEvent) => {
+				// A touchend carries no touches; a second finger means the rider
+				// is pinching, not dragging. Either way, keep the last position.
+				const point = 'touches' in ev ? (ev.touches.length === 1 ? ev.touches[0] : null) : ev;
+				if (!point) return;
+				const rect = canvas.getBoundingClientRect();
+				last = m.unproject([point.clientX - rect.left, point.clientY - rect.top]);
 				setSourceData(m, 'drag-point', pointGeoJSON([last.lng, last.lat]));
 			};
-			m.on(moveEvent, onMove);
-			m.once(endEvent, () => {
-				m.off(moveEvent, onMove);
+			const onEnd = () => {
+				window.removeEventListener(moveEvent, onMove);
+				window.removeEventListener(endEvent, onEnd);
 				setSourceData(m, 'drag-point', pointGeoJSON(null));
 				// The grabbed vertex sits inside some leg; the new via goes
 				// between that leg's endpoints.
 				let leg = 0;
 				while (leg + 1 < legStartIndices.length && legStartIndices[leg + 1] <= grabIndex) leg++;
 				onInsertVia(leg + 1, { lat: last.lat, lon: last.lng });
-			});
+			};
+			window.addEventListener(moveEvent, onMove);
+			window.addEventListener(endEvent, onEnd);
 		};
 
 		// Waypoint markers sit on the route line and their DOM events bubble to
@@ -784,12 +800,12 @@
 		m.on('mousedown', 'route-hit', (e) => {
 			if (e.originalEvent.button !== 0 || onMarker(e)) return;
 			e.preventDefault();
-			startDrag(e.lngLat, 'mousemove', 'mouseup');
+			startDrag(e.lngLat, 'mouse');
 		});
 		m.on('touchstart', 'route-hit', (e) => {
 			if (e.points.length !== 1 || onMarker(e)) return;
 			e.preventDefault();
-			startDrag(e.lngLat, 'touchmove', 'touchend');
+			startDrag(e.lngLat, 'touch');
 		});
 	}
 
