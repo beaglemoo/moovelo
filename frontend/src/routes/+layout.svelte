@@ -68,9 +68,22 @@
 		user = null;
 		await goto('/login');
 	}
+	/** The browser's own "leave site?" prompt when the planner is holding
+	 * edits. Reloading or closing the tab discarded them silently, which is
+	 * the one destructive action in the app with no confirmation - unlike
+	 * importing, which already routes through `unsaved`. */
+	function warnOnUnsaved(event: BeforeUnloadEvent) {
+		if (!unsaved.dirty) return;
+		event.preventDefault();
+	}
 </script>
 
-<svelte:window ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} />
+<svelte:window
+	ondragover={onDragOver}
+	ondragleave={onDragLeave}
+	ondrop={onDrop}
+	onbeforeunload={warnOnUnsaved}
+/>
 
 <div class="shell">
 	{#if user}

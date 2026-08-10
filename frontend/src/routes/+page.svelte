@@ -103,6 +103,7 @@
 	}
 	let saveDialogOpen = $state(false);
 	let saveNameInput = $state('');
+	let saveNotesInput = $state('');
 	let saving = $state(false);
 	let suggestingName = $state(false);
 	// Points of interest. `poiGroups` survives across routes on purpose: the
@@ -1188,7 +1189,8 @@
 				waypoints,
 				preset: storedPreset,
 				costing_options: customCostingOptions,
-				snapshot
+				snapshot,
+				notes: saveNotesInput.trim() || null
 			});
 			savedSignature = persisted;
 			// Compared, not assumed: an edit that landed during the round trip
@@ -1247,6 +1249,7 @@
 			// See save(): compared rather than assumed.
 			dirty = savedStateSignature() !== savedSignature;
 			saveDialogOpen = false;
+			saveNotesInput = '';
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Save failed';
 		} finally {
@@ -1501,6 +1504,15 @@
 							</button>
 						{/if}
 					</div>
+					<label class="dialog-notes">
+						Notes
+						<textarea
+							bind:value={saveNotesInput}
+							rows="2"
+							maxlength="5000"
+							placeholder="Anything worth remembering about this ride"
+						></textarea>
+					</label>
 					<div class="dialog-buttons">
 						<button type="button" onclick={() => (saveDialogOpen = false)}>Cancel</button>
 						<button type="submit" class="primary" disabled={saving || !saveNameInput.trim()}>
@@ -1766,6 +1778,20 @@
 	.dialog-name-row .suggest-name:disabled {
 		opacity: 0.6;
 		cursor: default;
+	}
+	.dialog-notes {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		font-size: 0.85rem;
+		color: #586e75;
+	}
+	.dialog-notes textarea {
+		font: inherit;
+		padding: 0.4rem 0.5rem;
+		border: 1px solid #ccc;
+		border-radius: 6px;
+		resize: vertical;
 	}
 	.dialog-buttons {
 		display: flex;

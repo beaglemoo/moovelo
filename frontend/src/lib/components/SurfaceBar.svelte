@@ -35,7 +35,10 @@
 			{ key: 'gravel', label: 'Gravel', metres: gravel, colour: '#b58900' },
 			{ key: 'path', label: 'Path', metres: path, colour: '#859900' },
 			{ key: 'other', label: 'Other', metres: other, colour: '#93a1a1' }
-		].filter((g) => g.metres > 0);
+			// A sliver that rounds to 0% is real but not worth a legend row
+			// reading "Gravel 0%", which reads as a bug rather than as a few
+			// metres of it. The bar segment would be invisible anyway.
+		].filter((g) => g.metres > 0 && Math.round((g.metres / surface.total_m) * 100) > 0);
 	});
 
 	// The cycleway figure is deliberately not derived from use_m: surface mix

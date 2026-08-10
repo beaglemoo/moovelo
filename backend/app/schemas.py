@@ -286,6 +286,10 @@ class RouteSaveRequest(BaseModel):
     preset: StoredPreset
     costing_options: BicycleCostingOptions | None = None
     snapshot: RouteResponse
+    # Same bound as RoutePatchRequest. Saveable at creation because the
+    # library's search advertises "names and notes", and until now there was
+    # nowhere in the app to write one.
+    notes: str | None = Field(default=None, max_length=5000)
 
     @model_validator(mode="after")
     def _custom_and_options_travel_together(self) -> "RouteSaveRequest":
