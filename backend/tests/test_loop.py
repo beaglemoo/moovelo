@@ -327,3 +327,29 @@ async def test_route_loop_rejects_target_over_200km(client: AsyncClient) -> None
         "/api/route/loop", json={"origin": {"lat": ORIGIN.lat, "lon": ORIGIN.lon}, "target_km": 201}
     )
     assert response.status_code == 422
+
+
+def test_a_ferry_candidate_is_not_a_bike_loop() -> None:
+    """An origin with no cycling network still routes.
+
+    Valhalla answers a loop request from open water with a car ferry, and the
+    generator reported the Portsmouth crossing as an ordinary 29 km ride with
+    a 1 km distance error and no warning at all. Bicycle costing allows
+    ferries because a real route may legitimately use one, so the candidate
+    is rejected rather than the concept.
+    """
+    from app.services.loop import _uses_a_ferry
+
+    ferry = make_snapshot()
+    ferry.legs[0].maneuvers = [
+        {"type": 2, "instruction": "Bike south on Portsmouth (UK) - Ouistreham (F).", "ferry": True}
+    ]
+    assert _uses_a_ferry(ferry) is True
+
+    # travel_mode reads "bicycle" and travel_type "road" on a ferry leg, so
+    # an ordinary road maneuver must not trip it.
+    road = make_snapshot()
+    road.legs[0].maneuvers = [
+        {"type": 2, "instruction": "Bike south.", "travel_mode": "bicycle", "travel_type": "road"}
+    ]
+    assert _uses_a_ferry(road) is False

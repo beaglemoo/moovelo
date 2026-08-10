@@ -54,6 +54,26 @@ class _Attempt:
         self.snapshot = snapshot
 
 
+def _uses_a_ferry(snapshot: RouteResponse) -> bool:
+    """Whether any leg of this candidate is a boat crossing.
+
+    An origin with no cycling network near it - a point in open water, most
+    obviously - still routes: Valhalla happily returns a car ferry, and the
+    generator reported the Portsmouth to Le Havre crossing as a perfectly
+    ordinary 29 km ride with a 1 km distance error and no warning. Bicycle
+    costing allows ferries because a real route may legitimately use one, so
+    this rejects only the candidate, not the concept.
+    """
+    for leg in snapshot.legs:
+        for maneuver in leg.maneuvers:
+            # Valhalla carries a dedicated boolean here. travel_mode still
+            # reads "bicycle" and travel_type "road" on a ferry leg, so
+            # neither of those is the signal.
+            if maneuver.get("ferry") is True:
+                return True
+    return False
+
+
 async def generate_loop_candidates(
     origin: Waypoint,
     target_km: float,
@@ -108,6 +128,7 @@ async def generate_loop_candidates(
             score=score,
         )
         for attempt, (snapshot, score) in zip(survivors, scored, strict=True)
+        if not _uses_a_ferry(snapshot)
     ]
     candidates.sort(key=lambda c: c.score)
     return _dedup_by_via(candidates, LOOP_CANDIDATES, LOOP_DEDUP_KM * 1000.0)
