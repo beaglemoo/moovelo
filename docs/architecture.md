@@ -606,7 +606,14 @@ handles it was given, so the server keeps no session.
 
 `POST /api/routes/import` takes a GPX, TCX or FIT upload.
 `services/importer.py` parses it (namespace-agnostic, tracks or route
-points, dropping implausible fixes); `services/import_routes.py` then map
+points, dropping implausible fixes). It also reads per-point timestamps
+where the file carries them, and records whether the file *declares*
+itself a course or an activity - FIT says so in its `file_id` message and
+TCX in its element structure, while GPX has no equivalent and stays
+undeclared. Timestamps alone cannot make that call: Moovelo's own course
+export stamps every record with a time derived from the routing duration,
+so a course it wrote would otherwise read as a recorded ride.
+`services/import_routes.py` then map
 matches the track through Valhalla `/trace_route` with
 `shape_match=map_snap`, which is what recovers the maneuvers an uploaded
 file does not have. Tracks are thinned to roughly one point per 15 m and
