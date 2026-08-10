@@ -292,10 +292,19 @@ async function errorDetail(response: Response): Promise<string> {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-	const response = await fetch(path, {
-		headers: typeof init?.body === 'string' ? { 'Content-Type': 'application/json' } : undefined,
-		...init
-	});
+	let response: Response;
+	try {
+		response = await fetch(path, {
+			headers: typeof init?.body === 'string' ? { 'Content-Type': 'application/json' } : undefined,
+			...init
+		});
+	} catch (err) {
+		// A dead backend otherwise surfaced the browser's own wording -
+		// "Failed to fetch" or "Load failed" depending on the browser - which
+		// tells a rider nothing about what to do.
+		if (err instanceof DOMException && err.name === 'AbortError') throw err;
+		throw new ApiError(0, 'Cannot reach the server - check it is running.');
+	}
 	if (!response.ok) {
 		throw new ApiError(response.status, await errorDetail(response));
 	}
