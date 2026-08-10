@@ -51,6 +51,11 @@
 	let busy = $state(false);
 	let status = $state('');
 	let error = $state<string | null>(null);
+	// Why the last turn ended, when it did not end normally. A proposal built
+	// during a turn that ran out of budget, timed out or got stuck is a
+	// partial answer, and presenting it identically to a confident one invites
+	// a one-click accept of a route the assistant itself hedged about.
+	let incomplete = $state<string | null>(null);
 	let log = $state<HTMLDivElement | null>(null);
 	// Refs minted in earlier turns. The server keeps no conversation state, so
 	// carrying these is what lets turn three still resolve "place:1".
@@ -92,6 +97,7 @@
 
 		busy = true;
 		status = 'Thinking';
+		incomplete = null;
 		controller = new AbortController();
 		const history = entries
 			.filter((entry) => entry.text || entry.role === 'user')
@@ -132,6 +138,7 @@
 						break;
 					case 'done':
 						status = '';
+						incomplete = event.stoppedEarly;
 						break;
 				}
 			}
@@ -198,7 +205,12 @@
 		{/if}
 	</div>
 	{#if proposal}
-		<div class="assistant-proposal">
+		<div class="assistant-proposal" class:partial={incomplete}>
+			{#if incomplete}
+				<p class="assistant-proposal-warning">
+					This is as far as I got - check it before using it.
+				</p>
+			{/if}
 			<!-- Every figure here is read off the snapshot Valhalla returned,
 			     never off the model's prose - the prompt forbids inventing
 			     numbers, but this is what makes it structurally impossible for
@@ -273,6 +285,17 @@
 	.assistant-error {
 		margin: 0;
 		color: #dc322f;
+	}
+	.assistant-proposal.partial {
+		border-color: #b58900;
+		background: #b589001a;
+		flex-wrap: wrap;
+	}
+	.assistant-proposal-warning {
+		margin: 0;
+		width: 100%;
+		font-size: 0.8rem;
+		color: #7a5c00;
 	}
 	.assistant-proposal {
 		display: flex;
