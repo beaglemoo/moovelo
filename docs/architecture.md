@@ -11,6 +11,7 @@ flowchart LR
         BE[FastAPI backend<br/>:17777]
         VH[Valhalla<br/>:8002 internal]
         PG[(Postgres/PostGIS)]
+        IDX[Indexer sidecar<br/>opt-in, one-shot]
     end
     subgraph External
         PUB[Public CyclOSM / OSM tiles]
@@ -18,24 +19,34 @@ flowchart LR
         OIDC[OIDC provider<br/>optional]
         WAHOO[Wahoo Cloud API<br/>optional]
         WEATHER[Open-Meteo-compatible API<br/>optional]
+        LLM[OpenAI-compatible LLM endpoint<br/>optional]
     end
 
     UI -->|/api/*| BE
-    BE -->|/route, /height, /trace_attributes, /isochrone| VH
+    BE -->|/route, /trace_route, /trace_attributes, /height, /isochrone| VH
     BE --> PG
+    IDX -->|reads the extract Valhalla downloaded, read-only| VH
+    IDX -->|publishes places/pois/cycle_ways/osm_ways| PG
     BE -.->|token exchange| OIDC
     BE -.->|queued FIT pushes| WAHOO
     BE -.->|wind, on "Show wind" only| WEATHER
+    BE -.->|chat completions, only when configured| LLM
     UI -->|raster tiles| PUB
     UI -.->|raster tiles when TILE_URL_CYCLOSM set| SELF
 ```
 
 | Component | Technology | Role |
 |-----------|------------|------|
-| frontend | SvelteKit + MapLibre GL JS, static SPA build | Planner, library, admin, share pages |
-| backend | Python 3.12, FastAPI, SQLAlchemy async, httpx | API + static host; proxies Valhalla, talks to Wahoo |
-| postgres | PostGIS 16 | Users, sessions, routes (geometry + snapshot), Wahoo tokens |
-| valhalla | Official `valhalla-scripted` image | Bicycle routing and elevation; never exposed directly |
+| frontend | SvelteKit + MapLibre GL JS, static SPA build | Planner, library, activities, admin, share pages |
+| backend | Python 3.12, FastAPI, SQLAlchemy async, httpx | API + static host; proxies Valhalla, talks to Wahoo/weather/LLM |
+| postgres | PostGIS 16 | Users, sessions, routes and activities (geometry + snapshot), the place index, Wahoo tokens, LLM settings |
+| valhalla | Official `valhalla-scripted` image | Bicycle routing, elevation, and map-matching (imports, coverage); never exposed directly |
+| indexer | Python + pyosmium, own Dockerfile and lockfile, compose profile `index` | Opt-in, one-shot: parses the OSM extract Valhalla already downloaded into places/POIs/cycle routes and (with `INDEX_ROADS=true`) every bikeable road |
+
+Nothing in the "Compose stack" box makes an outbound call by default -
+every arrow into "External" is opt-in and gated behind its own
+configuration (see [FAQ: does any of my data leave my
+network?](faq.md#does-any-of-my-data-leave-my-network)).
 
 ## Request flow for a route
 
@@ -379,6 +390,68 @@ Two asyncpg lessons are worth not relearning, both in
 cannot be typed ("could not determine data type of parameter $1"), and an
 empty array parameter cannot either ("could not determine polymorphic
 type because input has type unknown"). Both need an explicit `CAST`.
+
+## Strava bulk import
+
+`POST /api/activities/import/archive` takes the zip Strava emails when a
+rider requests their account archive - the bulk-export path, not the API
+(`services/activity_import.py`; the clause-by-clause reasoning for why is
+in [the FAQ](faq.md#why-is-there-no-strava-sync)). It answers 202 with a
+job id rather than blocking: hundreds of files at seconds of CPU each is
+minutes of work, and the single-file endpoint's own reasoning for parsing
+off the event loop applies here at archive scale, so `ArchiveImportQueue`
+is a one-worker queue like `wahoo_queue.py` and `way_matching.py`'s -
+`GET /api/activities/import/archive/{job_id}` polls `ImportJob`'s
+in-memory status (`queued -> running -> done/error`, plus
+imported/failed/skipped/duplicate counts and up to 20 per-file problem
+strings). A job is process memory only, so a restart mid-import reports
+"interrupted", not a silent resume against bytes that are gone.
+
+**Reading the archive never trusts the archive.** `list_entries` bounds
+entry count (`MAX_ENTRIES`, 20,000) and claimed total size before opening
+anything, and `_read_entry`/`_decompress_member` read every member -
+including gzipped ones - in fixed chunks against a hard per-file cap
+rather than trusting `ZipInfo.file_size`, which a hostile zip is free to
+lie in. A path is also rejected outright if it tries to escape the
+archive (`_safe_path`); nothing here is ever written to disk, so
+traversal cannot overwrite a file, but it is still a sign of an archive
+Strava did not produce.
+
+**`activities.csv` decides what's a ride, but its absence does not stop
+the import.** Strava's own manifest names each file's activity type;
+`is_ride` keeps anything matching `ride`/`cycl`/`bike`/`biking` by
+substring and, deliberately, keeps anything the manifest does not name at
+all - an unrecognised or missing type is imported rather than silently
+dropped, on the reasoning that a file that turns out not to be a ride
+will simply fail to parse or add one stray line to the map, which costs
+less than losing a rider's data to a locale Strava's export did not
+anticipate. A hand-assembled zip of GPX files with no manifest at all is
+just as valid an input: every file that looks like a track is taken at
+face value.
+
+**Deduplication is per rider, on the Strava activity id embedded in each
+export filename** (`strava_activity_id`, `services/activities.py`), read
+once as `Activity.source_ref` for every existing row before the archive
+is walked. Re-uploading a fresher archive next year costs nothing beyond
+the new rides - the dedup set is user-scoped, so two riders can never
+collide on the same Strava id. Files with no derivable id (a hand-built
+zip) are imported unconditionally; there is nothing to deduplicate them
+against.
+
+**One failed file costs that file, not the archive.** Each entry is
+parsed inside its own `try`/`except`, and a `RouteImportError` or
+`ArchiveError` increments `failed` and appends a `path: reason` string to
+`problems` rather than aborting the loop - the same "degrade per unit of
+work, not the whole request" shape as `trace_route`'s chunking. The
+manifest's own activity name wins over whatever the file calls itself,
+since it is the name the rider actually gave the ride.
+
+Newly created activities are handed to `way_matching.py`'s queue **after
+the whole archive commits**, the same "off the request path" reasoning
+`POST /api/activities/import` uses for a single file: matching hundreds
+of rides is itself minutes of Valhalla round trips, so coverage lags a
+bulk import by however long that queue takes to drain, rather than
+holding the archive job open for it.
 
 ## Personal heatmap
 
@@ -1269,18 +1342,28 @@ is re-routed stops being an import.
 frontend/src/
 ├── routes/
 │   ├── +layout.svelte           # auth guard + nav
+│   ├── +layout.ts               # ssr/prerender both off - the app is a client-only SPA
 │   ├── +page.svelte             # planner: state, reroute + save + wahoo orchestration
 │   ├── login/+page.svelte       # password and/or SSO login
 │   ├── library/+page.svelte     # saved routes, exports, wahoo, share
+│   ├── activities/+page.svelte  # activity list, import, coverage card (heatmap toggle lives on the map itself)
+│   ├── settings/+page.svelte    # rider settings (weight, flat-road speed, FTP) for ride time
 │   ├── admin/+page.svelte       # users/stats/config (admins)
 │   └── s/[token]/+page.svelte   # public read-only shared route
 └── lib/
     ├── api.ts                   # backend client + response types
     ├── polyline.ts              # polyline6 decoder
     ├── geo.ts                   # haversine, distance interpolation helpers
+    ├── format.ts                # shared display formatting (e.g. km())
+    ├── gradient.ts               # gradient banding shared by the elevation chart and the map line
+    ├── climbs.ts                # climb category colours, reusing gradient.ts's palette
+    ├── surface.ts                # the one PAVED_SURFACES list, shared by SurfaceBar and loop scoring
+    ├── pois.ts                   # POI category -> filter-chip grouping
     ├── unsaved.svelte.ts        # $state singleton: unsaved-edits flag for the layout's file drop
     ├── history.svelte.ts        # $state singleton: undo/redo stack over planner inputs
-    ├── map/MapView.svelte       # MapLibre init, layers, interactions, basemap toggle
+    ├── import.svelte.ts         # $state ImportQueue: sequential upload, shared by library import,
+    │                            #   the window-wide drop target and the activities page
+    ├── map/MapView.svelte       # MapLibre init, layers, interactions, basemap/cycle-network/heatmap toggles
     └── components/
         ├── PresetSelector.svelte
         ├── PresetSlidersPopover.svelte  # per-option costing sliders + saved presets
@@ -1295,6 +1378,7 @@ frontend/src/
         ├── ImportResults.svelte      # per-file upload result rows
         ├── LLMSettingsPanel.svelte   # /admin: endpoint, model browser, provider routing, test
         ├── AssistantPanel.svelte     # chat log, tool status, stop, proposal card
+        ├── CoverageCard.svelte       # /activities: cycle-network + all-roads %, "Match older rides"
         └── WaypointList.svelte       # route-order list: reorder (drag or up/down), remove, reverse-geocoded names
 ```
 
@@ -1334,7 +1418,6 @@ backend/app/
 │   ├── llm_admin.py         # /api/admin/llm: settings, model + provider browser, test probe
 │   ├── wahoo.py             # connect/callback/status/push
 │   └── admin.py             # /api/admin (admin accounts only)
-├── alembic/                 # migrations, run on startup
 └── services/
     ├── presets.py           # the three costing bundles + resolve_costing
     ├── polyline.py          # polyline6 decoder
@@ -1365,6 +1448,11 @@ backend/app/
     └── wahoo.py, wahoo_queue.py  # Wahoo client + background push worker
 ```
 
+Migrations live in `backend/alembic/` - a sibling of `app/`, not nested
+under it. `backend/entrypoint.sh` runs `alembic upgrade head` before
+`exec`-ing the server, using `alembic.ini`'s `script_location`, which
+points there. `backend/tests/` is the third sibling.
+
 The indexer is a sibling of `backend/`, with its own dependencies and
 lockfile, because it shares nothing with the ASGI stack:
 
@@ -1375,6 +1463,7 @@ indexer/indexer/
 ├── extract.py               # the two pyosmium passes
 ├── geometry.py              # way centroids, accent folding
 ├── db.py                    # COPY into staging, then publish
+├── config.py                # pydantic-settings: DATABASE_URL, OSM_DIR, WORK_DIR, INDEX_ROADS
 └── build.py                 # entrypoint
 ```
 

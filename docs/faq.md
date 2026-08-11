@@ -2,13 +2,23 @@
 
 ## Do I need the place index?
 
-No. Search, POIs along a route, reverse geocoding, and the cycle-network
-overlay are all built from an optional, opt-in indexer
+No, for most of what the index provides. Search, POIs along a route,
+reverse geocoding, and the cycle-network overlay are all built from an
+optional, opt-in indexer
 (`docker compose --profile index run --rm indexer`). Without it, the app
 works exactly as a default install: plan, save, export, import, Wahoo
 sync, surface breakdown, gradient colouring, climbs and ride time all
 work with no index at all. Building it just adds search and POIs on top.
 See [docs/data.md](data.md).
+
+Importing activities and the personal heatmap they build **do not** need
+the index at all - they only read your own imported rides. Cycle-network
+and all-roads coverage on the other hand **do** need it: coverage counts
+your ridden ways against the signed network (or, with `INDEX_ROADS=true`,
+every bikeable road) the indexer publishes, so without an index built -
+or with one built before those tables existed - the coverage card says
+"needs a re-index" rather than a dishonest 0%. See
+[docs/troubleshooting.md](troubleshooting.md#cycle-network-coverage-says-needs-a-re-index).
 
 ## Why does my imported route have no turn cues (or no surface bar)?
 
@@ -152,8 +162,20 @@ the first start so slow" below).
 ## Does any of my data leave my network?
 
 Your route data does not, by default. Routing, storage, and (with the
-opt-in indexer) search and POIs are all local. Two things are genuine
-exceptions, and both are opt-in:
+opt-in indexer) search and POIs are all local.
+
+**Activities, the personal heatmap and cycle-network/all-roads coverage
+are all local too - nothing about them is new here.** Importing a ride
+(a single file or a Strava bulk-export zip) parses it entirely on your
+own backend; the heatmap is your own traces read back as vector tiles
+from your own Postgres; coverage matches those traces against the
+`cycle_ways`/`osm_ways` tables the opt-in indexer already built, again
+entirely in your own database. None of it calls anything external. The
+only place Strava is even mentioned is the bulk-export zip you already
+downloaded from your own account - see
+["Why is there no Strava sync?"](#why-is-there-no-strava-sync) below.
+
+Three things are genuine exceptions, and all three are opt-in:
 
 - **Wahoo sync** - only if you configure `WAHOO_CLIENT_ID`/`WAHOO_CLIENT_SECRET`
   and connect an account. Pushing a route uploads its FIT file to Wahoo's

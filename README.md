@@ -119,15 +119,18 @@ with turn-by-turn cues.
   already reflects them.
 - Entirely self-hostable: routing (Valhalla), app, database, and
   optionally the map tiles run on your own hardware. The only external
-  services are Wahoo's cloud and an optional weather provider, and only
-  if you configure them.
+  services are Wahoo's cloud, an optional weather provider and an
+  optional AI route assistant endpoint, and only if you configure them.
 - Activity history: import your own rides (GPX/TCX/FIT, or a Strava bulk
   export zip) into a separate library from planned routes, and see them as
   a personal heatmap - a low-opacity trace of every ride, drawn on the map
   so roads you ride more than once darken. With the place index built, a
   coverage card on /activities shows how much of the signed cycle network
-  near you has actually been ridden, per network tier, from your own
-  activities map-matched onto OpenStreetMap way ids.
+  near you has actually been ridden, per network tier, and (with the
+  opt-in all-roads index) how much of every bikeable road near you has,
+  both from your own activities map-matched onto OpenStreetMap way ids.
+  Nothing here leaves your network - see the
+  [FAQ](docs/faq.md#does-any-of-my-data-leave-my-network).
 
 ## Route intelligence
 
@@ -222,6 +225,7 @@ All configuration is via environment variables, documented in
 | `VALHALLA_BUILD_ELEVATION` | `True` | Download elevation data (hill-aware routing + profiles) |
 | `VALHALLA_SERVER_THREADS` | all cores | Valhalla build/serve threads |
 | `TILE_URL_CYCLOSM` | unset | Self-hosted CyclOSM tile server template; unset uses the public servers |
+| `INDEX_ROADS` | `false` | Opt-in indexer sidecar only: index every bikeable OSM way (not just the signed cycle network) for all-roads coverage. Adds ~8 minutes and ~1.24 GB to a full England rebuild |
 | `APP_PORT` | `17777` | Host port for the prod profile |
 | `POSTGRES_PASSWORD` | `bikegps` | Database password - change for prod |
 | `SIGNUPS_ENABLED` | `false` | Allow registrations beyond the first (admin) user |
