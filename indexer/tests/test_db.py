@@ -223,6 +223,58 @@ def test_a_road_way_rebuild_replaces_rather_than_accumulates(database_url: str) 
     assert total == 1
 
 
+def test_a_rebuild_with_roads_off_preserves_the_previous_road_table(database_url: str) -> None:
+    """The documented monthly refresh can run with INDEX_ROADS off even on
+    an install that built osm_ways once before - build.py only calls
+    assemble_road_ways, and only puts "osm_ways" in counts, when the flag is
+    on, so publish() must not treat "osm_ways" being absent from counts as
+    licence to TRUNCATE the live table and refill it from an empty stage.
+    """
+    with db.connect(database_url) as connection:
+        # First build: roads on, two ways indexed.
+        _build(database_url, connection, _road_rows())
+
+        # Second build: roads off, exactly build.py's own shape when
+        # settings.index_roads is False - "osm_ways" never enters counts,
+        # because assemble_road_ways is never called.
+        db.prepare_staging(connection)
+        counts = db.load(database_url, [])
+        counts["cycle_ways"] = db.assemble_cycle_routes(connection)
+        assert "osm_ways" not in counts
+        db.publish(connection, ["tring.osm.pbf"], counts)
+
+        rows = connection.execute(
+            "SELECT way_id, highway, name FROM osm_ways ORDER BY way_id"
+        ).fetchall()
+        way_count = connection.execute("SELECT osm_way_count FROM search_index_meta").fetchone()[0]
+
+    assert [(r[0], r[1], r[2]) for r in rows] == [
+        (100, "residential", "Church Street"),
+        (101, "track", None),
+    ], "the road table from the first, roads-on build must survive a roads-off refresh"
+    assert way_count == 2, (
+        "the metadata describing the table must not go stale (0) or NULL "
+        "('never built') either, when the table itself was left alone"
+    )
+
+
+def test_a_first_build_with_roads_off_leaves_the_count_null_not_zero(database_url: str) -> None:
+    """The other end of the same fix: with nothing to carry forward (this
+    install has never built osm_ways), the count must still read as "never
+    indexed" (NULL), not silently become 0 - the exact distinction
+    /api/coverage/roads relies on (models.SearchIndexMeta)."""
+    with db.connect(database_url) as connection:
+        db.prepare_staging(connection)
+        counts = db.load(database_url, [])
+        counts["cycle_ways"] = db.assemble_cycle_routes(connection)
+        assert "osm_ways" not in counts
+        db.publish(connection, ["tring.osm.pbf"], counts)
+
+        way_count = connection.execute("SELECT osm_way_count FROM search_index_meta").fetchone()[0]
+
+    assert way_count is None
+
+
 def test_a_way_repeated_across_overlapping_extracts_is_stored_once(database_url: str) -> None:
     """VALHALLA_TILE_URL accepts several extracts, and Geofabrik extracts
     overlap at their borders - the same way a border node can, a border way

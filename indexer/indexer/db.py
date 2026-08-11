@@ -352,16 +352,31 @@ def publish(
     after a rename the live table depends on a sequence owned by the table
     being dropped, and the drop fails. Dropping with CASCADE would take the
     sequence the live table needs. Moving rows avoids the whole problem.
+
+    osm_ways is the one exception to "replace every table": build.py only
+    populates osm_ways_stage when INDEX_ROADS is on (prepare_staging still
+    creates the stage table either way, empty when it is off). A site that
+    enabled roads once and later runs the documented monthly refresh
+    without the flag would otherwise have this TRUNCATE + refill-from-empty
+    silently delete a road table a previous build spent real time
+    constructing - "never indexed" and "was indexed, then wiped by an
+    unrelated refresh" must not look alike, so a run that did not rebuild
+    roads leaves the live table, and the metadata describing it, exactly as
+    they were.
     """
+    roads_rebuilt = "osm_ways" in counts
+    tables = (
+        INDEXED_TABLES if roads_rebuilt else tuple(t for t in INDEXED_TABLES if t != "osm_ways")
+    )
+
     with connection.cursor() as cursor:
         # One statement, so the tables are locked in a consistent order and
-        # every one of them is replaced or none is.
+        # every one of them is replaced or none is. osm_ways is simply
+        # absent from `tables` on a run that did not rebuild it.
         cursor.execute(
-            sql.SQL("TRUNCATE {}").format(
-                sql.SQL(", ").join(sql.Identifier(t) for t in INDEXED_TABLES)
-            )
+            sql.SQL("TRUNCATE {}").format(sql.SQL(", ").join(sql.Identifier(t) for t in tables))
         )
-        for table in INDEXED_TABLES:
+        for table in tables:
             columns = sql.SQL(", ").join(sql.Identifier(c) for c in COLUMNS[table])
             key = sql.SQL(", ").join(sql.Identifier(c) for c in NATURAL_KEY[table])
             # DISTINCT ON the natural key. The in-memory dedup in load() is
@@ -383,6 +398,17 @@ def publish(
                     key,
                 )
             )
+
+        osm_way_count = counts.get("osm_ways")
+        if not roads_rebuilt:
+            # The live table was left untouched above, so the count
+            # describing it has to be too - otherwise the metadata would
+            # claim "never indexed" (NULL) or "empty" (0) about a table
+            # that may still hold real rows from an earlier build.
+            cursor.execute("SELECT osm_way_count FROM search_index_meta")
+            previous = cursor.fetchone()
+            osm_way_count = previous[0] if previous is not None else None
+
         cursor.execute("DELETE FROM search_index_meta")
         cursor.execute(
             """
@@ -397,18 +423,12 @@ def publish(
                 counts["places"],
                 counts["pois"],
                 counts["cycle_ways"],
-                # Both of the counts below are not null, unlike an install
-                # that has never re-indexed since the respective column
-                # existed: that NULL is exactly what tells
-                # /api/coverage/cycle-network and /api/coverage/roads a
-                # rebuild is needed rather than reporting a dishonest 0%.
-                #
-                # osm_ways is absent, and so NULL, whenever INDEX_ROADS was
-                # off - the same signal for the same reason. "Not indexed"
-                # and "indexed and you have ridden none of it" must not look
-                # alike.
+                # Not null, unlike an install that has never re-indexed
+                # since the column existed: that NULL is exactly what tells
+                # /api/coverage/cycle-network a rebuild is needed rather
+                # than reporting a dishonest 0%.
                 counts["cycle_members"],
-                counts.get("osm_ways"),
+                osm_way_count,
             ),
         )
     connection.commit()
@@ -418,9 +438,20 @@ def publish(
     with connection.cursor() as cursor:
         for table in INDEXED_TABLES:
             cursor.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(_stage(table))))
+        for table in tables:
             cursor.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(table)))
     connection.commit()
-    log.info("index published: %s", counts)
+
+    if roads_rebuilt:
+        log.info("index published: %s", counts)
+    else:
+        log.info(
+            "index published: %s (osm_ways left untouched - INDEX_ROADS is off this run; %s)",
+            counts,
+            f"{osm_way_count} ways from a previous build"
+            if osm_way_count is not None
+            else "was never built",
+        )
 
 
 def _copy_sql(table: str, columns: tuple[str, ...]) -> sql.Composed:
