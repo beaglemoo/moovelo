@@ -48,7 +48,13 @@ services:
       dockerfile: indexer/Dockerfile
     environment:
       DATABASE_URL: postgresql://bikegps:${POSTGRES_PASSWORD:-bikegps}@postgres:5432/bikegps
-      OSM_DIR: /custom_files
+      # Both are documented in .env.example as overridable and neither was
+      # passed through, so setting either had no effect at all. Moving
+      # OSM_DIR also means changing the volume mount below; WORK_DIR stands
+      # alone, and matters more now that all-roads indexing writes a
+      # ~470 MB filtered extract into it.
+      OSM_DIR: ${OSM_DIR:-/custom_files}
+      WORK_DIR: ${WORK_DIR:-/tmp}
       # Off by default: indexing every bikeable way is the difference
       # between a 37-second rebuild and an eight-minute one, and 150 MB
       # against 1.24 GB. Only all-roads coverage needs it.
