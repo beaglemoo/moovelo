@@ -113,6 +113,18 @@ re-importing an overlapping export adds only what is new, while the many
 hand-uploaded rides with no natural identifier do not collide with each
 other.
 
+`/api/activities` covers import, list, read and delete. There is no update
+endpoint: an activity is a record of what happened, and the heatmap and
+coverage built from it would mean nothing in particular if it could be
+rewritten. Reads return the trace as polyline6, the same encoding the
+planner already decodes for route legs, so an activity draws through the
+path everything else on the map uses.
+
+Parsing runs in a worker thread rather than on the event loop. It is pure
+CPU and it is not cheap - a four-hour ride recorded at 1 Hz measures at
+three to four seconds - so leaving it inline would stall every other
+request in the process for the duration, not merely the uploader's.
+
 ## The place index
 
 `places`, `pois` and `cycle_ways` hold settlements, useful stops and
@@ -1031,6 +1043,7 @@ backend/app/
 │                            #   SearchIndexMeta, UserSettings, LLMSettings
 ├── schemas.py               # request/response models
 ├── api/
+│   ├── activities.py        # /api/activities: import, list, read, delete
 │   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface,
 │   │                        #   /api/route/isochrone, /api/route/loop, /api/route/alternates
 │   ├── places.py            # /api/places: search, reverse, pois-along-route

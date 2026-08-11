@@ -395,6 +395,31 @@ class SavedRoute(RouteResponse):
     share_token: str | None = None
 
 
+class ActivitySummary(BaseModel):
+    """A ride as the library lists it - no geometry, no elevation series."""
+
+    id: uuid.UUID
+    name: str
+    # Null when the file carried no usable timestamps. The list falls back to
+    # created_at for ordering rather than hiding the ride.
+    started_at: datetime | None = None
+    elapsed_time_s: float | None = None
+    moving_time_s: float | None = None
+    distance_m: float
+    ascent_m: float
+    descent_m: float
+    source: str
+    created_at: datetime
+
+
+class ActivityDetail(ActivitySummary):
+    """One ride, with the geometry needed to draw it."""
+
+    # polyline6, same encoding the planner already decodes for route legs.
+    shape: str
+    elevation: list[ElevationPoint] = []
+
+
 class SharedRoute(RouteResponse):
     """Public view of a shared route - no ids, no owner information."""
 
