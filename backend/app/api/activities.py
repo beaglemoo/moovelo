@@ -10,16 +10,24 @@ import asyncio
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Path, Query, Request, UploadFile
+from fastapi.responses import Response
 from geoalchemy2.functions import ST_AsText
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, exists, func, select
 
 from app.api.deps import DbDep, UserDep
 from app.models import Activity
-from app.schemas import ActivityDetail, ActivitySummary, ArchiveImportStatus, ElevationPoint
+from app.schemas import (
+    ActivityDetail,
+    ActivitySummary,
+    ArchiveImportStatus,
+    ElevationPoint,
+    HeatmapAvailability,
+)
 from app.services.activities import activity_from_track, name_from_filename
 from app.services.activity_import import MAX_ARCHIVE_BYTES, ImportJob
 from app.services.activity_import import queue as archive_queue
+from app.services.heatmap import MAX_HEATMAP_ZOOM, MIN_HEATMAP_ZOOM, heatmap_etag, heatmap_tile
 from app.services.importer import MAX_FILE_BYTES, RouteImportError, parse_route_file
 from app.services.polyline import encode_polyline6
 
@@ -125,6 +133,58 @@ async def list_activities(
     ordering = func.coalesce(Activity.started_at, Activity.created_at)
     rows = (await db.execute(query.order_by(ordering.desc()))).scalars().all()
     return [_summary(activity) for activity in rows]
+
+
+@router.get("/heatmap-available")
+async def heatmap_available(db: DbDep, user: UserDep) -> HeatmapAvailability:
+    """Whether this rider has any activities.
+
+    Asked once by the planner so the heatmap toggle can be left out
+    entirely for a rider with nothing imported, rather than offered as a
+    control that would only ever fetch empty tiles. EXISTS rather than a
+    COUNT: only the boolean matters, so there is no reason to make
+    Postgres count past the first row.
+    """
+    found = await db.scalar(select(exists().where(Activity.user_id == user.id)))
+    return HeatmapAvailability(available=bool(found))
+
+
+@router.get("/heatmap/{z}/{x}/{y}.mvt")
+async def heatmap(
+    request: Request,
+    db: DbDep,
+    user: UserDep,
+    z: Annotated[int, Path(ge=MIN_HEATMAP_ZOOM, le=MAX_HEATMAP_ZOOM)],
+    x: Annotated[int, Path(ge=0)],
+    y: Annotated[int, Path(ge=0)],
+) -> Response:
+    """A vector tile of this rider's own activity traces.
+
+    Cache-Control is deliberately not the cycle-network overlay's
+    `max-age=86400`: that overlay is install-wide and only changes when the
+    indexer reruns, monthly at most, while this one is personal and changes
+    the moment a ride is imported or deleted. `private, no-cache` forces
+    revalidation on every request rather than serving a stale tile for a
+    day, and the ETag (a count + latest created_at fingerprint, cheap to
+    compute) makes that revalidation a 304 instead of a re-fetch on every
+    pan when nothing has actually changed.
+    """
+    # 2^z tiles per axis. Out of range is a client bug, and returning an
+    # empty tile would hide it.
+    if x >= 2**z or y >= 2**z:
+        return Response(status_code=404)
+
+    etag = await heatmap_etag(db, user.id)
+    headers = {"Cache-Control": "private, no-cache", "ETag": etag}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+
+    tile = await heatmap_tile(db, user.id, z, x, y)
+    return Response(
+        content=tile,
+        media_type="application/vnd.mapbox-vector-tile",
+        headers=headers,
+    )
 
 
 @router.get("/{activity_id}")
