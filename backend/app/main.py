@@ -39,6 +39,26 @@ MAX_UPLOAD_BYTES = MAX_FILE_BYTES + 1024 * 1024
 # every real archive.
 MAX_ACTIVITY_UPLOAD_BYTES = MAX_ARCHIVE_BYTES + 1024 * 1024
 
+# Every POST route that accepts an UploadFile, and (wire cap, readable MB
+# for the message) the pre-read guard below applies before FastAPI spools
+# its body. An explicit table rather than a path suffix check:
+# `path.endswith("/import")` missed /api/activities/import/archive outright
+# (the one route that most needs a tight cap, since it accepts up to
+# MAX_ARCHIVE_BYTES) and, separately, matched /api/activities/import - the
+# *single-ride* endpoint, capped at MAX_FILE_BYTES by its own streaming read
+# - with the much larger archive ceiling, purely because both paths start
+# with "/api/activities". A route added here with no entry gets no pre-read
+# guard at all rather than silently inheriting the wrong one; add it
+# deliberately.
+_UPLOAD_GUARDS: dict[str, tuple[int, int]] = {
+    "/api/routes/import": (MAX_UPLOAD_BYTES, MAX_FILE_BYTES // (1024 * 1024)),
+    "/api/activities/import": (MAX_UPLOAD_BYTES, MAX_FILE_BYTES // (1024 * 1024)),
+    "/api/activities/import/archive": (
+        MAX_ACTIVITY_UPLOAD_BYTES,
+        MAX_ARCHIVE_BYTES // (1024 * 1024),
+    ),
+}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -66,13 +86,20 @@ async def reject_oversized_uploads(request: Request, call_next: Any) -> Response
     FastAPI resolves an UploadFile parameter by parsing the whole multipart
     body into a spooled temp file, so any size check inside the endpoint runs
     after the cost has been paid. Only a middleware sees the request early
-    enough. Requests without a Content-Length still get caught by the
-    endpoint's own chunked read.
+    enough.
+
+    Requests without a Content-Length (chunked transfer) skip this check
+    entirely and fall through to the endpoint's own streaming read, which
+    caps the same way - `_read_capped` here, `_read_entry` in
+    services/activity_import.py - so an oversized chunked upload is still
+    stopped, just not before the connection starts reading it. Defence in
+    depth, not a hole: this middleware is the fast path for the common case
+    (a normal browser upload always sends Content-Length), not the only
+    enforcement.
     """
-    if request.method == "POST" and request.url.path.endswith("/import"):
-        archive = request.url.path.startswith("/api/activities")
-        cap = MAX_ACTIVITY_UPLOAD_BYTES if archive else MAX_UPLOAD_BYTES
-        readable = (MAX_ARCHIVE_BYTES if archive else MAX_FILE_BYTES) // (1024 * 1024)
+    guard = _UPLOAD_GUARDS.get(request.url.path)
+    if request.method == "POST" and guard is not None:
+        cap, readable = guard
         declared = request.headers.get("content-length")
         if declared and declared.isdigit() and int(declared) > cap:
             return JSONResponse(

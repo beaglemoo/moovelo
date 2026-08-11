@@ -381,3 +381,47 @@ async def test_polling_an_unknown_job_is_a_404(client: AsyncClient) -> None:
     await register(client)
     response = await client.get(f"/api/activities/import/archive/{uuid.uuid4()}")
     assert response.status_code == 404
+
+
+# --- The pre-read upload guard -----------------------------------------------
+#
+# app/main.py's reject_oversized_uploads middleware used to match on
+# request.url.path.endswith("/import"), which /api/activities/import/archive
+# does not - so the one route that most needs a tight pre-read cap (up to
+# MAX_ARCHIVE_BYTES) got none at all, and an oversized POST there read its
+# whole body before the endpoint's own cap ever got a say. One test per
+# guarded route, matching test_import_api.py's own
+# test_oversized_upload_is_refused_before_the_body_is_parsed for
+# /api/routes/import.
+
+
+async def test_the_single_ride_endpoint_is_refused_before_the_body_is_parsed(
+    client: AsyncClient,
+) -> None:
+    await register(client)
+    response = await client.post(
+        "/api/activities/import",
+        headers={
+            "content-type": "multipart/form-data; boundary=x",
+            "content-length": "2000000000",
+        },
+        content=b"",
+    )
+    assert response.status_code == 413
+    assert "larger than" in response.json()["detail"]
+
+
+async def test_the_archive_endpoint_is_refused_before_the_body_is_parsed(
+    client: AsyncClient,
+) -> None:
+    await register(client)
+    response = await client.post(
+        "/api/activities/import/archive",
+        headers={
+            "content-type": "multipart/form-data; boundary=x",
+            "content-length": "600000000000",
+        },
+        content=b"",
+    )
+    assert response.status_code == 413
+    assert "larger than" in response.json()["detail"]
