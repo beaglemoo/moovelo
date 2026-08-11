@@ -240,6 +240,90 @@ async def test_a_file_that_will_not_parse_costs_one_ride_not_the_import(
     assert await db.scalar(select(func.count()).select_from(Activity)) == 1
 
 
+# NaN in a <ele> element is a real device/export glitch, not a hostile input:
+# it passes float() and Pydantic without complaint, but the elevation
+# profile is stored as JSONB and Postgres refuses the literal "NaN" token as
+# invalid JSON. Before app/services/importer.py's own fix, that refusal
+# reached this far - see test_a_row_that_fails_at_commit_costs_one_ride_not_
+# the_batch below for the queue's side of the same defect, reproduced
+# without relying on this one input closing over time.
+GPX_NAN_ELEVATION = GPX.replace(b"<ele>128.0</ele>", b"<ele>NaN</ele>")
+
+
+async def test_a_nan_elevation_ride_is_imported_without_its_elevation(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The importer now drops a non-finite elevation at parse time (see
+    test_importer.py::test_nonfinite_elevation_is_dropped_not_stored), so a
+    ride carrying one is a perfectly normal import - not a failure, and not
+    a reason for its neighbours in the same archive to fail either."""
+    user = User(email="rider@example.com", password_hash="x")
+    db.add(user)
+    await db.commit()
+
+    job = await _run(
+        monkeypatch,
+        db_factory,
+        user.id,
+        _zip({"good1.gpx": GPX, "nan-elevation.gpx": GPX_NAN_ELEVATION, "good2.gpx": GPX}),
+    )
+
+    assert job.status == "done"
+    assert (job.imported, job.failed) == (3, 0)
+    assert await db.scalar(select(func.count()).select_from(Activity)) == 3
+
+
+async def test_a_row_that_fails_at_commit_costs_one_ride_not_the_batch(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The general case behind the NaN-elevation bug: SQLAlchemy batches
+    pending inserts sharing a table into one multi-row INSERT, so *any* row
+    Postgres refuses - not only a non-finite elevation, which the parser now
+    catches on its own - takes every row queued alongside it down in the
+    same statement unless each entry is committed before the next is added.
+
+    Forces a value only the database will reject (source_ref is `Text` but
+    the ORM's default `Activity` construction would never build a value that
+    fails a column check on its own) by monkeypatching
+    activity_from_track for one entry, so this is independent of any
+    particular parser bug and exercises the queue's own containment.
+    """
+    import app.services.activity_import as activity_import
+
+    real = activity_import.activity_from_track
+
+    def poisoned(track, **kwargs):  # type: ignore[no-untyped-def]
+        activity = real(track, **kwargs)
+        if kwargs.get("fallback_name") == "broken":
+            # source is String(16); Postgres enforces that at insert time
+            # regardless of what the ORM's own type hints say.
+            activity.source = "x" * 999
+        return activity
+
+    monkeypatch.setattr(activity_import, "activity_from_track", poisoned)
+
+    user = User(email="rider@example.com", password_hash="x")
+    db.add(user)
+    await db.commit()
+
+    job = await _run(
+        monkeypatch,
+        db_factory,
+        user.id,
+        _zip({"good1.gpx": GPX, "broken.gpx": GPX, "good2.gpx": GPX}),
+    )
+
+    assert job.status == "done"
+    assert (job.imported, job.failed) == (2, 1)
+    stored = await db.scalar(select(func.count()).select_from(Activity))
+    # The counter must never claim more than what actually landed.
+    assert stored == job.imported == 2
+
+
 # --- The endpoints -----------------------------------------------------------
 
 

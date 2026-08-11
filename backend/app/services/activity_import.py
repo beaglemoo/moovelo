@@ -24,6 +24,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import session_factory
@@ -57,6 +58,19 @@ RIDE_MARKERS = ("ride", "cycl", "bike", "biking")
 
 class ArchiveError(Exception):
     """The archive could not be read. The message is user-facing."""
+
+
+def _problem_message(exc: Exception) -> str:
+    """A user-facing line for one failed entry.
+
+    ArchiveError and RouteImportError already carry a message written for a
+    rider to read. A raw database error carries the query and its bound
+    parameters (see the DBAPIError caught above), which is neither readable
+    nor safe to hand back verbatim - so it collapses to one generic line.
+    """
+    if isinstance(exc, (ArchiveError, RouteImportError)):
+        return str(exc)
+    return "could not be saved"
 
 
 @dataclass
@@ -327,18 +341,29 @@ class ArchiveImportQueue:
                     if ref is not None and ref in seen:
                         job.duplicates += 1
                         continue
+                    # Committed per entry, inside the same try/except that
+                    # already isolates a bad file: SQLAlchemy batches pending
+                    # inserts sharing a table into one multi-row INSERT, so a
+                    # single row Postgres refuses (a NaN that slipped past
+                    # the importer's own guard, say) takes every row queued
+                    # alongside it down in the same statement - and without
+                    # a commit in between, that includes rides already
+                    # counted as imported. Committing here is also what
+                    # keeps `imported` honest: it is only incremented once
+                    # the row is known to have actually landed.
                     try:
                         activity = await self._one(db, job, archive, entry, ref)
-                    except (ArchiveError, RouteImportError) as exc:
+                        await db.commit()
+                    except (ArchiveError, RouteImportError, SQLAlchemyError) as exc:
+                        await db.rollback()
                         job.failed += 1
                         if len(job.problems) < 20:
-                            job.problems.append(f"{entry.path}: {exc}")
+                            job.problems.append(f"{entry.path}: {_problem_message(exc)}")
                         continue
                     if ref is not None:
                         seen.add(ref)
                     job.imported += 1
                     created.append(activity.id)
-                await db.commit()
 
         # Off the request path, same reasoning as the single-file import
         # endpoint: map matching is Valhalla round trips per ride, and a
