@@ -26,7 +26,7 @@ from indexer.extract import CycleMemberRow, PlaceRow, PoiRow
 
 log = logging.getLogger(__name__)
 
-INDEXED_TABLES = ("places", "pois", "cycle_ways")
+INDEXED_TABLES = ("places", "pois", "cycle_ways", "cycle_way_members")
 
 PLACE_COLUMNS = (
     "osm_type",
@@ -42,20 +42,31 @@ POI_COLUMNS = ("osm_type", "osm_id", "name", "name_norm", "category", "osm_tags"
 # cycle_ways.id is the OSM relation id, so unlike the other two it is
 # supplied rather than generated.
 CYCLE_COLUMNS = ("id", "ref", "name", "network", "operator", "geom")
+# For cycle-network coverage (Phase 10): which OSM ways make up each route,
+# and how long each one is - deliberately no geometry, see assemble_cycle_routes.
+CYCLE_MEMBER_COLUMNS = ("relation_id", "way_id", "length_m")
 
 COLUMNS: dict[str, tuple[str, ...]] = {
     "places": PLACE_COLUMNS,
     "pois": POI_COLUMNS,
     "cycle_ways": CYCLE_COLUMNS,
+    "cycle_way_members": CYCLE_MEMBER_COLUMNS,
 }
 
-MEMBER_TABLE = "cycle_way_members_stage"
+# Raw member geometry, one row per (relation, way) - not one of the four
+# published tables above, and never queried once assemble_cycle_routes has
+# both collapsed it into cycle_ways.geom and summed it into
+# cycle_way_members_stage. Named apart from "cycle_way_members_stage" (what
+# `_stage("cycle_way_members")` would also produce) so the two staging
+# tables this file juggles at once are never confusable.
+RAW_MEMBER_TABLE = "cycle_route_members_raw"
 
 # What makes a row unique, used to deduplicate at publish time.
 NATURAL_KEY: dict[str, tuple[str, ...]] = {
     "places": ("osm_type", "osm_id"),
     "pois": ("osm_type", "osm_id"),
     "cycle_ways": ("id",),
+    "cycle_way_members": ("relation_id", "way_id"),
 }
 
 
@@ -84,7 +95,7 @@ def prepare_staging(connection: psycopg.Connection[Any]) -> None:
                     sql.Identifier(_stage(table)), sql.Identifier(table)
                 )
             )
-        cursor.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(MEMBER_TABLE)))
+        cursor.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(RAW_MEMBER_TABLE)))
         cursor.execute(
             sql.SQL("""
                 CREATE UNLOGGED TABLE {} (
@@ -96,7 +107,7 @@ def prepare_staging(connection: psycopg.Connection[Any]) -> None:
                     way_id bigint NOT NULL,
                     geom geometry(LineString, 4326) NOT NULL
                 )
-            """).format(sql.Identifier(MEMBER_TABLE))
+            """).format(sql.Identifier(RAW_MEMBER_TABLE))
         )
     connection.commit()
 
@@ -120,7 +131,7 @@ def load(database_url: str, rows: Iterable[PlaceRow | PoiRow | CycleMemberRow]) 
     place_sql = _copy_sql(_stage("places"), PLACE_COLUMNS)
     poi_sql = _copy_sql(_stage("pois"), POI_COLUMNS)
     member_sql = _copy_sql(
-        MEMBER_TABLE, ("relation_id", "ref", "name", "network", "operator", "way_id", "geom")
+        RAW_MEMBER_TABLE, ("relation_id", "ref", "name", "network", "operator", "way_id", "geom")
     )
 
     with (
@@ -192,7 +203,8 @@ def load(database_url: str, rows: Iterable[PlaceRow | PoiRow | CycleMemberRow]) 
 
 
 def assemble_cycle_routes(connection: psycopg.Connection[Any]) -> int:
-    """Collapse the member ways into one multilinestring per route.
+    """Collapse the member ways into one multilinestring per route, and
+    separately record each member's own length for coverage.
 
     Done in SQL rather than Python so the geometry never has to be held in
     memory all at once, and so PostGIS owns the assembly.
@@ -205,6 +217,11 @@ def assemble_cycle_routes(connection: psycopg.Connection[Any]) -> int:
     entirely - the England-wide tile measured 228 kB simplified against
     50 kB merged first. 98 ms for all 5,545 routes, once, here rather than
     in every tile request.
+
+    cycle_way_members_stage carries no geometry of its own - `way_owners` in
+    extract.py already guarantees at most one row per (relation_id, way_id),
+    so this is a plain per-row length, not an aggregate - and it is the last
+    thing read from the raw member table before it is dropped.
     """
     with connection.cursor() as cursor:
         cursor.execute(
@@ -214,10 +231,19 @@ def assemble_cycle_routes(connection: psycopg.Connection[Any]) -> int:
                        ST_Multi(ST_LineMerge(ST_Collect(geom)))
                 FROM {}
                 GROUP BY relation_id
-            """).format(sql.Identifier(_stage("cycle_ways")), sql.Identifier(MEMBER_TABLE))
+            """).format(sql.Identifier(_stage("cycle_ways")), sql.Identifier(RAW_MEMBER_TABLE))
         )
         inserted = cursor.rowcount
-        cursor.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(MEMBER_TABLE)))
+        cursor.execute(
+            sql.SQL("""
+                INSERT INTO {} (relation_id, way_id, length_m)
+                SELECT relation_id, way_id, ST_Length(geography(geom))
+                FROM {}
+            """).format(
+                sql.Identifier(_stage("cycle_way_members")), sql.Identifier(RAW_MEMBER_TABLE)
+            )
+        )
+        cursor.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(RAW_MEMBER_TABLE)))
     connection.commit()
     return inserted
 
@@ -275,8 +301,9 @@ def publish(
         cursor.execute(
             """
             INSERT INTO search_index_meta
-                (built_at, source_files, place_count, poi_count, cycle_way_count)
-            VALUES (%s, %s, %s, %s, %s)
+                (built_at, source_files, place_count, poi_count, cycle_way_count,
+                 cycle_way_member_count)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (
                 datetime.now(UTC),
@@ -284,6 +311,11 @@ def publish(
                 counts["places"],
                 counts["pois"],
                 counts["cycle_ways"],
+                # Not null, unlike an install that has never re-indexed since
+                # this column existed: that NULL is exactly what tells
+                # /api/coverage/cycle-network a rebuild is needed rather than
+                # reporting a dishonest 0%.
+                counts["cycle_members"],
             ),
         )
     connection.commit()
