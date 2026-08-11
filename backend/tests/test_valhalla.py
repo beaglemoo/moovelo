@@ -37,6 +37,14 @@ ISOCHRONE_REAL = json.loads((FIXTURES / "isochrone_real.json").read_text())
 # "alternates": 2 requested. Valhalla returned only 1 (primary 8.237 km,
 # alternate 11.785 km) - fewer than requested is normal, not a failure.
 ROUTE_ALTERNATES_REAL = json.loads((FIXTURES / "route_alternates_real.json").read_text())
+# A real map_snap trace_attributes response: the exact shape of a real
+# /route leg near Tring (51.7955,-0.6580 -> 51.8045,-0.6560, gravel costing,
+# 1.335 km) fed straight back in as a trace. 30 edges over 5 distinct way
+# ids; sum(edge.length) is 1.334 km, matching the route's own summary
+# distance to the nearest metre.
+TRACE_ATTRS_MAP_SNAP_REAL = json.loads(
+    (FIXTURES / "trace_attributes_map_snap_real.json").read_text()
+)
 
 TRIP_RESPONSE = {
     "trip": {
@@ -679,6 +687,95 @@ async def test_trace_attributes_always_traces_with_the_neutral_road_bundle() -> 
     assert result is not None
     sent = json.loads(mock.calls[0].request.content)
     assert sent["costing_options"]["bicycle"] == PRESETS["road"]
+
+
+@respx.mock
+async def test_match_ways_sums_length_per_way_id_from_a_real_response() -> None:
+    respx.post(f"{BASE}/trace_attributes").respond(json=TRACE_ATTRS_MAP_SNAP_REAL)
+
+    client = ValhallaClient(base_url=BASE)
+    result = await client.match_ways(SHAPE)
+
+    assert result is not None
+    edges = TRACE_ATTRS_MAP_SNAP_REAL["edges"]
+    expected: dict[int, float] = {}
+    for edge in edges:
+        expected[edge["way_id"]] = expected.get(edge["way_id"], 0.0) + edge["length"] * 1000.0
+    assert result == pytest.approx(expected)
+    # The real response covers 5 distinct ways and sums to the route's own
+    # 1.335 km summary distance, to the metre.
+    assert len(result) == 5
+    assert sum(result.values()) == pytest.approx(1334.0, abs=1.0)
+
+
+@respx.mock
+async def test_match_ways_sends_map_snap_and_the_gravel_bundle_with_way_id_filters() -> None:
+    mock = respx.post(f"{BASE}/trace_attributes").respond(json=TRACE_ATTRS_MAP_SNAP_REAL)
+
+    client = ValhallaClient(base_url=BASE)
+    await client.match_ways(SHAPE)
+
+    sent = json.loads(mock.calls[0].request.content)
+    assert sent["shape_match"] == "map_snap"
+    assert sent["costing"] == "bicycle"
+    # The most surface-tolerant named bundle, not "road" - a rider's own
+    # recorded ride legitimately follows towpaths and bridleways more often
+    # than a planned route would, and unlike edge_walk, map_snap actually
+    # uses costing to decide what a trace can snap to.
+    assert sent["costing_options"]["bicycle"] == PRESETS["gravel"]
+    assert sent["filters"]["attributes"] == ["edge.way_id", "edge.length"]
+
+
+async def test_match_ways_rejects_a_too_short_shape() -> None:
+    client = ValhallaClient(base_url=BASE)
+    result = await client.match_ways([(53.7996, -1.5491)])
+    assert result is None
+
+
+@respx.mock
+async def test_match_ways_unmatchable_track_returns_none() -> None:
+    """Unlike trace_route, a track that cannot be placed on the network
+    degrades silently - coverage is an enhancement, and it must never block
+    an activity import."""
+    respx.post(f"{BASE}/trace_attributes").respond(
+        status_code=400, json={"error": "No suitable edges near location"}
+    )
+    client = ValhallaClient(base_url=BASE)
+    result = await client.match_ways(SHAPE)
+    assert result is None
+
+
+@respx.mock
+async def test_match_ways_unreachable_engine_returns_none() -> None:
+    """The same degrade-silently policy as trace_attributes' own unreachable-
+    engine test, and the opposite of trace_route's: nothing here is worth
+    retrying on the rider's behalf."""
+    respx.post(f"{BASE}/trace_attributes").mock(side_effect=httpx.ConnectError("refused"))
+    client = ValhallaClient(base_url=BASE)
+    result = await client.match_ways(SHAPE)
+    assert result is None
+
+
+@respx.mock
+async def test_match_ways_chunks_long_traces_without_overlap() -> None:
+    edge = {"way_id": 42, "length": 0.1}
+    mock = respx.post(f"{BASE}/trace_attributes").respond(
+        json={"units": "kilometers", "edges": [edge]}
+    )
+    # Points 100m apart survive thinning, so this needs several requests.
+    long_track = [(53.7996 + i * 0.001, -1.5491) for i in range(2500)]
+
+    client = ValhallaClient(base_url=BASE)
+    result = await client.match_ways(long_track)
+
+    assert mock.call_count == 3
+    chunks_sent = [json.loads(call.request.content)["shape"] for call in mock.calls]
+    # No shared boundary point between consecutive chunks - only aggregate
+    # metres per way are kept, the same reasoning trace_attributes' own
+    # chunking test gives.
+    assert chunks_sent[0][-1] != chunks_sent[1][0]
+    assert result is not None
+    assert result == {42: pytest.approx(300.0)}
 
 
 ORIGIN = Waypoint(lat=51.7926, lon=-0.6606)

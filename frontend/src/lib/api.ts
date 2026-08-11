@@ -404,6 +404,37 @@ export interface HeatmapAvailability {
 	available: boolean;
 }
 
+/** Ridden vs total metres of one network tier (icn/ncn/rcn/lcn) within a
+ * bbox. Mirrors backend/app/schemas.py NetworkCoverage. */
+export interface NetworkCoverage {
+	network: string;
+	ridden_m: number;
+	total_m: number;
+}
+
+/** How much of the signed cycle network a rider has ridden. Mirrors
+ * backend/app/schemas.py CoverageResponse.
+ *
+ * `available` is false whenever 0% would be a misleading answer rather
+ * than a real one - see the backend schema's own docstring for the three
+ * reasons this can happen. `reason` is only set then. */
+export interface CoverageResponse {
+	available: boolean;
+	reason: string | null;
+	networks: NetworkCoverage[];
+}
+
+/** Progress of map-matching a rider's own activities onto OSM way ids.
+ * Mirrors backend/app/schemas.py CoverageBackfillStatus. */
+export interface CoverageBackfillStatus {
+	id: string;
+	status: 'queued' | 'running' | 'done' | 'error';
+	total: number;
+	matched: number;
+	unmatched: number;
+	error: string | null;
+}
+
 export const routes = {
 	list: (query: RouteQuery = {}) => {
 		const params = new URLSearchParams();
@@ -471,6 +502,17 @@ export const activities = {
 	 * tiles are `private, no-cache` with an ETag (services/heatmap.py), so
 	 * the browser always revalidates rather than trusting a long max-age. */
 	heatmapTileUrl: () => `${location.origin}/api/activities/heatmap/{z}/{x}/{y}.mvt`
+};
+
+export const coverage = {
+	/** No bbox: the backend centres one on wherever this rider's own
+	 * activities are (services/coverage.py:default_bbox) - the /activities
+	 * card has no map to derive one from itself. */
+	cycleNetwork: () => request<CoverageResponse>('/api/coverage/cycle-network'),
+	/** Match every activity that has never been attempted - queued, not
+	 * inline, the same reasoning as importArchive above. */
+	backfill: () => request<CoverageBackfillStatus>('/api/coverage/backfill', { method: 'POST' }),
+	backfillStatus: (id: string) => request<CoverageBackfillStatus>(`/api/coverage/backfill/${id}`)
 };
 
 export const shared = {

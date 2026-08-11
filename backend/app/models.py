@@ -204,6 +204,14 @@ class Activity(Base):
     )
     import_error: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # When this activity was last map-matched onto OSM way ids for cycle-
+    # network coverage (services/way_matching.py). Null for every activity
+    # imported before that feature shipped - that is the backfill queue's
+    # own work list - and set on both a successful and a failed attempt, so
+    # a track Valhalla genuinely cannot place is not retried forever.
+    ways_matched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
 
     __table_args__ = (
         # The library's own query: one user's rides, newest first.
@@ -343,6 +351,61 @@ class CycleWay(Base):
     )
 
 
+class CycleWayMember(Base):
+    """One OSM way belonging to one signed cycle route, with its own length.
+
+    Published by the indexer alongside CycleWay, from the same member table
+    `assemble_cycle_routes` collapses into CycleWay.geom - and unlike that
+    table, members keep their own shape. The merge into one MULTILINESTRING
+    per relation is what makes the network overlay *tile* affordable, and
+    this table is never tiled, so that constraint does not reach it.
+
+    It has to keep the geometry: filtering coverage through CycleWay.geom
+    instead tests the envelope of a whole national route. Measured on the
+    England extract, a 12 km box around Tring selected 8,301 member ways
+    totalling 1,921 km against the 125 km actually inside it, because NCN
+    1's envelope spans most of the country.
+    """
+
+    __tablename__ = "cycle_way_members"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    relation_id: Mapped[int] = mapped_column(BigInteger)
+    way_id: Mapped[int] = mapped_column(BigInteger)
+    length_m: Mapped[float] = mapped_column(Float)
+    geom: Mapped[Any] = mapped_column(
+        Geometry(geometry_type="LINESTRING", srid=4326, spatial_index=False)
+    )
+
+    __table_args__ = (
+        Index("ix_cycle_way_members_relation_way", "relation_id", "way_id", unique=True),
+        Index("ix_cycle_way_members_way", "way_id"),
+        Index("ix_cycle_way_members_geom", "geom", postgresql_using="gist"),
+    )
+
+
+class ActivityWay(Base):
+    """One OSM way a rider has been recorded riding, from services/way_matching.py.
+
+    App-owned, unlike CycleWayMember above: written as activities are
+    map-matched, one row per (user, way) rather than per ride -
+    `ride_count` and `first_ridden_at` accumulate across every activity
+    that touched it. The composite primary key is the only index this
+    needs: coverage always looks a way up by (user_id, way_id) together,
+    the matching upsert conflicts on the same pair, and nothing in this
+    feature queries by way_id alone across users.
+    """
+
+    __tablename__ = "activity_ways"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    way_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    first_ridden_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ride_count: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+
+
 class SearchIndexMeta(Base):
     """When the index was last built, and from what.
 
@@ -358,6 +421,12 @@ class SearchIndexMeta(Base):
     place_count: Mapped[int] = mapped_column(Integer)
     poi_count: Mapped[int] = mapped_column(Integer)
     cycle_way_count: Mapped[int] = mapped_column(Integer)
+    # Nullable, no default: only a rebuild by an indexer new enough to
+    # publish cycle_way_members sets this. NULL is what lets
+    # /api/coverage/cycle-network tell an install that has not been
+    # re-indexed since this feature shipped apart from one that has never
+    # been indexed at all - both would otherwise report a dishonest 0%.
+    cycle_way_member_count: Mapped[int | None] = mapped_column(Integer, default=None)
 
     __table_args__ = (CheckConstraint("id", name="ck_search_index_meta_singleton"),)
 

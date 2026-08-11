@@ -13,6 +13,7 @@ from app.api.activities import router as activities_router
 from app.api.admin import router as admin_router
 from app.api.assistant import router as assistant_router
 from app.api.auth import router as auth_router
+from app.api.coverage import router as coverage_router
 from app.api.custom_presets import router as custom_presets_router
 from app.api.llm_admin import router as llm_admin_router
 from app.api.places import router as places_router
@@ -27,6 +28,7 @@ from app.services.activity_import import queue as archive_queue
 from app.services.importer import MAX_FILE_BYTES
 from app.services.valhalla import ValhallaClient
 from app.services.wahoo_queue import queue as wahoo_queue
+from app.services.way_matching import queue as match_queue
 
 # Multipart framing costs a little on top of the file itself, so the wire
 # limit sits slightly above the file limit rather than rejecting a legitimate
@@ -43,9 +45,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.valhalla = ValhallaClient()
     await wahoo_queue.start()
     await archive_queue.start()
+    # Shares the one Valhalla client every request already uses, rather than
+    # owning a second httpx.AsyncClient - main.py closes it once, after every
+    # queue (this one included) has stopped.
+    await match_queue.start(app.state.valhalla)
     yield
     await wahoo_queue.stop()
     await archive_queue.stop()
+    await match_queue.stop()
     await app.state.valhalla.close()
 
 
@@ -96,6 +103,7 @@ app.include_router(custom_presets_router)
 app.include_router(llm_admin_router)
 app.include_router(assistant_router)
 app.include_router(activities_router)
+app.include_router(coverage_router)
 
 
 class SPAStaticFiles(StaticFiles):

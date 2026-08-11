@@ -450,6 +450,46 @@ class HeatmapAvailability(BaseModel):
     available: bool
 
 
+class NetworkCoverage(BaseModel):
+    """Ridden vs total metres of one network tier (icn/ncn/rcn/lcn) within a
+    bbox."""
+
+    network: str
+    ridden_m: float
+    total_m: float
+
+
+class CoverageResponse(BaseModel):
+    """How much of the signed cycle network a rider has ridden, near
+    wherever their own activities are.
+
+    `available` is False whenever the answer would be misleading rather
+    than merely absent: no place index built yet, one built before this
+    feature added member-way lengths
+    (search_index_meta.cycle_way_member_count is null), or the rider has
+    imported nothing to centre a default bbox on. Reporting 0% in any of
+    those cases reads as "you have ridden nothing", which is not the claim
+    being made - `reason` says which one it actually is.
+    """
+
+    available: bool
+    reason: str | None = None
+    networks: list[NetworkCoverage] = []
+
+
+class CoverageBackfillStatus(BaseModel):
+    """Progress of map-matching a rider's own activities onto OSM way ids.
+    Mirrors ArchiveImportStatus's shape - held in memory, not the database,
+    so a restart reports the job as interrupted rather than resuming it."""
+
+    id: uuid.UUID
+    status: str
+    total: int
+    matched: int
+    unmatched: int
+    error: str | None = None
+
+
 class SharedRoute(RouteResponse):
     """Public view of a shared route - no ids, no owner information."""
 

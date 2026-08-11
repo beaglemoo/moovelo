@@ -27,9 +27,11 @@ from app.schemas import (
 from app.services.activities import activity_from_track, name_from_filename
 from app.services.activity_import import MAX_ARCHIVE_BYTES, ImportJob
 from app.services.activity_import import queue as archive_queue
+from app.services.geo import coords_from_wkt
 from app.services.heatmap import MAX_HEATMAP_ZOOM, MIN_HEATMAP_ZOOM, heatmap_etag, heatmap_tile
 from app.services.importer import MAX_FILE_BYTES, RouteImportError, parse_route_file
 from app.services.polyline import encode_polyline6
+from app.services.way_matching import queue as match_queue
 
 router = APIRouter(prefix="/api/activities", tags=["activities"])
 
@@ -65,6 +67,11 @@ async def import_activity(
     db.add(activity)
     await db.commit()
     await db.refresh(activity)
+    # Off the request path: map matching is a few Valhalla round trips, and a
+    # rider uploading one ride should not wait on them (or on Valhalla's own
+    # 30s timeout, if it is unreachable). Coverage simply lags the import by
+    # however long the queue takes to reach it.
+    match_queue.submit(user.id, [activity.id])
     return await _detail(activity, db)
 
 
@@ -261,19 +268,6 @@ async def _detail(activity: Activity, db: DbDep) -> ActivityDetail:
     wkt = await db.scalar(select(ST_AsText(Activity.geom)).where(Activity.id == activity.id))
     return ActivityDetail(
         **_summary(activity).model_dump(),
-        shape=encode_polyline6(_coords(wkt)),
+        shape=encode_polyline6(coords_from_wkt(wkt)),
         elevation=[ElevationPoint(**point) for point in activity.elevation],
     )
-
-
-def _coords(wkt: str | None) -> list[tuple[float, float]]:
-    """lat, lon pairs from a PostGIS LINESTRING, which stores them lon-first."""
-    if not wkt or "(" not in wkt:
-        return []
-    inner = wkt[wkt.index("(") + 1 : wkt.rindex(")")]
-    coords = []
-    for pair in inner.split(","):
-        parts = pair.split()
-        if len(parts) >= 2:
-            coords.append((float(parts[1]), float(parts[0])))
-    return coords

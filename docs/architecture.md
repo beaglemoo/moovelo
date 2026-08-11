@@ -449,6 +449,115 @@ network's merged, country-wide 50 kB tile. This is worth watching rather
 than ignoring - grid aggregation is the documented fallback if real usage
 turns out worse than this synthetic county-scale rider.
 
+## Cycle-network coverage
+
+"You have ridden 38% of the National Cycle Network near you" needs two new
+tables and one new kind of matching the rest of the app never had to do.
+
+**`cycle_way_members`** is published by the indexer alongside `cycle_ways`,
+from the same member-way table `assemble_cycle_routes` collapses into
+`cycle_ways.geom` (see [The place index](#the-place-index)). It carries
+`relation_id`, `way_id`, `length_m` and the member's own `geom`.
+
+Keeping that geometry looks like undoing what `ST_LineMerge` is for, and
+is not: the merge exists because unmerged parts resist simplification and
+made the overlay *tile* expensive, and this table is never tiled. Filtering
+coverage through `cycle_ways.geom` instead - the obvious way to avoid a
+second copy - tests the bounding box of an entire national route. Measured
+on the England extract, a 12 km box around Tring selected 8,301 member ways
+totalling 1,921 km against the 125 km of network actually inside it,
+because NCN 1's envelope spans most of the country. Fifteen times the real
+answer, so members carry their own shapes and their own GIST index.
+
+Coverage also deduplicates by way within each network tier. 43,902 of
+187,392 member ways on that extract belong to more than one route, which
+summed per relation takes the national total from 33,968 km to 43,898 km -
+and skews unevenly, rewarding a rider whose miles happened to fall on
+multiplexed sections. Deduplication is per tier rather than global on
+purpose: a towpath carrying both an NCN route and a local one genuinely
+belongs to both networks, each tier is reported on its own, and nothing
+sums them into a single figure. `search_index_meta.cycle_way_member_count` is nullable with no
+default, so an index built before this feature (real cycle routes, no
+members) is distinguishable from one that has simply never been built -
+see [docs/data.md](data.md) and [docs/troubleshooting.md](troubleshooting.md)
+for what that means for an upgrade.
+
+**`activity_ways`** is app-owned: one row per `(user_id, way_id)` a rider
+has ever been recorded riding, with `ride_count` and `first_ridden_at`
+accumulating across every activity that touched it. The composite primary
+key is the only index it needs - coverage and the matching upsert both
+reach a row by that exact pair, and nothing else queries it.
+
+### Matching: map_snap, not edge_walk
+
+The surface breakdown (`services/valhalla.py: trace_attributes`) walks a
+route's *own* edges with `shape_match: edge_walk`, which requires the shape
+to already lie exactly on the routing graph - true of a route this app
+generated, never true of a raw GPS recording. Coverage instead uses
+`shape_match: map_snap` (`ValhallaClient.match_ways`), the same mode
+`trace_route` already uses to recover maneuvers for an imported file:
+downsampled to ~15 m spacing, chunked at 1000 points with no shared
+boundary point (only aggregate metres per way matter, not continuous
+geometry), requesting `edge.way_id` and `edge.length`. Costing is the
+gravel bundle regardless of anything the rider might plan with - an
+activity carries no preset, it is a recording - and unlike edge_walk,
+map_snap genuinely uses costing to decide what a trace can snap to, so the
+most surface-tolerant bundle is what keeps a real towpath or bridleway
+ride from under-matching.
+
+A way credited from a sub-5-metre sliver (a chunk boundary can contribute
+one) is dropped as noise (`MIN_MATCHED_WAY_LENGTH_M`) rather than counted -
+`services/way_matching.py`.
+
+### Matching never blocks an import, or breaks one
+
+`match_activity` degrades any failure - unmatchable track, an unreachable
+engine, tiles still building - to "no ways credited", exactly like
+`trace_attributes`' own edge_walk failure policy, and always sets
+`ways_matched_at` regardless of outcome so the same track is not retried
+forever. The activity itself is never touched.
+
+Matching also never runs inline in a request: both the single-file and the
+archive import endpoints hand off to `services/way_matching.py`'s
+`WayMatchQueue`, the same one-worker-draining-a-queue shape as
+`wahoo_queue.py` and the Strava archive importer. A `MatchJob` batches
+either an explicit list of activity ids (what a fresh import submits) or
+`None`, meaning "every activity with `ways_matched_at` still null" - the
+backfill button on `/activities` submits that, since rides imported before
+this feature shipped have never been attempted.
+
+### `GET /api/coverage/cycle-network`
+
+Ridden vs total metres per network tier (icn/ncn/rcn/lcn), within a bbox:
+
+```sql
+SELECT cw.network,
+       SUM(cwm.length_m) AS total_m,
+       SUM(CASE WHEN aw.way_id IS NOT NULL THEN cwm.length_m ELSE 0 END) AS ridden_m
+FROM cycle_ways cw
+JOIN cycle_way_members cwm ON cwm.relation_id = cw.id
+LEFT JOIN activity_ways aw ON aw.way_id = cwm.way_id AND aw.user_id = :user_id
+WHERE cw.geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
+GROUP BY cw.network
+```
+
+The `user_id` filter lives in the `LEFT JOIN`'s own `ON` clause, not a
+`WHERE` added after it - moving it to `WHERE` would turn the join into an
+inner one and silently drop every *unridden* way, which is backwards for a
+denominator. This is the one line that matters most for the same reason
+the heatmap's own `user_id` filter does:
+`tests/test_coverage.py::test_one_riders_coverage_never_counts_another_riders_ways`
+was run once against a version of this query with the filter removed to
+confirm it actually fails without it.
+
+The bbox is optional. Given none, the endpoint centres one on the extent of
+the rider's own activities (`ST_Extent`, buffered ~5.5 km) - what the
+`/activities` card uses, since it has no map to draw one from itself.
+`available: false` covers three distinct reasons (index never built, index
+predates member lengths, no activities to centre a default bbox on) with
+its own `reason` string, rather than a bare 0% that would read as "you have
+ridden nothing" no matter which of those is actually true.
+
 ## Wahoo sync
 
 `services/wahoo.py` implements OAuth against api.wahooligan.com (tokens
@@ -1114,12 +1223,13 @@ backend/app/
 ├── config.py                # pydantic-settings, all env-driven
 ├── db.py                    # async engine + session factory
 ├── version.py               # APP_VERSION, read from pyproject.toml (never installed as a package)
-├── models.py                # User, Session, Route, Activity, CustomPreset,
-│                            #   WahooAccount, Place, Poi, CycleWay,
+├── models.py                # User, Session, Route, Activity, ActivityWay, CustomPreset,
+│                            #   WahooAccount, Place, Poi, CycleWay, CycleWayMember,
 │                            #   SearchIndexMeta, UserSettings, LLMSettings
 ├── schemas.py               # request/response models
 ├── api/
 │   ├── activities.py        # /api/activities: import, list, read, delete, heatmap tiles
+│   ├── coverage.py          # /api/coverage: cycle-network %, backfill queue + status
 │   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface,
 │   │                        #   /api/route/isochrone, /api/route/loop, /api/route/alternates
 │   ├── places.py            # /api/places: search, reverse, pois-along-route
@@ -1136,15 +1246,18 @@ backend/app/
 └── services/
     ├── presets.py           # the three costing bundles + resolve_costing
     ├── polyline.py          # polyline6 decoder
-    ├── valhalla.py          # httpx client, error mapping, elevation, ascent calc, _parse_trip (route/alternates)
+    ├── valhalla.py          # httpx client, error mapping, elevation, ascent calc, _parse_trip
+    │                        #   (route/alternates), match_ways (map_snap, cycle-network coverage)
     ├── ride_time.py         # gradient/surface/FTP model, computed on read only
     ├── loop.py              # "N km loop from here": bearing search + scoring + dedup
     ├── auth.py, oidc.py     # password hashing, sessions, OIDC client
     ├── gpx.py, fit.py       # exporters (FIT embeds maneuvers as course points)
     ├── importer.py          # GPX/TCX/FIT parsing for uploaded files
     ├── import_routes.py     # map matching an imported track back onto the network
-    ├── activities.py        # a parsed track into a stored ride (no matching, no backfill)
+    ├── activities.py        # a parsed track into a stored ride
     ├── activity_import.py   # Strava bulk-export zip: manifest, caps, background worker
+    ├── way_matching.py      # map_snap matching + WayMatchQueue (new imports + backfill)
+    ├── coverage.py          # ridden vs total metres per network tier, default bbox
     ├── heatmap.py           # personal heatmap tiles: per-user MVT + ETag
     ├── places.py            # place search, reverse geocode, POIs along a route
     ├── climbs.py            # profile segmentation + HC/1-4 categorisation
