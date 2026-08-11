@@ -272,7 +272,7 @@
 			{/if}
 		{/if}
 	</div>
-	<ImportResults />
+	<ImportResults queue={importQueue} />
 	<div class="filters">
 		<input
 			type="search"

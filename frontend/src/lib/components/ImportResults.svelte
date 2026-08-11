@@ -1,16 +1,32 @@
 <script lang="ts">
-	import { cueCount, importQueue } from '$lib/import.svelte';
+	import { cueCount, type ImportResult } from '$lib/import.svelte';
+	import type { ActivityDetail, SavedRoute } from '$lib/api';
 	import { km } from '$lib/format';
 
-	const results = $derived(importQueue.results);
+	/** Structural rather than the class itself, so this renders for either
+	 * queue without importing both and without a union of two generics. */
+	interface Queue {
+		results: ImportResult<SavedRoute | ActivityDetail>[];
+		busy: boolean;
+		clear(): void;
+	}
+
+	const { queue }: { queue: Queue } = $props();
+
+	const results = $derived(queue.results);
+
+	/** A route carries legs; an activity never does. */
+	function asRoute(item: SavedRoute | ActivityDetail): SavedRoute | null {
+		return 'legs' in item ? item : null;
+	}
 </script>
 
 {#if results.length > 0}
 	<div class="results">
 		<div class="results-head">
 			<strong>Import</strong>
-			{#if !importQueue.busy}
-				<button type="button" onclick={() => importQueue.clear()}>Dismiss</button>
+			{#if !queue.busy}
+				<button type="button" onclick={() => queue.clear()}>Dismiss</button>
 			{/if}
 		</div>
 		<ul>
@@ -23,18 +39,24 @@
 						<span class="detail">importing…</span>
 					{:else if result.status === 'failed'}
 						<span class="detail error">{result.error}</span>
-					{:else if result.route}
-						{@const cues = cueCount(result.route)}
+					{:else if result.item}
+						{@const route = asRoute(result.item)}
 						<span class="detail">
-							{km(result.route.distance_m)} ·
-							{Math.round(result.route.ascent_m)} m ascent ·
-							{#if cues > 0}
-								{cues} turn cues
-							{:else}
-								<span class="warn">no turn cues - could not match to roads</span>
+							{km(result.item.distance_m)} ·
+							{Math.round(result.item.ascent_m)} m ascent
+							{#if route}
+								{@const cues = cueCount(route)}
+								·
+								{#if cues > 0}
+									{cues} turn cues
+								{:else}
+									<span class="warn">no turn cues - could not match to roads</span>
+								{/if}
 							{/if}
 						</span>
-						<a href={`/?route=${result.route.id}`}>View</a>
+						{#if route}
+							<a href={`/?route=${route.id}`}>View</a>
+						{/if}
 					{/if}
 				</li>
 			{/each}

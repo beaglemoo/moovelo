@@ -1,12 +1,12 @@
-import { routes, type Preset, type SavedRoute } from '$lib/api';
+import { activities, routes, type ActivityDetail, type Preset, type SavedRoute } from '$lib/api';
 
-export interface ImportResult {
+export interface ImportResult<T> {
 	/** Filenames repeat - two apps both export "route.gpx" - so rows need
 	 * an identity of their own to stay matched to the right file. */
 	id: number;
 	filename: string;
 	status: 'waiting' | 'importing' | 'done' | 'failed';
-	route?: SavedRoute;
+	item?: T;
 	error?: string;
 }
 
@@ -17,29 +17,36 @@ function cueCount(route: SavedRoute): number {
 }
 
 /**
- * Shared by the Import button on the library and the window-wide drop target,
- * so a file behaves the same however it arrives.
+ * Sequential upload with a row per file.
+ *
+ * Shared by the Import button on the library, the window-wide drop target and
+ * the activities page, so a file behaves the same however it arrives and
+ * whatever it is being imported as.
  *
  * Files are uploaded one at a time rather than in a single request: each is
- * map-matched server-side, and a whole Strava export in one request would sit
+ * parsed server-side, and a whole Strava export in one request would sit
  * behind a single long timeout with no feedback.
+ *
+ * Generic over what an upload produces rather than duplicated per kind - the
+ * sequencing, the batch counter and the by-id patching are the whole point of
+ * this class, and none of them care what came back.
  */
-class ImportQueue {
-	results = $state<ImportResult[]>([]);
+class ImportQueue<T> {
+	results = $state<ImportResult<T>[]>([]);
 	busy = $state(false);
 	/** Bumped when a batch finishes, so views can refresh themselves. */
 	completedBatches = $state(0);
 	#nextId = 1;
 	#running = 0;
 	#tail: Promise<void> = Promise.resolve();
+	#upload: (file: File, preset: Preset) => Promise<T>;
 
-	get imported(): SavedRoute[] {
-		return this.results.filter((r) => r.route).map((r) => r.route as SavedRoute);
+	constructor(upload: (file: File, preset: Preset) => Promise<T>) {
+		this.#upload = upload;
 	}
 
-	/** Routes whose track could not be matched, so they carry no turn cues. */
-	get unmatched(): ImportResult[] {
-		return this.results.filter((r) => r.route && cueCount(r.route) === 0);
+	get imported(): T[] {
+		return this.results.filter((r) => r.item).map((r) => r.item as T);
 	}
 
 	clear() {
@@ -50,7 +57,7 @@ class ImportQueue {
 		const incoming = [...files];
 		if (incoming.length === 0) return;
 
-		const queued: ImportResult[] = incoming.map((file) => ({
+		const queued: ImportResult<T>[] = incoming.map((file) => ({
 			id: this.#nextId++,
 			filename: file.name,
 			status: 'waiting'
@@ -68,8 +75,8 @@ class ImportQueue {
 				const { id } = queued[offset];
 				this.#patch(id, { status: 'importing' });
 				try {
-					const route = await routes.importFile(file, preset);
-					this.#patch(id, { status: 'done', route });
+					const item = await this.#upload(file, preset);
+					this.#patch(id, { status: 'done', item });
 				} catch (err) {
 					this.#patch(id, {
 						status: 'failed',
@@ -93,12 +100,26 @@ class ImportQueue {
 
 	/** Patched by id: rows can be dismissed or added while a batch runs, so a
 	 * positional index is not stable. */
-	#patch(id: number, patch: Partial<ImportResult>) {
+	#patch(id: number, patch: Partial<ImportResult<T>>) {
 		this.results = this.results.map((result) =>
 			result.id === id ? { ...result, ...patch } : result
 		);
 	}
 }
 
-export const importQueue = new ImportQueue();
+export const importQueue = new ImportQueue<SavedRoute>((file, preset) =>
+	routes.importFile(file, preset)
+);
+
+/** Rides, not plans. No preset: an activity is never routed, so there is
+ * nothing for a costing bundle to influence. */
+export const activityImportQueue = new ImportQueue<ActivityDetail>((file) =>
+	activities.importFile(file)
+);
+
+/** Routes whose track could not be matched, so they carry no turn cues. */
+export function unmatched(results: ImportResult<SavedRoute>[]): ImportResult<SavedRoute>[] {
+	return results.filter((r) => r.item && cueCount(r.item) === 0);
+}
+
 export { cueCount };
