@@ -456,14 +456,27 @@ tables and one new kind of matching the rest of the app never had to do.
 
 **`cycle_way_members`** is published by the indexer alongside `cycle_ways`,
 from the same member-way table `assemble_cycle_routes` collapses into
-`cycle_ways.geom` (see [The place index](#the-place-index)). What it
-carries is deliberately narrow: `relation_id`, `way_id` and `length_m`, no
-geometry at all. Storing member geometry a second time is exactly what
-`ST_LineMerge` exists to make unnecessary for the overlay tile, and
-coverage never draws anything - it only ever needs a length to sum. The
-spatial filter a coverage query needs ("routes near here") is served by
-joining through `cycle_ways.geom` instead, which already carries a GIST
-index. `search_index_meta.cycle_way_member_count` is nullable with no
+`cycle_ways.geom` (see [The place index](#the-place-index)). It carries
+`relation_id`, `way_id`, `length_m` and the member's own `geom`.
+
+Keeping that geometry looks like undoing what `ST_LineMerge` is for, and
+is not: the merge exists because unmerged parts resist simplification and
+made the overlay *tile* expensive, and this table is never tiled. Filtering
+coverage through `cycle_ways.geom` instead - the obvious way to avoid a
+second copy - tests the bounding box of an entire national route. Measured
+on the England extract, a 12 km box around Tring selected 8,301 member ways
+totalling 1,921 km against the 125 km of network actually inside it,
+because NCN 1's envelope spans most of the country. Fifteen times the real
+answer, so members carry their own shapes and their own GIST index.
+
+Coverage also deduplicates by way within each network tier. 43,902 of
+187,392 member ways on that extract belong to more than one route, which
+summed per relation takes the national total from 33,968 km to 43,898 km -
+and skews unevenly, rewarding a rider whose miles happened to fall on
+multiplexed sections. Deduplication is per tier rather than global on
+purpose: a towpath carrying both an NCN route and a local one genuinely
+belongs to both networks, each tier is reported on its own, and nothing
+sums them into a single figure. `search_index_meta.cycle_way_member_count` is nullable with no
 default, so an index built before this feature (real cycle routes, no
 members) is distinguishable from one that has simply never been built -
 see [docs/data.md](data.md) and [docs/troubleshooting.md](troubleshooting.md)
