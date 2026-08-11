@@ -50,6 +50,10 @@ def activity_from_track(
 
     name = (track.name or fallback_name).strip()[:NAME_MAX] or fallback_name[:NAME_MAX]
     return Activity(
+        # Assigned eagerly rather than left to the column default: both
+        # import paths queue map matching by id straight after this object
+        # is created, and the default only populates it at flush.
+        id=uuid.uuid4(),
         user_id=user_id,
         name=name,
         started_at=track.started_at,

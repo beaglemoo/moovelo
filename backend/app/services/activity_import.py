@@ -30,6 +30,7 @@ from app.db import session_factory
 from app.models import Activity
 from app.services.activities import activity_from_track, name_from_filename, strava_activity_id
 from app.services.importer import MAX_FILE_BYTES, RouteImportError, parse_route_file
+from app.services.way_matching import queue as match_queue
 
 logger = logging.getLogger(__name__)
 
@@ -316,6 +317,9 @@ class ArchiveImportQueue:
                 .all()
             )
 
+            # Ids only, not the ORM objects - they collect across the whole
+            # archive and are only needed after commit to queue matching.
+            created: list[uuid.UUID] = []
             archive = zipfile.ZipFile(io.BytesIO(data))
             with archive:
                 for entry in entries:
@@ -324,7 +328,7 @@ class ArchiveImportQueue:
                         job.duplicates += 1
                         continue
                     try:
-                        await self._one(db, job, archive, entry, ref)
+                        activity = await self._one(db, job, archive, entry, ref)
                     except (ArchiveError, RouteImportError) as exc:
                         job.failed += 1
                         if len(job.problems) < 20:
@@ -333,7 +337,16 @@ class ArchiveImportQueue:
                     if ref is not None:
                         seen.add(ref)
                     job.imported += 1
+                    created.append(activity.id)
                 await db.commit()
+
+        # Off the request path, same reasoning as the single-file import
+        # endpoint: map matching is Valhalla round trips per ride, and a
+        # whole archive's worth would turn "reading..." into a much longer
+        # wait for no benefit - coverage can lag an import by however long
+        # the queue takes to reach it.
+        if created:
+            match_queue.submit(job.user_id, created)
 
         job.status = "done"
 
@@ -344,7 +357,7 @@ class ArchiveImportQueue:
         archive: zipfile.ZipFile,
         entry: ArchiveEntry,
         ref: str | None,
-    ) -> None:
+    ) -> Activity:
         raw = await asyncio.to_thread(_read_entry, archive, entry.path, MAX_FILE_BYTES)
         data = await asyncio.to_thread(_decompress_member, entry.path, raw)
         track = await asyncio.to_thread(parse_route_file, entry.path, data)
@@ -360,6 +373,7 @@ class ArchiveImportQueue:
         if entry.name:
             activity.name = entry.name[:200]
         db.add(activity)
+        return activity
 
 
 queue = ArchiveImportQueue()
