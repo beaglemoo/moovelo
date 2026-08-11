@@ -42,16 +42,43 @@ _BBOX_SQL = text("""
 # added after it - moving it to WHERE would turn the LEFT JOIN into an inner
 # one and silently drop every unridden way, which is exactly backwards for a
 # coverage denominator.
+#
+# Two things here were measured on the England extract rather than reasoned
+# about, and both were wrong in the obvious implementation:
+#
+# The bbox is tested against the member way, not the route it belongs to. A
+# relation's envelope is the envelope of the whole route, and NCN 1's covers
+# most of the country - so filtering on cycle_ways.geom pulled 8,301 member
+# ways totalling 1,921 km into a 12 km box around Tring that actually holds
+# 125 km of network. Fifteen times the real answer.
+#
+# DISTINCT ON collapses a way that carries more than one route of the same
+# tier. 43,902 of 187,392 member ways (23%) belong to several relations, and
+# summing them per relation inflates the national denominator from 33,968 km
+# to 43,898 km. Worse than the size of the error, it is uneven: it would
+# reward a rider whose miles happened to fall on multiplexed sections.
+#
+# Deduplication is per tier, not global, and that is deliberate. A towpath
+# carrying both an NCN route and a local one is genuinely part of both
+# networks, and each tier's percentage is reported on its own - nothing sums
+# them into a single figure, which is the only thing that would double count.
 _COVERAGE_SQL = text("""
-    SELECT cw.network,
-           SUM(cwm.length_m) AS total_m,
-           SUM(CASE WHEN aw.way_id IS NOT NULL THEN cwm.length_m ELSE 0 END) AS ridden_m
-    FROM cycle_ways cw
-    JOIN cycle_way_members cwm ON cwm.relation_id = cw.id
-    LEFT JOIN activity_ways aw
-           ON aw.way_id = cwm.way_id AND aw.user_id = :user_id
-    WHERE cw.geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
-    GROUP BY cw.network
+    SELECT network,
+           SUM(length_m) AS total_m,
+           SUM(CASE WHEN ridden THEN length_m ELSE 0 END) AS ridden_m
+    FROM (
+        SELECT DISTINCT ON (cw.network, cwm.way_id)
+               cw.network AS network,
+               cwm.length_m AS length_m,
+               (aw.way_id IS NOT NULL) AS ridden
+        FROM cycle_way_members cwm
+        JOIN cycle_ways cw ON cw.id = cwm.relation_id
+        LEFT JOIN activity_ways aw
+               ON aw.way_id = cwm.way_id AND aw.user_id = :user_id
+        WHERE cwm.geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
+        ORDER BY cw.network, cwm.way_id, ridden DESC
+    ) member
+    GROUP BY network
 """)
 
 
