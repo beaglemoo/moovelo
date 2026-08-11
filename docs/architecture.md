@@ -391,6 +391,68 @@ cannot be typed ("could not determine data type of parameter $1"), and an
 empty array parameter cannot either ("could not determine polymorphic
 type because input has type unknown"). Both need an explicit `CAST`.
 
+## Strava bulk import
+
+`POST /api/activities/import/archive` takes the zip Strava emails when a
+rider requests their account archive - the bulk-export path, not the API
+(`services/activity_import.py`; the clause-by-clause reasoning for why is
+in [the FAQ](faq.md#why-is-there-no-strava-sync)). It answers 202 with a
+job id rather than blocking: hundreds of files at seconds of CPU each is
+minutes of work, and the single-file endpoint's own reasoning for parsing
+off the event loop applies here at archive scale, so `ArchiveImportQueue`
+is a one-worker queue like `wahoo_queue.py` and `way_matching.py`'s -
+`GET /api/activities/import/archive/{job_id}` polls `ImportJob`'s
+in-memory status (`queued -> running -> done/error`, plus
+imported/failed/skipped/duplicate counts and up to 20 per-file problem
+strings). A job is process memory only, so a restart mid-import reports
+"interrupted", not a silent resume against bytes that are gone.
+
+**Reading the archive never trusts the archive.** `list_entries` bounds
+entry count (`MAX_ENTRIES`, 20,000) and claimed total size before opening
+anything, and `_read_entry`/`_decompress_member` read every member -
+including gzipped ones - in fixed chunks against a hard per-file cap
+rather than trusting `ZipInfo.file_size`, which a hostile zip is free to
+lie in. A path is also rejected outright if it tries to escape the
+archive (`_safe_path`); nothing here is ever written to disk, so
+traversal cannot overwrite a file, but it is still a sign of an archive
+Strava did not produce.
+
+**`activities.csv` decides what's a ride, but its absence does not stop
+the import.** Strava's own manifest names each file's activity type;
+`is_ride` keeps anything matching `ride`/`cycl`/`bike`/`biking` by
+substring and, deliberately, keeps anything the manifest does not name at
+all - an unrecognised or missing type is imported rather than silently
+dropped, on the reasoning that a file that turns out not to be a ride
+will simply fail to parse or add one stray line to the map, which costs
+less than losing a rider's data to a locale Strava's export did not
+anticipate. A hand-assembled zip of GPX files with no manifest at all is
+just as valid an input: every file that looks like a track is taken at
+face value.
+
+**Deduplication is per rider, on the Strava activity id embedded in each
+export filename** (`strava_activity_id`, `services/activities.py`), read
+once as `Activity.source_ref` for every existing row before the archive
+is walked. Re-uploading a fresher archive next year costs nothing beyond
+the new rides - the dedup set is user-scoped, so two riders can never
+collide on the same Strava id. Files with no derivable id (a hand-built
+zip) are imported unconditionally; there is nothing to deduplicate them
+against.
+
+**One failed file costs that file, not the archive.** Each entry is
+parsed inside its own `try`/`except`, and a `RouteImportError` or
+`ArchiveError` increments `failed` and appends a `path: reason` string to
+`problems` rather than aborting the loop - the same "degrade per unit of
+work, not the whole request" shape as `trace_route`'s chunking. The
+manifest's own activity name wins over whatever the file calls itself,
+since it is the name the rider actually gave the ride.
+
+Newly created activities are handed to `way_matching.py`'s queue **after
+the whole archive commits**, the same "off the request path" reasoning
+`POST /api/activities/import` uses for a single file: matching hundreds
+of rides is itself minutes of Valhalla round trips, so coverage lags a
+bulk import by however long that queue takes to drain, rather than
+holding the archive job open for it.
+
 ## Personal heatmap
 
 `GET /api/activities/heatmap/{z}/{x}/{y}.mvt` serves one rider's own
