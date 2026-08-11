@@ -122,6 +122,14 @@
 	function onHeaderPointerDown(event: PointerEvent) {
 		if (event.button !== 0) return;
 		const header = event.currentTarget as HTMLElement;
+		// The close button lives inside the header so it can sit flush beside
+		// the label. Without this check, setPointerCapture below grabs every
+		// pointerdown in the header - including one that started on the
+		// button - and the button's own click, which fires after capture is
+		// released, gets retargeted to the header instead. That made the
+		// close button unclickable by mouse or touch; only Tab+Enter worked,
+		// because keyboard activation never goes through pointer capture.
+		if ((event.target as HTMLElement | null)?.closest('button')) return;
 		if (!root) return;
 		const area = root.parentElement;
 		if (!area) return;
