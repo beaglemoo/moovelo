@@ -439,6 +439,17 @@ class ActivityDetail(ActivitySummary):
     elevation: list[ElevationPoint] = []
 
 
+class HeatmapAvailability(BaseModel):
+    """Whether this rider has anything for the personal heatmap to draw.
+
+    Asked once on planner load so the toggle can be left out entirely
+    rather than offered as a control that would only ever fetch empty
+    tiles - the same reasoning as AppConfig.search_enabled.
+    """
+
+    available: bool
+
+
 class SharedRoute(RouteResponse):
     """Public view of a shared route - no ids, no owner information."""
 

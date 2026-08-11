@@ -398,6 +398,12 @@ export interface ActivityQuery {
 	source?: string;
 }
 
+/** Whether this rider has anything for the personal heatmap to draw. Mirrors
+ * backend/app/schemas.py HeatmapAvailability. */
+export interface HeatmapAvailability {
+	available: boolean;
+}
+
 export const routes = {
 	list: (query: RouteQuery = {}) => {
 		const params = new URLSearchParams();
@@ -455,7 +461,16 @@ export const activities = {
 		});
 	},
 	archiveStatus: (id: string) =>
-		request<ArchiveImportStatus>(`/api/activities/import/archive/${id}`)
+		request<ArchiveImportStatus>(`/api/activities/import/archive/${id}`),
+	/** Asked once by the planner to decide whether the heatmap toggle is
+	 * worth showing at all - a rider with nothing imported gets no control
+	 * that would only ever fetch empty tiles. */
+	heatmapAvailable: () => request<HeatmapAvailability>('/api/activities/heatmap-available'),
+	/** The heatmap tile URL template for MapLibre's vector source. No cache-
+	 * busting version query param, unlike the cycle-network overlay's: these
+	 * tiles are `private, no-cache` with an ETag (services/heatmap.py), so
+	 * the browser always revalidates rather than trusting a long max-age. */
+	heatmapTileUrl: () => `${location.origin}/api/activities/heatmap/{z}/{x}/{y}.mvt`
 };
 
 export const shared = {

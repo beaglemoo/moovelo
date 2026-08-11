@@ -44,6 +44,10 @@
 		/** Index build stamp, appended to the tile URL. The tiles carry a
 		 * long max-age, so without it a re-index stays invisible for a day. */
 		cycleNetworkVersion?: string | null;
+		/** Whether this rider has any activities, so the personal heatmap has
+		 * anything to draw. False leaves the source unadded and the toggle
+		 * hidden, same reasoning as cycleNetworkAvailable. */
+		heatmapAvailable?: boolean;
 		/** Water, coffee and the rest, drawn as a circle layer. */
 		pois?: PoiResult[];
 		hoveredPoiId?: number | null;
@@ -111,6 +115,7 @@
 		resolvePlaceName,
 		cycleNetworkAvailable = false,
 		cycleNetworkVersion = null,
+		heatmapAvailable = false,
 		pois = [],
 		hoveredPoiId = null,
 		onHoverPoi,
@@ -199,6 +204,9 @@
 
 	const OVERLAY_STORAGE_KEY = 'moovelo:cycle-network';
 	let cycleNetwork = $state(false);
+
+	const HEATMAP_STORAGE_KEY = 'moovelo:heatmap';
+	let heatmap = $state(false);
 
 	let container: HTMLDivElement;
 	let map: maplibregl.Map | undefined;
@@ -355,6 +363,7 @@
 	onMount(() => {
 		basemap = savedBasemap();
 		cycleNetwork = localStorage.getItem(OVERLAY_STORAGE_KEY) === 'on';
+		heatmap = localStorage.getItem(HEATMAP_STORAGE_KEY) === 'on';
 		map = new maplibregl.Map({
 			container,
 			style: baseStyle(cyclosmTileUrl ? [cyclosmTileUrl] : PUBLIC_CYCLOSM_TILES),
@@ -419,6 +428,35 @@
 						// wide enough to follow once you are looking at roads.
 						'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1, 10, 2, 14, 3.5],
 						'line-opacity': 0.75
+					}
+				});
+			}
+			// Also added first (under the route), for the same reason: the
+			// heatmap is context, not the thing being edited. A low, constant
+			// opacity is the whole trick - MapLibre composites each traced ride
+			// as its own translucent stroke, so roads ridden many times darken
+			// where the strokes stack, and a once-ridden road stays faint.
+			if (heatmapAvailable) {
+				map.addSource('heatmap', {
+					type: 'vector',
+					tiles: [`${location.origin}/api/activities/heatmap/{z}/{x}/{y}.mvt`],
+					minzoom: 4,
+					maxzoom: 16
+				});
+				map.addLayer({
+					id: 'heatmap-line',
+					type: 'line',
+					source: 'heatmap',
+					'source-layer': 'activities',
+					layout: {
+						'line-cap': 'round',
+						'line-join': 'round',
+						visibility: 'none'
+					},
+					paint: {
+						'line-color': '#dc322f',
+						'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1, 12, 2, 16, 3],
+						'line-opacity': 0.15
 					}
 				});
 			}
@@ -1104,6 +1142,18 @@
 		cycleNetwork = !cycleNetwork;
 		localStorage.setItem(OVERLAY_STORAGE_KEY, cycleNetwork ? 'on' : 'off');
 	}
+
+	// Same reasoning as the cycle-network overlay above: an independent
+	// aria-pressed toggle, not mutually exclusive with anything else drawn.
+	$effect(() => {
+		if (!map || !mapReady || !heatmapAvailable) return;
+		map.setLayoutProperty('heatmap-line', 'visibility', heatmap ? 'visible' : 'none');
+	});
+
+	function toggleHeatmap() {
+		heatmap = !heatmap;
+		localStorage.setItem(HEATMAP_STORAGE_KEY, heatmap ? 'on' : 'off');
+	}
 </script>
 
 <!-- A window resize or a device rotation reflows the map under a menu that
@@ -1195,6 +1245,18 @@
 		Cycle routes
 	</button>
 {/if}
+{#if heatmapAvailable}
+	<button
+		type="button"
+		class="overlay-toggle heatmap-toggle"
+		class:active={heatmap}
+		aria-pressed={heatmap}
+		title="Show where you've ridden before"
+		onclick={toggleHeatmap}
+	>
+		Heatmap
+	</button>
+{/if}
 
 <style>
 	.map {
@@ -1247,6 +1309,16 @@
 		background: #268bd2;
 		border-color: #268bd2;
 		color: #fff;
+	}
+	/* Offset past "Cycle routes", which the toggle before it may or may not
+	 * render - fixed rather than flow-based, matching how .overlay-toggle
+	 * itself is positioned relative to .basemap-switch. */
+	.heatmap-toggle {
+		left: 232px;
+	}
+	.heatmap-toggle.active {
+		background: #dc322f;
+		border-color: #dc322f;
 	}
 	.context-menu {
 		position: absolute;
