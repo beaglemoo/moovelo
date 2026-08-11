@@ -255,7 +255,7 @@ class CustomPreset(Base):
     __table_args__ = (UniqueConstraint("user_id", "name"),)
 
 
-# The four tables below are written only by the indexer sidecar, which is a
+# The five tables below are written only by the indexer sidecar, which is a
 # separate process on its own compose profile. The app reads them and never
 # writes them, so they carry no timestamps and no ownership.
 
@@ -384,6 +384,40 @@ class CycleWayMember(Base):
     )
 
 
+class OsmWay(Base):
+    """One OSM highway way a bicycle could ride - the all-roads coverage
+    denominator (Phase 10 PR8), distinct from CycleWayMember's signed-network
+    denominator: this includes every bikeable road, not just the ones
+    carrying a route relation.
+
+    Published by the indexer, one row per way, keyed on the OSM way id
+    itself - unlike CycleWayMember, a road way has no owning relation to
+    pair it with, so there is nothing else a natural key could be. Geometry
+    is simplified at index time (indexer/indexer/db.py:assemble_road_ways);
+    nothing here is ever drawn, only summed and bbox-tested, so that
+    tolerance is deliberately coarser than anything meant for display.
+
+    See indexer/indexer/categories.py:ROAD_HIGHWAY_EXCLUDE for exactly what
+    counts as bikeable - footways, paths, bridleways and tracks are kept on
+    purpose, and access=private/no is not filtered at all.
+    """
+
+    __tablename__ = "osm_ways"
+
+    way_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    highway: Mapped[str] = mapped_column(Text)
+    name: Mapped[str | None] = mapped_column(Text, default=None)
+    length_m: Mapped[float] = mapped_column(Float)
+    geom: Mapped[Any] = mapped_column(
+        Geometry(geometry_type="LINESTRING", srid=4326, spatial_index=False)
+    )
+
+    __table_args__ = (
+        Index("ix_osm_ways_geom", "geom", postgresql_using="gist"),
+        Index("ix_osm_ways_highway", "highway"),
+    )
+
+
 class ActivityWay(Base):
     """One OSM way a rider has been recorded riding, from services/way_matching.py.
 
@@ -427,6 +461,11 @@ class SearchIndexMeta(Base):
     # re-indexed since this feature shipped apart from one that has never
     # been indexed at all - both would otherwise report a dishonest 0%.
     cycle_way_member_count: Mapped[int | None] = mapped_column(Integer, default=None)
+    # Same reasoning as cycle_way_member_count, for the all-roads
+    # denominator: nullable with no default, so /api/coverage/roads can
+    # tell an index that predates osm_ways apart from one that has simply
+    # never been built.
+    osm_way_count: Mapped[int | None] = mapped_column(Integer, default=None)
 
     __table_args__ = (CheckConstraint("id", name="ck_search_index_meta_singleton"),)
 

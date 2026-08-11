@@ -22,11 +22,11 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from indexer.extract import CycleMemberRow, PlaceRow, PoiRow
+from indexer.extract import CycleMemberRow, PlaceRow, PoiRow, RoadWayRow
 
 log = logging.getLogger(__name__)
 
-INDEXED_TABLES = ("places", "pois", "cycle_ways", "cycle_way_members")
+INDEXED_TABLES = ("places", "pois", "cycle_ways", "cycle_way_members", "osm_ways")
 
 PLACE_COLUMNS = (
     "osm_type",
@@ -45,15 +45,21 @@ CYCLE_COLUMNS = ("id", "ref", "name", "network", "operator", "geom")
 # For cycle-network coverage (Phase 10): which OSM ways make up each route,
 # and how long each one is - deliberately no geometry, see assemble_cycle_routes.
 CYCLE_MEMBER_COLUMNS = ("relation_id", "way_id", "length_m", "geom")
+# For all-roads coverage (Phase 10): every bikeable OSM way, not just signed
+# cycle routes. way_id is the OSM way id and osm_ways' own primary key - a
+# way is a way, unlike a cycle-route member it has no owning relation to
+# pair it with - so unlike the two columns above it is supplied here too.
+ROAD_WAY_COLUMNS = ("way_id", "highway", "name", "length_m", "geom")
 
 COLUMNS: dict[str, tuple[str, ...]] = {
     "places": PLACE_COLUMNS,
     "pois": POI_COLUMNS,
     "cycle_ways": CYCLE_COLUMNS,
     "cycle_way_members": CYCLE_MEMBER_COLUMNS,
+    "osm_ways": ROAD_WAY_COLUMNS,
 }
 
-# Raw member geometry, one row per (relation, way) - not one of the four
+# Raw member geometry, one row per (relation, way) - not one of the
 # published tables above, and never queried once assemble_cycle_routes has
 # both collapsed it into cycle_ways.geom and summed it into
 # cycle_way_members_stage. Named apart from "cycle_way_members_stage" (what
@@ -61,13 +67,27 @@ COLUMNS: dict[str, tuple[str, ...]] = {
 # tables this file juggles at once are never confusable.
 RAW_MEMBER_TABLE = "cycle_route_members_raw"
 
+# Raw road-way geometry, full fidelity, one row per way - dropped by
+# assemble_road_ways once it has both measured the true length and written
+# a simplified shape into osm_ways_stage. Nothing ever queries this table;
+# it exists for exactly as long as one build takes.
+RAW_ROAD_WAY_TABLE = "osm_ways_raw"
+
 # What makes a row unique, used to deduplicate at publish time.
 NATURAL_KEY: dict[str, tuple[str, ...]] = {
     "places": ("osm_type", "osm_id"),
     "pois": ("osm_type", "osm_id"),
     "cycle_ways": ("id",),
     "cycle_way_members": ("relation_id", "way_id"),
+    "osm_ways": ("way_id",),
 }
+
+# Metres, applied in Web Mercator after ST_Transform so it means the same
+# thing at every latitude England spans. Nothing ever draws osm_ways.geom -
+# it is only summed (already done, before this runs) and bbox-tested - so
+# this can be considerably coarser than anything meant for display. See
+# docs/data.md for what this bought on the England extract.
+ROAD_SIMPLIFY_TOLERANCE_M = 10.0
 
 
 def _stage(table: str) -> str:
@@ -109,22 +129,37 @@ def prepare_staging(connection: psycopg.Connection[Any]) -> None:
                 )
             """).format(sql.Identifier(RAW_MEMBER_TABLE))
         )
+        cursor.execute(
+            sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(RAW_ROAD_WAY_TABLE))
+        )
+        cursor.execute(
+            sql.SQL("""
+                CREATE UNLOGGED TABLE {} (
+                    way_id bigint NOT NULL,
+                    highway text NOT NULL,
+                    name text,
+                    geom geometry(LineString, 4326) NOT NULL
+                )
+            """).format(sql.Identifier(RAW_ROAD_WAY_TABLE))
+        )
     connection.commit()
 
 
-def load(database_url: str, rows: Iterable[PlaceRow | PoiRow | CycleMemberRow]) -> dict[str, int]:
+def load(
+    database_url: str, rows: Iterable[PlaceRow | PoiRow | CycleMemberRow | RoadWayRow]
+) -> dict[str, int]:
     """Stream every extracted row into the staging tables.
 
-    Three COPY streams have to be open at once, because the extract yields
+    Four COPY streams have to be open at once, because the extract yields
     in file order rather than grouped by type, and buffering a national
     extract in Python to sort it would undo the point of streaming.
 
     Each stream therefore gets its own connection. A COPY IN takes over the
-    connection it runs on for its whole duration, so three on one
+    connection it runs on for its whole duration, so several on one
     connection do not interleave - they deadlock, silently, with the
     process sitting at 0% CPU rather than raising anything.
     """
-    counts = {"places": 0, "pois": 0, "cycle_members": 0}
+    counts = {"places": 0, "pois": 0, "cycle_members": 0, "road_ways": 0}
     seen_places: set[tuple[str, int]] = set()
     seen_pois: set[tuple[str, int]] = set()
 
@@ -133,17 +168,21 @@ def load(database_url: str, rows: Iterable[PlaceRow | PoiRow | CycleMemberRow]) 
     member_sql = _copy_sql(
         RAW_MEMBER_TABLE, ("relation_id", "ref", "name", "network", "operator", "way_id", "geom")
     )
+    road_sql = _copy_sql(RAW_ROAD_WAY_TABLE, ("way_id", "highway", "name", "geom"))
 
     with (
         psycopg.connect(database_url) as place_connection,
         psycopg.connect(database_url) as poi_connection,
         psycopg.connect(database_url) as member_connection,
+        psycopg.connect(database_url) as road_connection,
         place_connection.cursor() as place_cursor,
         poi_connection.cursor() as poi_cursor,
         member_connection.cursor() as member_cursor,
+        road_connection.cursor() as road_cursor,
         place_cursor.copy(place_sql) as places,
         poi_cursor.copy(poi_sql) as pois,
         member_cursor.copy(member_sql) as members,
+        road_cursor.copy(road_sql) as road_ways,
     ):
         for row in rows:
             if isinstance(row, PlaceRow):
@@ -182,6 +221,9 @@ def load(database_url: str, rows: Iterable[PlaceRow | PoiRow | CycleMemberRow]) 
                     )
                 )
                 counts["pois"] += 1
+            elif isinstance(row, RoadWayRow):
+                road_ways.write_row((row.way_id, row.highway, row.name, f"SRID=4326;{row.wkt}"))
+                counts["road_ways"] += 1
             else:
                 members.write_row(
                     (
@@ -252,6 +294,46 @@ def assemble_cycle_routes(connection: psycopg.Connection[Any]) -> int:
     return inserted
 
 
+def assemble_road_ways(
+    connection: psycopg.Connection[Any], tolerance_m: float = ROAD_SIMPLIFY_TOLERANCE_M
+) -> int:
+    """Measure each way's true length, then simplify its shape before it is
+    ever written to the table coverage queries run against.
+
+    Same shape as assemble_cycle_routes: SQL rather than Python so the
+    geometry never has to be held in memory all at once, and this is the
+    last thing read from the raw table before it is dropped. Unlike cycle
+    routes there is nothing to collapse - a road way has no owning relation,
+    so this is a 1:1 copy rather than a GROUP BY.
+
+    Length is measured from the *unsimplified* geometry, in the same
+    statement that writes the simplified one: PostgreSQL evaluates every
+    expression in an UPDATE or INSERT...SELECT against the source row's
+    original values, so a coarse tolerance cannot quietly shrink the
+    ridden-vs-total figures this feeds - only the stored shape, used solely
+    for the bbox filter, gets coarser. ST_Transform to 3857 and back is
+    what makes the tolerance mean metres at every latitude England spans;
+    ST_Simplify on a raw 4326 geometry would mean degrees, which do not.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(
+            sql.SQL("""
+                INSERT INTO {} (way_id, highway, name, length_m, geom)
+                SELECT way_id, highway, name, ST_Length(geography(geom)),
+                       ST_Transform(
+                           ST_SimplifyPreserveTopology(ST_Transform(geom, 3857), %s),
+                           4326
+                       )
+                FROM {}
+            """).format(sql.Identifier(_stage("osm_ways")), sql.Identifier(RAW_ROAD_WAY_TABLE)),
+            (tolerance_m,),
+        )
+        inserted = cursor.rowcount
+        cursor.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(RAW_ROAD_WAY_TABLE)))
+    connection.commit()
+    return inserted
+
+
 def publish(
     connection: psycopg.Connection[Any], source_files: list[str], counts: dict[str, int]
 ) -> None:
@@ -306,8 +388,8 @@ def publish(
             """
             INSERT INTO search_index_meta
                 (built_at, source_files, place_count, poi_count, cycle_way_count,
-                 cycle_way_member_count)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                 cycle_way_member_count, osm_way_count)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 datetime.now(UTC),
@@ -315,11 +397,18 @@ def publish(
                 counts["places"],
                 counts["pois"],
                 counts["cycle_ways"],
-                # Not null, unlike an install that has never re-indexed since
-                # this column existed: that NULL is exactly what tells
-                # /api/coverage/cycle-network a rebuild is needed rather than
-                # reporting a dishonest 0%.
+                # Both of the counts below are not null, unlike an install
+                # that has never re-indexed since the respective column
+                # existed: that NULL is exactly what tells
+                # /api/coverage/cycle-network and /api/coverage/roads a
+                # rebuild is needed rather than reporting a dishonest 0%.
+                #
+                # osm_ways is absent, and so NULL, whenever INDEX_ROADS was
+                # off - the same signal for the same reason. "Not indexed"
+                # and "indexed and you have ridden none of it" must not look
+                # alike.
                 counts["cycle_members"],
+                counts.get("osm_ways"),
             ),
         )
     connection.commit()

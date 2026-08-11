@@ -82,7 +82,8 @@ England that is roughly three seconds during which a request touching the
 place index waits rather than fails. Requests that do not touch it, and
 the routing path, are unaffected. Nobody ever sees a half-loaded index.
 
-Measured on England (`england-latest.osm.pbf`, 1.6 GB):
+Measured on England (`england-latest.osm.pbf`, 1.6 GB), before all-roads
+coverage (places, POIs and cycle routes only):
 
 | Stage | Time | Peak memory |
 |-------|------|-------------|
@@ -93,6 +94,44 @@ Measured on England (`england-latest.osm.pbf`, 1.6 GB):
 That yields roughly 73,000 places, 285,000 POIs and 5,500 cycle routes,
 adding about 150 MB to the database. The filter pass is the high-water
 mark: it reduces 1.6 GB to 45 MB, which is what keeps the parse cheap.
+
+**With all-roads coverage**, which is **off unless you ask for it**:
+
+```sh
+INDEX_ROADS=true docker compose --profile index run --rm indexer
+```
+
+Off by default because the figures below are the whole reason to make it a
+choice. Place search, POIs, the cycle-network overlay and cycle-network
+coverage all work without it, and most installs will never want it - so an
+index built for the search box should not silently cost eight minutes and
+a gigabyte. Setting the variable and re-running the indexer is the only
+step; nothing else changes.
+
+With it on (every bikeable OSM way, not just signed cycle-route members -
+see [docs/architecture.md](architecture.md#all-roads-coverage) for what
+"bikeable" excludes), the same extract measures:
+
+| Stage | Time | Peak memory |
+|-------|------|-------------|
+| `osmium tags-filter` | ~13 s | ~2.2 GB (unchanged - dominated by the 1.6 GB input) |
+| Parse and load (extraction + concurrent COPY) | ~6 min 18 s | ~772 MiB |
+| Assemble (simplify geometry, measure length) + publish | ~1 min 22 s | Postgres-side |
+| **Total** | **~7 min 53 s** | |
+
+The filtered extract grows from 45 MB to 469 MB, and pass B now resolves
+6,477,862 road ways alongside the places/POIs/cycle routes above - two
+orders of magnitude more objects than cycle-route members alone, which is
+where essentially all of the added time goes. The indexer container's own
+peak memory stayed under 800 MB even so: pyosmium's node-location cache is
+compact enough that this is a slower rebuild, not one that needs more RAM
+than a modest VPS has. Simplifying each way's geometry before it is
+written (see [docs/architecture.md](architecture.md#all-roads-coverage))
+took the total geometry payload from 882 MB unsimplified to 426 MB - 52%
+smaller, for a shape that is only ever summed and bbox-tested, never
+drawn. `osm_ways` itself takes 791 MB as a table plus 445 MB across its
+three indexes (1.24 GB total) - taking the database from roughly 150 MB
+to about 1.5 GB.
 
 An index built before v0.3.0 still works for search and POIs, but its
 cycle routes are stored unmerged and the network overlay will serve tiles
@@ -107,6 +146,16 @@ way until the indexer runs once more. Migration 0014 adds the column that
 carries this signal (`search_index_meta.cycle_way_member_count`, null on an
 untouched pre-existing row, a real number the moment a rebuild finishes) -
 so the fix, again, is just re-running the indexer.
+
+An index built without `INDEX_ROADS` - which includes every index built
+before all-roads coverage existed - has no road ways
+(`search_index_meta.osm_way_count` is null, migration 0015). The two cases
+are deliberately indistinguishable, because the answer is the same in
+both: set the variable and re-run. `/api/coverage/roads` degrades to "needs a re-index" the same way;
+search, POIs, the network overlay and cycle-network coverage are all
+unaffected. This is the biggest re-index yet in wall-clock time - see the
+table above - and worth planning around rather than running unattended
+alongside other load on a small host.
 
 ## Refreshing data (monthly)
 

@@ -66,7 +66,7 @@ def filter_extract(source: Path, destination: Path) -> Path:
         "--output",
         str(destination),
         str(source),
-        *filter_expressions(),
+        *filter_expressions(settings.index_roads),
     ]
     log.info("filtering %s -> %s", source.name, destination.name)
     result = subprocess.run(command, capture_output=True, text=True, check=False)

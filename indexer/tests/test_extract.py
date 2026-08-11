@@ -11,32 +11,54 @@ from pathlib import Path
 
 import pytest
 
-from indexer.categories import cycle_network, filter_expressions, importance, parse_population
-from indexer.extract import CycleMemberRow, PlaceRow, PoiRow, read_cycle_routes, read_features
+from indexer.categories import (
+    ROAD_HIGHWAY_EXCLUDE,
+    cycle_network,
+    filter_expressions,
+    importance,
+    parse_population,
+    road_highway,
+)
+from indexer.extract import (
+    CycleMemberRow,
+    PlaceRow,
+    PoiRow,
+    RoadWayRow,
+    read_cycle_routes,
+    read_features,
+)
 from indexer.geometry import midpoint, normalise, polygon_centroid
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tring.osm.xml"
 
 
 @pytest.fixture(scope="module")
-def rows() -> list[PlaceRow | PoiRow | CycleMemberRow]:
+def rows() -> list[PlaceRow | PoiRow | CycleMemberRow | RoadWayRow]:
     routes = read_cycle_routes(FIXTURE)
     return list(read_features(FIXTURE, routes))
 
 
-def places(rows: list[PlaceRow | PoiRow | CycleMemberRow]) -> dict[tuple[str, str], PlaceRow]:
+def places(
+    rows: list[PlaceRow | PoiRow | CycleMemberRow | RoadWayRow],
+) -> dict[tuple[str, str], PlaceRow]:
     """Keyed by name *and* type: the fixture has both a town and a railway
     station called Tring, which is exactly the ambiguity search must cope
     with, so keying on name alone would silently drop one."""
     return {(r.name, r.place_type): r for r in rows if isinstance(r, PlaceRow)}
 
 
-def pois(rows: list[PlaceRow | PoiRow | CycleMemberRow]) -> list[PoiRow]:
+def pois(rows: list[PlaceRow | PoiRow | CycleMemberRow | RoadWayRow]) -> list[PoiRow]:
     return [r for r in rows if isinstance(r, PoiRow)]
 
 
-def members(rows: list[PlaceRow | PoiRow | CycleMemberRow]) -> list[CycleMemberRow]:
+def members(
+    rows: list[PlaceRow | PoiRow | CycleMemberRow | RoadWayRow],
+) -> list[CycleMemberRow]:
     return [r for r in rows if isinstance(r, CycleMemberRow)]
+
+
+def road_ways(rows: list[PlaceRow | PoiRow | CycleMemberRow | RoadWayRow]) -> list[RoadWayRow]:
+    return [r for r in rows if isinstance(r, RoadWayRow)]
 
 
 def test_settlements_peaks_and_stations_are_all_places(rows: list[object]) -> None:
@@ -145,6 +167,81 @@ def test_the_filter_covers_every_indexed_tag() -> None:
     assert "r/route=bicycle" in expressions
     assert any(e.startswith("nw/amenity=") and "drinking_water" in e for e in expressions)
     assert any(e.startswith("n/place=") and "hamlet" in e for e in expressions)
+    assert any(e.startswith("w/highway!=") and "motorway" in e for e in expressions)
+
+
+def test_the_road_filter_is_the_only_thing_INDEX_ROADS_turns_off() -> None:
+    """Off by default, and off means osmium is never asked for the ways.
+
+    That single expression is where the whole cost of all-roads coverage
+    sits: measured on England it takes the filtered extract from 45 MB to
+    469 MB and the rebuild from 37 seconds to nearly eight minutes. An
+    install that only wants place search, POIs, the cycle overlay or
+    cycle-network coverage should not pay it - and cycle-route member ways
+    still arrive either way, as members of the r/route=bicycle relations.
+    """
+    without = filter_expressions(include_roads=False)
+    with_roads = filter_expressions(include_roads=True)
+
+    assert not any(e.startswith("w/highway!=") for e in without)
+    assert "r/route=bicycle" in without, "cycle routes are not what this switches off"
+    assert any(e.startswith("nw/amenity=") for e in without), "nor are POIs"
+    # Exactly one expression separates them.
+    assert len(with_roads) == len(without) + 1
+
+
+def test_a_residential_street_and_a_footway_are_road_ways(rows: list[object]) -> None:
+    found = {r.way_id: r for r in road_ways(rows)}  # type: ignore[arg-type]
+
+    assert found[70].highway == "residential"
+    assert found[70].name == "Church Street"
+    # People ride footways; dropping them would make the denominator lie.
+    assert 71 in found
+    assert found[71].name is None
+
+
+def test_a_motorway_is_not_a_road_way(rows: list[object]) -> None:
+    """A bike cannot ride it, so it does not belong in the denominator."""
+    ids = {r.way_id for r in road_ways(rows)}  # type: ignore[arg-type]
+
+    assert 72 not in ids
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        ({"highway": "residential"}, "residential"),
+        ({"highway": "footway"}, "footway"),
+        ({"highway": "path"}, "path"),
+        ({"highway": "bridleway"}, "bridleway"),
+        ({"highway": "track"}, "track"),
+        ({"highway": "cycleway"}, "cycleway"),
+        ({"highway": "motorway"}, None),
+        ({"highway": "motorway_link"}, None),
+        ({"highway": "proposed"}, None),
+        ({"highway": "construction"}, None),
+        ({"highway": "raceway"}, None),
+        ({}, None),
+        # access=private/no is deliberately not filtered - see
+        # ROAD_HIGHWAY_EXCLUDE's own docstring for why.
+        ({"highway": "residential", "access": "private"}, "residential"),
+        ({"highway": "track", "access": "no"}, "track"),
+    ],
+)
+def test_road_highway_excludes_only_the_unrideable_classes(
+    tags: dict[str, str], expected: str | None
+) -> None:
+    assert road_highway(tags) == expected
+
+
+def test_road_highway_exclude_list_is_exactly_whats_documented() -> None:
+    assert set(ROAD_HIGHWAY_EXCLUDE) == {
+        "motorway",
+        "motorway_link",
+        "proposed",
+        "construction",
+        "raceway",
+    }
 
 
 @pytest.mark.parametrize(

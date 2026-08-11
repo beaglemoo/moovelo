@@ -23,6 +23,7 @@ from indexer.categories import (
     parse_population,
     place_type,
     poi_category,
+    road_highway,
 )
 from indexer.geometry import Point, normalise, way_point
 
@@ -71,6 +72,22 @@ class CycleMemberRow:
     wkt: str
 
 
+@dataclass(frozen=True)
+class RoadWayRow:
+    """One OSM way a bicycle could ride, for the all-roads coverage
+    denominator - distinct from CycleMemberRow, which only carries ways
+    belonging to a *signed* cycle route. Keyed on way_id alone
+    (models.OsmWay's primary key): unlike a cycle-route member, a road way
+    has no owning relation to be confused with, so there is nothing to
+    pair it with the way CycleMemberRow pairs (relation_id, way_id).
+    """
+
+    way_id: int
+    highway: str
+    name: str | None
+    wkt: str
+
+
 @dataclass
 class CycleRoute:
     relation_id: int
@@ -87,6 +104,7 @@ class Counts:
     places: int = 0
     pois: int = 0
     cycle_members: int = 0
+    road_ways: int = 0
     skipped_no_location: int = 0
     skipped_multipolygon_pois: int = 0
 
@@ -147,7 +165,7 @@ def _flatten_superroutes(routes: dict[int, CycleRoute]) -> None:
 
 def read_features(
     path: Path, routes: dict[int, CycleRoute]
-) -> Iterator[PlaceRow | PoiRow | CycleMemberRow]:
+) -> Iterator[PlaceRow | PoiRow | CycleMemberRow | RoadWayRow]:
     """Pass B: everything with a location.
 
     Yields rows rather than accumulating them, so a national extract never
@@ -187,6 +205,16 @@ def read_features(
         if len(points) < 2:
             continue
 
+        highway = road_highway(tags)
+        if highway is not None:
+            counts.road_ways += 1
+            yield RoadWayRow(
+                way_id=obj.id,
+                highway=highway,
+                name=tags.get("name"),
+                wkt=_linestring_wkt(points),
+            )
+
         for relation_id in way_owners.get(obj.id, ()):
             route = routes[relation_id]
             counts.cycle_members += 1
@@ -201,11 +229,12 @@ def read_features(
             )
 
     log.info(
-        "pass B: %d places, %d POIs, %d route members "
+        "pass B: %d places, %d POIs, %d route members, %d road ways "
         "(%d ways without geometry, %d multipolygon POIs skipped)",
         counts.places,
         counts.pois,
         counts.cycle_members,
+        counts.road_ways,
         counts.skipped_no_location,
         counts.skipped_multipolygon_pois,
     )

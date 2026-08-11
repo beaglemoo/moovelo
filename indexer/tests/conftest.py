@@ -70,6 +70,16 @@ CREATE UNIQUE INDEX ix_cycle_way_members_relation_way
     ON cycle_way_members (relation_id, way_id);
 CREATE INDEX ix_cycle_way_members_geom ON cycle_way_members USING gist (geom);
 
+CREATE TABLE osm_ways (
+    way_id bigint PRIMARY KEY,
+    highway text NOT NULL,
+    name text,
+    length_m double precision NOT NULL,
+    geom geometry(LineString, 4326) NOT NULL
+);
+CREATE INDEX ix_osm_ways_geom ON osm_ways USING gist (geom);
+CREATE INDEX ix_osm_ways_highway ON osm_ways (highway);
+
 CREATE TABLE search_index_meta (
     id boolean PRIMARY KEY DEFAULT true CHECK (id),
     built_at timestamptz NOT NULL,
@@ -77,7 +87,8 @@ CREATE TABLE search_index_meta (
     place_count integer NOT NULL,
     poi_count integer NOT NULL,
     cycle_way_count integer NOT NULL,
-    cycle_way_member_count integer
+    cycle_way_member_count integer,
+    osm_way_count integer
 );
 """
 

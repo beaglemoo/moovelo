@@ -467,6 +467,31 @@ A ride that cannot be matched - it left your map extract, or followed
 paths the routing graph does not have - is kept exactly as it was. It just
 does not contribute to coverage.
 
+### All-roads coverage
+
+Alongside the signed-network percentage, the same card reports how much of
+*every* bikeable road near you have ridden - not just the National
+Cycle Network and its regional and local relatives, but ordinary streets,
+tracks, paths and bridleways too. Grouped by road type ("residential
+streets", "footways", "tracks", ...) rather than network tier, since roads
+have no equivalent of NCN/RCN/LCN to group by, and sorted with whichever
+you have ridden most of first.
+
+The two percentages answer different questions. The signed-network one
+tells you how much of a curated, named network you have covered. This one
+is blunter and wider: it counts a quiet residential street the same as a
+gravel bridleway, and it is the honest answer to "how much of the roads
+around here have I actually ridden". Footways, paths, bridleways and
+tracks are all counted - people ride them - but motorways and a handful of
+other classes a bicycle cannot legally or physically use are not.
+
+It needs the same two things the signed-network percentage does: a place
+index that includes every bikeable way (an index built before this
+shipped says so rather than reporting 0% - see
+[docs/data.md](data.md#the-place-index-optional)), and your rides matched
+to OSM ways, which the same **Match older rides** button backfills for
+both percentages in one pass.
+
 ## Export
 
 Every saved route (and the planner toolbar, once a route is saved) offers

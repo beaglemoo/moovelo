@@ -12,6 +12,8 @@
     - a supermarket mapped as a closed way, which needs a centroid
     - a cafe on a way whose nodes are missing, as at an extract boundary
     - a cycle route relation whose members include another relation
+    - a residential street and a footway (both bikeable) and a motorway
+      (not), for the all-roads coverage denominator
 -->
 <osm version="0.6" generator="handwritten">
 
@@ -113,4 +115,28 @@
     <tag k="route" v="foot"/>
     <tag k="network" v="nwn"/>
   </relation>
+
+  <!-- Roads, for the all-roads coverage denominator. A residential street
+       and a footway are kept - people ride footways - but a motorway is
+       not, because a bike cannot use it. -->
+  <node id="70" lat="51.7930" lon="-0.6520"/>
+  <node id="71" lat="51.7935" lon="-0.6510"/>
+  <way id="70">
+    <nd ref="70"/><nd ref="71"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Church Street"/>
+  </way>
+  <node id="72" lat="51.7945" lon="-0.6480"/>
+  <node id="73" lat="51.7948" lon="-0.6470"/>
+  <way id="71">
+    <nd ref="72"/><nd ref="73"/>
+    <tag k="highway" v="footway"/>
+  </way>
+  <node id="74" lat="51.7960" lon="-0.6450"/>
+  <node id="75" lat="51.7965" lon="-0.6440"/>
+  <way id="72">
+    <nd ref="74"/><nd ref="75"/>
+    <tag k="highway" v="motorway"/>
+    <tag k="name" v="M1"/>
+  </way>
 </osm>
