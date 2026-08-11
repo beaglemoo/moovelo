@@ -95,6 +95,24 @@ defaults without inserting a row, so a user who never opens the page
 never gets one; the first `PATCH` creates it. These feed the ride-time
 model - see [Realistic ride time](#realistic-ride-time).
 
+Rides that actually happened live in their own `activities` table, not as
+a flavour of `routes`. A route is an intention - it carries a preset,
+costing options, maneuvers and a Wahoo push state, and it can be
+re-routed. An activity is a record: it has a start time, it has no
+maneuvers, and re-routing it would be a lie. Sharing one table would
+leave half the columns null for every row on both sides.
+
+An activity stores the trace **as recorded**, not map-matched: a picture
+of where you rode should show where you rode. Its `elevation` uses the
+same shape as a route's, so the existing profile chart renders one
+without knowing what it is looking at. `elapsed_time_s` and
+`moving_time_s` are nullable together, because a file with no timestamps
+is not the same as a ride where nobody moved. `(user_id, source_ref)`
+carries a **partial** unique index - unique where `source_ref` is set, so
+re-importing an overlapping export adds only what is new, while the many
+hand-uploaded rides with no natural identifier do not collide with each
+other.
+
 ## The place index
 
 `places`, `pois` and `cycle_ways` hold settlements, useful stops and
@@ -1008,9 +1026,9 @@ backend/app/
 ├── config.py                # pydantic-settings, all env-driven
 ├── db.py                    # async engine + session factory
 ├── version.py               # APP_VERSION, read from pyproject.toml (never installed as a package)
-├── models.py                # User, Session, Route, CustomPreset, WahooAccount,
-│                            #   Place, Poi, CycleWay, SearchIndexMeta,
-│                            #   UserSettings, LLMSettings
+├── models.py                # User, Session, Route, Activity, CustomPreset,
+│                            #   WahooAccount, Place, Poi, CycleWay,
+│                            #   SearchIndexMeta, UserSettings, LLMSettings
 ├── schemas.py               # request/response models
 ├── api/
 │   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface,
@@ -1036,6 +1054,7 @@ backend/app/
     ├── gpx.py, fit.py       # exporters (FIT embeds maneuvers as course points)
     ├── importer.py          # GPX/TCX/FIT parsing for uploaded files
     ├── import_routes.py     # map matching an imported track back onto the network
+    ├── activities.py        # a parsed track into a stored ride (no matching, no backfill)
     ├── places.py            # place search, reverse geocode, POIs along a route
     ├── climbs.py            # profile segmentation + HC/1-4 categorisation
     ├── geo.py               # shape concatenation and distance helpers

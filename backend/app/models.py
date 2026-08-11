@@ -153,6 +153,78 @@ class Route(Base):
     __table_args__ = (Index("ix_routes_tags", "tags", postgresql_using="gin"),)
 
 
+class Activity(Base):
+    """A ride that happened, as opposed to one that was planned.
+
+    Deliberately not a flavour of Route. A route is an intention: it has a
+    preset, costing options, maneuvers, a Wahoo push state, and it can be
+    re-routed. An activity is a record: it has a start time, it has no
+    maneuvers, and re-routing it would be a lie. Sharing a table would leave
+    half the columns null for every row on both sides.
+    """
+
+    __tablename__ = "activities"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200))
+    # When the ride happened. Nullable because a file can declare itself an
+    # activity and still carry no usable timestamps; the library sorts on
+    # created_at for those rather than dropping them.
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    # Wall clock start to finish, and that minus the standing around. Both
+    # null together when the file had no timestamps - which is not the same
+    # as a ride of zero moving time, so neither defaults to 0.
+    elapsed_time_s: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    moving_time_s: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    distance_m: Mapped[float]
+    ascent_m: Mapped[float]
+    descent_m: Mapped[float]
+    # Same shape as Route.elevation, so the existing profile chart renders an
+    # activity without knowing it is one.
+    elevation: Mapped[list[Any]] = mapped_column(JSONB)
+    # The trace as recorded, not map-matched. A heatmap of where you rode
+    # should show where you rode, and matching is only introduced where
+    # coverage genuinely needs it.
+    geom: Mapped[Any] = mapped_column(
+        Geometry(geometry_type="LINESTRING", srid=4326, spatial_index=False)
+    )
+    # file = uploaded directly; strava_export = extracted from a bulk export.
+    source: Mapped[str] = mapped_column(String(16), default="file", server_default="file")
+    # Whatever identifies this ride in its origin - the original filename, or
+    # the Strava activity id parsed out of it. Carries the deduplication.
+    source_ref: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    # queued | parsing | done | error
+    import_status: Mapped[str] = mapped_column(
+        String(16), default="queued", server_default="queued"
+    )
+    import_error: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # The library's own query: one user's rides, newest first.
+        Index("ix_activities_user_started", "user_id", "started_at"),
+        # spatial_index=False above and the index named here, matching Place,
+        # Poi and CycleWay. Route.geom does not do this, so its ORM metadata
+        # and its migration disagree about the index name - a divergence that
+        # only stays harmless because nothing queries routes.geom.
+        Index("ix_activities_geom", "geom", postgresql_using="gist"),
+        # Re-importing an overlapping export adds only what is new. Partial,
+        # so the many rows with no natural identifier do not collide.
+        Index(
+            "ix_activities_source_ref",
+            "user_id",
+            "source_ref",
+            unique=True,
+            postgresql_where=text("source_ref IS NOT NULL"),
+        ),
+    )
+
+
 class CustomPreset(Base):
     """A user's named costing-slider bundle, applied by name from the
     planner. Not referenced by Route.costing_options - a route stores its
