@@ -111,3 +111,22 @@ def concat_shapes(shapes: list[list[Point]]) -> list[Point]:
     for shape in shapes:
         merged.extend(shape[1:] if merged and shape and shape[0] == merged[-1] else shape)
     return merged
+
+
+def coords_from_wkt(wkt: str | None) -> list[Point]:
+    """(lat, lon) pairs from a PostGIS LINESTRING, which stores them lon-first.
+
+    Shared by anything that reads an Activity's or Route's geometry back out
+    via ST_AsText - the API's own read path (api/activities.py) and way
+    matching (services/way_matching.py), which needs the same coordinates to
+    hand to Valhalla.
+    """
+    if not wkt or "(" not in wkt:
+        return []
+    inner = wkt[wkt.index("(") + 1 : wkt.rindex(")")]
+    coords: list[Point] = []
+    for pair in inner.split(","):
+        parts = pair.split()
+        if len(parts) >= 2:
+            coords.append((float(parts[1]), float(parts[0])))
+    return coords

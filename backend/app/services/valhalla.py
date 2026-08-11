@@ -385,6 +385,75 @@ class ValhallaClient:
         }
         return await self._post("/trace_attributes", payload)
 
+    async def match_ways(self, shape: list[Point]) -> dict[int, float] | None:
+        """Which OSM way ids a recorded ride's own GPS trace followed, and
+        how many metres of each - the input cycle-network coverage needs.
+
+        shape_match: map_snap, NOT edge_walk. edge_walk (trace_attributes'
+        other mode, above) requires the shape to already lie exactly on the
+        routing graph - true of a route this app generated, never true of a
+        raw recorded track, which wanders off the road within normal GPS
+        error. map_snap is the mode Valhalla built for exactly that: an
+        approximately-correct trace that needs snapping onto the graph, the
+        same mode trace_route already uses to recover maneuvers for an
+        imported file.
+
+        Downsampled to roughly one point per TRACE_SPACING_M and chunked at
+        TRACE_MAX_POINTS with no shared boundary point, mirroring
+        trace_attributes' own _plain_chunks: only aggregate metres per way
+        are kept here, nothing needs to stitch back into one continuous
+        shape, so a way that happens to straddle a chunk boundary simply
+        contributes two partial lengths that sum correctly - the same
+        reasoning _attributes_chunk's boundary edges rely on.
+
+        Always the gravel bundle, not whatever preset the rider might have
+        planned with (an activity carries no preset at all - it is a
+        recording, not a plan). It is the most surface-tolerant of the three
+        named bundles (avoid_bad_surfaces=0.0): a rider's own recorded ride
+        legitimately followed a towpath or bridleway more often than a route
+        this app would have planned onto one, and unlike edge_walk, map_snap
+        genuinely uses costing to decide what the trace can snap to - a
+        costing bundle that avoids the very surface the rider was on would
+        under-match real rides, not merely mis-price them.
+
+        ANY failure - a 4xx (nothing nearby matches at all) or the 503
+        `_post` maps an unreachable engine to - degrades to None. A ride is
+        worth keeping whether or not it can be placed on the network; the
+        caller's job is to remember that an attempt was made and move on,
+        never to touch the activity itself.
+        """
+        thinned = resample_by_distance(shape, TRACE_SPACING_M)
+        if len(thinned) < 2:
+            return None
+        chunks = _plain_chunks(thinned, TRACE_MAX_POINTS)
+        try:
+            results = await asyncio.gather(*(self._match_chunk(chunk) for chunk in chunks))
+        except HTTPException:
+            return None
+
+        lengths: dict[int, float] = {}
+        for response in results:
+            for edge in response.get("edges", []):
+                way_id = edge.get("way_id")
+                if way_id is None:
+                    continue
+                lengths[way_id] = lengths.get(way_id, 0.0) + edge["length"] * 1000.0
+        return lengths
+
+    async def _match_chunk(self, chunk: list[Point]) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "shape": [{"lat": lat, "lon": lon} for lat, lon in chunk],
+            "shape_match": "map_snap",
+            "costing": "bicycle",
+            "costing_options": {"bicycle": PRESETS["gravel"]},
+            "units": "kilometers",
+            "filters": {
+                "action": "include",
+                "attributes": ["edge.way_id", "edge.length"],
+            },
+        }
+        return await self._post("/trace_attributes", payload)
+
     async def _elevation_profile(self, shape: list[tuple[float, float]]) -> list[ElevationPoint]:
         sampled = evenly_sampled(shape, MAX_ELEVATION_SAMPLES)
         payload = {
