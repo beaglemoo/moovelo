@@ -24,6 +24,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import session_factory
@@ -49,6 +50,15 @@ DECOMPRESS_CHUNK = 256 * 1024
 # interrupted rather than silently resumed against data that is gone.
 MAX_TRACKED_JOBS = 50
 
+# One worker processes one archive at a time, so anything past the one in
+# flight is just sitting in memory waiting - and each item carries the whole
+# archive, up to MAX_ARCHIVE_BYTES. Unbounded, a burst of submissions holds
+# gigabytes resident with nothing to show for it but a longer queue; bounded,
+# a submission past this refuses outright rather than accepting work it has
+# nowhere to put. 5 * 500 MB is a already a generous 2.5 GB of ride data
+# waiting its turn.
+MAX_QUEUED_ARCHIVES = 5
+
 # Strava names every activity type, and a heatmap of cycling should not
 # include the parkrun. Matched by substring so Gravel Ride, Virtual Ride,
 # Mountain Bike Ride and E-Bike Ride all count.
@@ -57,6 +67,23 @@ RIDE_MARKERS = ("ride", "cycl", "bike", "biking")
 
 class ArchiveError(Exception):
     """The archive could not be read. The message is user-facing."""
+
+
+class QueueFullError(Exception):
+    """No room for another archive right now. The message is user-facing."""
+
+
+def _problem_message(exc: Exception) -> str:
+    """A user-facing line for one failed entry.
+
+    ArchiveError and RouteImportError already carry a message written for a
+    rider to read. A raw database error carries the query and its bound
+    parameters (see the DBAPIError caught above), which is neither readable
+    nor safe to hand back verbatim - so it collapses to one generic line.
+    """
+    if isinstance(exc, (ArchiveError, RouteImportError)):
+        return str(exc)
+    return "could not be saved"
 
 
 @dataclass
@@ -234,7 +261,9 @@ class ArchiveImportQueue:
     """
 
     def __init__(self) -> None:
-        self._queue: asyncio.Queue[tuple[uuid.UUID, bytes]] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[uuid.UUID, bytes]] = asyncio.Queue(
+            maxsize=MAX_QUEUED_ARCHIVES
+        )
         self._jobs: OrderedDict[uuid.UUID, ImportJob] = OrderedDict()
         self._worker: asyncio.Task[None] | None = None
 
@@ -253,6 +282,15 @@ class ArchiveImportQueue:
                 job.error = "Interrupted by a restart - upload the archive again."
 
     def submit(self, user_id: uuid.UUID, filename: str, data: bytes) -> ImportJob:
+        # Checked before a job is even built: if there is nowhere to put the
+        # work, nothing should be tracked or created for it either. No await
+        # sits between this check and put_nowait, so nothing else can run in
+        # between and race it.
+        if self._queue.full():
+            raise QueueFullError(
+                f"{MAX_QUEUED_ARCHIVES} archive imports are already queued. "
+                "Try again in a few minutes."
+            )
         job = ImportJob(id=uuid.uuid4(), user_id=user_id, filename=filename)
         self._remember(job)
         self._queue.put_nowait((job.id, data))
@@ -264,13 +302,22 @@ class ArchiveImportQueue:
 
     def _remember(self, job: ImportJob) -> None:
         # Only finished jobs are evicted. Dropping a running one would lose
-        # the only record of work that is still happening.
+        # the only record of work that is still happening. In practice the
+        # queue itself (MAX_QUEUED_ARCHIVES, well under MAX_TRACKED_JOBS)
+        # keeps the number of queued/running jobs far below this cap, so
+        # this loop should always find a finished job to make room - but if
+        # it ever cannot, the old code fell through and inserted anyway,
+        # silently growing past MAX_TRACKED_JOBS. Refusing instead means the
+        # cap holds even if that invariant is ever broken by a future
+        # change.
         while len(self._jobs) >= MAX_TRACKED_JOBS:
             finished = next(
                 (i for i, j in self._jobs.items() if j.status in ("done", "error")), None
             )
             if finished is None:
-                break
+                raise QueueFullError(
+                    "Too many imports are already tracked. Try again in a few minutes."
+                )
             del self._jobs[finished]
         self._jobs[job.id] = job
 
@@ -327,18 +374,29 @@ class ArchiveImportQueue:
                     if ref is not None and ref in seen:
                         job.duplicates += 1
                         continue
+                    # Committed per entry, inside the same try/except that
+                    # already isolates a bad file: SQLAlchemy batches pending
+                    # inserts sharing a table into one multi-row INSERT, so a
+                    # single row Postgres refuses (a NaN that slipped past
+                    # the importer's own guard, say) takes every row queued
+                    # alongside it down in the same statement - and without
+                    # a commit in between, that includes rides already
+                    # counted as imported. Committing here is also what
+                    # keeps `imported` honest: it is only incremented once
+                    # the row is known to have actually landed.
                     try:
                         activity = await self._one(db, job, archive, entry, ref)
-                    except (ArchiveError, RouteImportError) as exc:
+                        await db.commit()
+                    except (ArchiveError, RouteImportError, SQLAlchemyError) as exc:
+                        await db.rollback()
                         job.failed += 1
                         if len(job.problems) < 20:
-                            job.problems.append(f"{entry.path}: {exc}")
+                            job.problems.append(f"{entry.path}: {_problem_message(exc)}")
                         continue
                     if ref is not None:
                         seen.add(ref)
                     job.imported += 1
                     created.append(activity.id)
-                await db.commit()
 
         # Off the request path, same reasoning as the single-file import
         # endpoint: map matching is Valhalla round trips per ride, and a

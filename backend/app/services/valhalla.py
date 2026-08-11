@@ -400,11 +400,32 @@ class ValhallaClient:
 
         Downsampled to roughly one point per TRACE_SPACING_M and chunked at
         TRACE_MAX_POINTS with no shared boundary point, mirroring
-        trace_attributes' own _plain_chunks: only aggregate metres per way
-        are kept here, nothing needs to stitch back into one continuous
-        shape, so a way that happens to straddle a chunk boundary simply
-        contributes two partial lengths that sum correctly - the same
-        reasoning _attributes_chunk's boundary edges rely on.
+        trace_attributes' own _plain_chunks. That reuse was believed to be
+        free here - nothing needs to stitch back into one continuous shape,
+        only aggregate metres per way - but measured against real traces it
+        is not: a way that straddles a chunk boundary does not reliably
+        contribute two partial lengths that sum to its true matched length.
+        Without a shared point, each chunk's own map_snap independently
+        decides where its trace starts and ends near the cut, and the two
+        matches can each fall short of the real boundary rather than meeting
+        it - losses of 20-56 m were measured on real rides. _plain_chunks'
+        own "clean split is correct" reasoning holds for trace_attributes,
+        which only sums metres into a handful of surface/road-class buckets
+        and can absorb losing part of one edge per boundary; it does not
+        carry over to summing a *specific* way's own length, which is what
+        this feeds into cycle-network and road coverage.
+
+        Not fixed by stitching: `_chunks` (used by trace_route) shares a
+        boundary point instead, but reusing it here would very likely trade
+        undercounting for double-counting - the shared point can land
+        mid-edge, and both chunks would then report a length for it -
+        without a lookup from way id back to that boundary edge, this
+        cannot tell whether it is seeing the same edge twice or two
+        different ones and cannot generally deduplicate them, which is a
+        real change, not a swap of one chunking helper for the other. Left
+        as a known source of undercounting rather than papered over: a
+        coverage percentage will occasionally end up a few tens of metres
+        smaller than reality near a chunk boundary, never larger.
 
         Always the gravel bundle, not whatever preset the rider might have
         planned with (an activity carries no preset at all - it is a

@@ -5,11 +5,15 @@ third party by definition - so each one is tripped on its own rather than
 assumed to work because the others do.
 """
 
+import inspect
 import io
 import uuid
 import zipfile
+from collections.abc import Iterable, Iterator
+from typing import Any, get_args
 
 import pytest
+from fastapi import UploadFile
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -18,8 +22,12 @@ from app.models import Activity, User
 from app.services import activity_import
 from app.services.activity_import import (
     MAX_ENTRIES,
+    MAX_QUEUED_ARCHIVES,
+    MAX_TRACKED_JOBS,
     ArchiveError,
     ArchiveImportQueue,
+    ImportJob,
+    QueueFullError,
     is_ride,
     list_entries,
     read_manifest,
@@ -240,6 +248,90 @@ async def test_a_file_that_will_not_parse_costs_one_ride_not_the_import(
     assert await db.scalar(select(func.count()).select_from(Activity)) == 1
 
 
+# NaN in a <ele> element is a real device/export glitch, not a hostile input:
+# it passes float() and Pydantic without complaint, but the elevation
+# profile is stored as JSONB and Postgres refuses the literal "NaN" token as
+# invalid JSON. Before app/services/importer.py's own fix, that refusal
+# reached this far - see test_a_row_that_fails_at_commit_costs_one_ride_not_
+# the_batch below for the queue's side of the same defect, reproduced
+# without relying on this one input closing over time.
+GPX_NAN_ELEVATION = GPX.replace(b"<ele>128.0</ele>", b"<ele>NaN</ele>")
+
+
+async def test_a_nan_elevation_ride_is_imported_without_its_elevation(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The importer now drops a non-finite elevation at parse time (see
+    test_importer.py::test_nonfinite_elevation_is_dropped_not_stored), so a
+    ride carrying one is a perfectly normal import - not a failure, and not
+    a reason for its neighbours in the same archive to fail either."""
+    user = User(email="rider@example.com", password_hash="x")
+    db.add(user)
+    await db.commit()
+
+    job = await _run(
+        monkeypatch,
+        db_factory,
+        user.id,
+        _zip({"good1.gpx": GPX, "nan-elevation.gpx": GPX_NAN_ELEVATION, "good2.gpx": GPX}),
+    )
+
+    assert job.status == "done"
+    assert (job.imported, job.failed) == (3, 0)
+    assert await db.scalar(select(func.count()).select_from(Activity)) == 3
+
+
+async def test_a_row_that_fails_at_commit_costs_one_ride_not_the_batch(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The general case behind the NaN-elevation bug: SQLAlchemy batches
+    pending inserts sharing a table into one multi-row INSERT, so *any* row
+    Postgres refuses - not only a non-finite elevation, which the parser now
+    catches on its own - takes every row queued alongside it down in the
+    same statement unless each entry is committed before the next is added.
+
+    Forces a value only the database will reject (source_ref is `Text` but
+    the ORM's default `Activity` construction would never build a value that
+    fails a column check on its own) by monkeypatching
+    activity_from_track for one entry, so this is independent of any
+    particular parser bug and exercises the queue's own containment.
+    """
+    import app.services.activity_import as activity_import
+
+    real = activity_import.activity_from_track
+
+    def poisoned(track, **kwargs):  # type: ignore[no-untyped-def]
+        activity = real(track, **kwargs)
+        if kwargs.get("fallback_name") == "broken":
+            # source is String(16); Postgres enforces that at insert time
+            # regardless of what the ORM's own type hints say.
+            activity.source = "x" * 999
+        return activity
+
+    monkeypatch.setattr(activity_import, "activity_from_track", poisoned)
+
+    user = User(email="rider@example.com", password_hash="x")
+    db.add(user)
+    await db.commit()
+
+    job = await _run(
+        monkeypatch,
+        db_factory,
+        user.id,
+        _zip({"good1.gpx": GPX, "broken.gpx": GPX, "good2.gpx": GPX}),
+    )
+
+    assert job.status == "done"
+    assert (job.imported, job.failed) == (2, 1)
+    stored = await db.scalar(select(func.count()).select_from(Activity))
+    # The counter must never claim more than what actually landed.
+    assert stored == job.imported == 2
+
+
 # --- The endpoints -----------------------------------------------------------
 
 
@@ -297,3 +389,158 @@ async def test_polling_an_unknown_job_is_a_404(client: AsyncClient) -> None:
     await register(client)
     response = await client.get(f"/api/activities/import/archive/{uuid.uuid4()}")
     assert response.status_code == 404
+
+
+# --- Backpressure -------------------------------------------------------------
+#
+# One worker processes one archive at a time, and every queued item carries
+# the whole archive - up to MAX_ARCHIVE_BYTES. Before this, asyncio.Queue()
+# had no maxsize, so nothing stopped a burst of submissions holding
+# gigabytes resident with nothing to show for it. No worker task runs in
+# these tests (submit() alone never drains the queue - see _run's own note
+# above), so filling it to capacity is deterministic.
+
+
+async def test_the_queue_refuses_once_it_is_full() -> None:
+    queue = ArchiveImportQueue()
+    for i in range(MAX_QUEUED_ARCHIVES):
+        queue.submit(uuid.uuid4(), f"a{i}.zip", b"x")
+
+    with pytest.raises(QueueFullError, match="already queued"):
+        queue.submit(uuid.uuid4(), "one-too-many.zip", b"x")
+
+
+async def test_the_archive_endpoint_reports_a_full_queue_as_429(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _always_full(*args: object, **kwargs: object) -> ImportJob:
+        raise QueueFullError("no room right now")
+
+    monkeypatch.setattr("app.api.activities.archive_queue.submit", _always_full)
+    await register(client)
+
+    response = await client.post(
+        "/api/activities/import/archive",
+        files={"file": ("export.zip", _export(), "application/zip")},
+    )
+
+    assert response.status_code == 429
+    assert "no room right now" in response.json()["detail"]
+
+
+def test_remember_refuses_rather_than_growing_past_the_tracked_cap() -> None:
+    """The scenario _remember's own eviction loop cannot resolve on its own:
+    every tracked slot occupied by a job that is still queued or running, so
+    there is nothing finished to evict and make room for a new one. The old
+    code fell through its `while` loop and inserted anyway, silently growing
+    _jobs past MAX_TRACKED_JOBS - reproduced directly here since the queue's
+    own bound (MAX_QUEUED_ARCHIVES, far below MAX_TRACKED_JOBS) now makes
+    this unreachable through submit() in ordinary use.
+    """
+    queue = ArchiveImportQueue()
+    for i in range(MAX_TRACKED_JOBS):
+        job = ImportJob(id=uuid.uuid4(), user_id=uuid.uuid4(), filename=f"a{i}.zip")
+        job.status = "running"
+        queue._jobs[job.id] = job
+
+    with pytest.raises(QueueFullError):
+        queue._remember(ImportJob(id=uuid.uuid4(), user_id=uuid.uuid4(), filename="new.zip"))
+
+    assert len(queue._jobs) == MAX_TRACKED_JOBS, (
+        "the cap must hold even when nothing can be evicted"
+    )
+
+
+# --- The pre-read upload guard -----------------------------------------------
+#
+# app/main.py's reject_oversized_uploads middleware used to match on
+# request.url.path.endswith("/import"), which /api/activities/import/archive
+# does not - so the one route that most needs a tight pre-read cap (up to
+# MAX_ARCHIVE_BYTES) got none at all, and an oversized POST there read its
+# whole body before the endpoint's own cap ever got a say. One test per
+# guarded route, matching test_import_api.py's own
+# test_oversized_upload_is_refused_before_the_body_is_parsed for
+# /api/routes/import.
+
+
+def test_every_upload_route_is_covered_by_the_pre_read_guard() -> None:
+    """The guard is a table keyed on exact paths, so it drifts silently.
+
+    That is how the archive route went unguarded in the first place: the old
+    check matched a path suffix the new route did not share, and nothing
+    failed. An explicit table fixes today's routes and has the same failure
+    mode tomorrow - add a route, forget the entry, get no signal. This test
+    is the signal. It asks FastAPI which routes actually take an upload
+    rather than being told, so a new one is covered the day it appears.
+
+    Routers included with include_router are nested rather than flattened in
+    this FastAPI version: app.routes holds _IncludedRouter objects whose real
+    routes hang off `original_router`, not off `routes`. Hence the walk, which
+    follows both and so keeps working if a future version flattens them or
+    renames the attribute back.
+    """
+    from fastapi.routing import APIRoute
+
+    from app.main import _UPLOAD_GUARDS, app
+
+    def walk(routes: Iterable[Any]) -> Iterator[APIRoute]:
+        for route in routes:
+            if isinstance(route, APIRoute):
+                yield route
+            nested = getattr(route, "routes", None)
+            if nested:
+                yield from walk(nested)
+            included = getattr(route, "original_router", None)
+            if included is not None and getattr(included, "routes", None):
+                yield from walk(included.routes)
+
+    upload_routes = {
+        route.path
+        for route in walk(app.routes)
+        if "POST" in route.methods
+        # These arrive as Annotated[UploadFile, File()], so the bare
+        # annotation is never UploadFile itself - get_args unwraps it.
+        and any(
+            param.annotation is UploadFile or UploadFile in get_args(param.annotation)
+            for param in inspect.signature(route.endpoint).parameters.values()
+        )
+    }
+
+    assert upload_routes, "found no upload routes at all - this test has stopped working"
+    unguarded = upload_routes - set(_UPLOAD_GUARDS)
+    assert not unguarded, (
+        f"these routes accept an upload with no pre-read size guard: {sorted(unguarded)}. "
+        "Add them to _UPLOAD_GUARDS in app/main.py with the right cap."
+    )
+
+
+async def test_the_single_ride_endpoint_is_refused_before_the_body_is_parsed(
+    client: AsyncClient,
+) -> None:
+    await register(client)
+    response = await client.post(
+        "/api/activities/import",
+        headers={
+            "content-type": "multipart/form-data; boundary=x",
+            "content-length": "2000000000",
+        },
+        content=b"",
+    )
+    assert response.status_code == 413
+    assert "larger than" in response.json()["detail"]
+
+
+async def test_the_archive_endpoint_is_refused_before_the_body_is_parsed(
+    client: AsyncClient,
+) -> None:
+    await register(client)
+    response = await client.post(
+        "/api/activities/import/archive",
+        headers={
+            "content-type": "multipart/form-data; boundary=x",
+            "content-length": "600000000000",
+        },
+        content=b"",
+    )
+    assert response.status_code == 413
+    assert "larger than" in response.json()["detail"]

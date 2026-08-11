@@ -8,6 +8,7 @@ Making those points routable (map matching, elevation backfill) happens
 later in the import pipeline, not here.
 """
 
+import math
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -259,6 +260,14 @@ def _make_point(
     try:
         ele_f = None if ele is None else float(ele)
     except (TypeError, ValueError):
+        ele_f = None
+    # NaN and +/-inf pass float() and Pydantic without complaint, but the
+    # elevation profile is stored as JSONB and the JSON spec has no token for
+    # either - Postgres refuses the whole insert on "Token \"NaN\" is
+    # invalid" rather than the one point. Dropping the elevation here (the
+    # point itself is still a real GPS fix) closes that off at the source
+    # instead of only containing it downstream.
+    if ele_f is not None and not math.isfinite(ele_f):
         ele_f = None
     return TrackPoint(lat=lat_f, lon=lon_f, ele=ele_f, time=time)
 

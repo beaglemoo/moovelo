@@ -29,6 +29,19 @@
 		if (pollTimer) clearTimeout(pollTimer);
 	});
 
+	// Only the single-file queue gated the Import button - an archive still
+	// queued or running left it clickable, and the backend has one worker for
+	// the whole install, so a second archive submitted mid-import either sat
+	// behind the first for no visible reason or, once the queue gained a
+	// bound, could 429. Selecting several .zip files also used to fire them
+	// all in a loop that only awaited the upload's 202, not the import
+	// finishing, so only the last one's status was ever actually tracked -
+	// startArchive now awaits the whole job before chooseFiles moves to the
+	// next file.
+	let archiveBusy = $derived.by(
+		() => archive?.status === 'queued' || archive?.status === 'running'
+	);
+
 	async function chooseFiles(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		if (!input.files?.length) return;
@@ -47,30 +60,33 @@
 		archiveError = null;
 		try {
 			archive = await activities.importArchive(file);
-			pollArchive();
 		} catch (err) {
 			archiveError = err instanceof Error ? err.message : 'Could not read that archive';
+			return;
 		}
+		await pollArchiveUntilDone();
 	}
 
-	function pollArchive() {
-		if (pollTimer) clearTimeout(pollTimer);
-		pollTimer = setTimeout(async () => {
-			if (!archive) return;
+	/** Polls until the job leaves queued/running, then resolves - so a
+	 * caller awaiting this (chooseFiles, serialising several .zip files) only
+	 * moves on once this one has actually finished, not once it was merely
+	 * accepted. */
+	async function pollArchiveUntilDone(): Promise<void> {
+		while (archive && (archive.status === 'queued' || archive.status === 'running')) {
+			const jobId = archive.id;
+			await new Promise<void>((resolve) => {
+				pollTimer = setTimeout(resolve, 1500);
+			});
 			try {
-				archive = await activities.archiveStatus(archive.id);
+				archive = await activities.archiveStatus(jobId);
 			} catch {
 				// A job the server has forgotten - a restart, or eviction once
 				// enough later jobs finished. Stop asking rather than looping.
 				archive = null;
 				return;
 			}
-			if (archive.status === 'queued' || archive.status === 'running') {
-				pollArchive();
-			} else {
-				void refresh();
-			}
-		}, 1500);
+		}
+		void refresh();
 	}
 
 	// Same shape as the library's: the queue finishing is what refreshes the
@@ -162,9 +178,9 @@
 			type="button"
 			class="import"
 			onclick={() => fileInput?.click()}
-			disabled={activityImportQueue.busy}
+			disabled={activityImportQueue.busy || archiveBusy}
 		>
-			{activityImportQueue.busy ? 'Importing…' : 'Import rides'}
+			{activityImportQueue.busy || archiveBusy ? 'Importing…' : 'Import rides'}
 		</button>
 	</div>
 

@@ -190,6 +190,25 @@ def test_partial_elevation_is_not_treated_as_elevation() -> None:
     assert not parse_route_file("partial.gpx", gpx).has_elevation
 
 
+def test_nonfinite_elevation_is_dropped_not_stored() -> None:
+    """A real device/export glitch: NaN and +/-inf both pass float() and
+    Pydantic without complaint, but the JSON spec has no token for either,
+    and the elevation profile is stored as JSONB - an unfiltered NaN takes
+    down the whole INSERT (and, for a bulk import, every other ride batched
+    into the same statement) rather than just this one point. The point
+    itself is still a real GPS fix, so it is kept - only the elevation is
+    dropped."""
+    gpx = b"""<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
+      <trkpt lat="51.7955" lon="-0.6580"><ele>NaN</ele></trkpt>
+      <trkpt lat="51.7961" lon="-0.6572"><ele>INF</ele></trkpt>
+      <trkpt lat="51.7970" lon="-0.6559"><ele>-INF</ele></trkpt>
+    </trkseg></trk></gpx>"""
+    track = parse_route_file("nan.gpx", gpx)
+    assert len(track.points) == 3, "the points themselves are still real GPS fixes"
+    assert [p.ele for p in track.points] == [None, None, None]
+    assert not track.has_elevation
+
+
 @pytest.mark.parametrize(
     ("filename", "data", "message"),
     [

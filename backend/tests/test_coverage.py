@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Activity, ActivityWay, CycleWay, CycleWayMember, SearchIndexMeta, User
+from app.services.geo import destination_point, haversine
 from tests.conftest import register
 
 # A point on the Chilterns, matching test_cycle_network.py's own choice so a
@@ -21,6 +22,29 @@ LAT, LON = 51.8000, -0.6500
 
 BBOX = {"min_lat": LAT - 0.05, "min_lon": LON - 0.05, "max_lat": LAT + 0.05, "max_lon": LON + 0.05}
 ELSEWHERE = {"min_lat": 55.0, "min_lon": 2.0, "max_lat": 55.1, "max_lon": 2.1}
+
+# The coverage query now clips every way to the query envelope before
+# summing its length (ST_Intersection, cast to geography), so a fixture's
+# geometry has to actually be the length it claims - a real value drives
+# the same code path as production data, a placeholder does not. Postgres
+# computes the clipped length on a WGS84 spheroid; destination_point/
+# haversine (services/geo.py) use a sphere, so the two never match to the
+# bit - REL is a tolerance for that, not a fudge for the bug this file
+# exists to catch.
+REL = 0.01
+
+
+def _line_of_length(at: tuple[float, float], length_m: float, bearing_deg: float = 0.0) -> str:
+    """WKT LINESTRING starting at `at`, running `length_m` along `bearing_deg`.
+
+    Before this, `_member` built a ~111m diagonal regardless of the
+    `length_m` it was told, which can never straddle a bbox edge - the
+    reason none of the three "counted more than the box actually holds"
+    bugs this module guards against were ever caught by a test.
+    """
+    lat, lon = at
+    end_lat, end_lon = destination_point(at, bearing_deg, length_m)
+    return f"SRID=4326;LINESTRING({lon} {lat},{end_lon} {end_lat})"
 
 
 def _route(relation_id: int, network: str, at: tuple[float, float] = (LAT, LON)) -> CycleWay:
@@ -40,20 +64,25 @@ def _member(
     way_id: int,
     length_m: float,
     at: tuple[float, float] = (LAT, LON),
+    bearing_deg: float = 0.0,
 ) -> CycleWayMember:
-    """A member way with its own short shape.
+    """A member way with its own real shape, `length_m` long.
 
-    The shape is what a coverage bbox actually selects on. Placing it apart
-    from the route's own geometry is the point of several tests below: a
-    relation's envelope spans its whole route, so filtering through that
-    instead answers a question nobody asked.
+    The shape is what a coverage bbox actually selects on, and (since the
+    fix this file's boundary test guards) what it clips against too. Placing
+    it apart from the route's own geometry is the point of several tests
+    below: a relation's envelope spans its whole route, so filtering through
+    that instead answers a question nobody asked. Default bearing is due
+    north: BBOX's latitude buffer (0.05 degrees, ~5560m) is constant with
+    latitude, while its longitude buffer shrinks with cos(latitude), so
+    north gives every fixture here the most headroom before accidentally
+    crossing an edge it was not testing for.
     """
-    lat, lon = at
     return CycleWayMember(
         relation_id=relation_id,
         way_id=way_id,
         length_m=length_m,
-        geom=f"SRID=4326;LINESTRING({lon} {lat},{lon + 0.001} {lat + 0.001})",
+        geom=_line_of_length(at, length_m, bearing_deg),
     )
 
 
@@ -142,9 +171,9 @@ async def test_a_rider_with_no_activities_gets_an_honest_zero(
     assert body["available"] is True
     by_network = {row["network"]: row for row in body["networks"]}
     assert by_network["ncn"]["ridden_m"] == pytest.approx(0.0)
-    assert by_network["ncn"]["total_m"] == pytest.approx(1500.0)
+    assert by_network["ncn"]["total_m"] == pytest.approx(1500.0, rel=REL)
     assert by_network["rcn"]["ridden_m"] == pytest.approx(0.0)
-    assert by_network["rcn"]["total_m"] == pytest.approx(800.0)
+    assert by_network["rcn"]["total_m"] == pytest.approx(800.0, rel=REL)
 
 
 async def test_a_bbox_with_no_routes_in_it_is_an_empty_list_not_a_failure(
@@ -171,11 +200,11 @@ async def test_coverage_arithmetic(client: AsyncClient, db: AsyncSession) -> Non
 
     by_network = {row["network"]: row for row in response.json()["networks"]}
     # Way 100 (1000m of the NCN's 1500m) was ridden; way 101 was not.
-    assert by_network["ncn"]["ridden_m"] == pytest.approx(1000.0)
-    assert by_network["ncn"]["total_m"] == pytest.approx(1500.0)
+    assert by_network["ncn"]["ridden_m"] == pytest.approx(1000.0, rel=REL)
+    assert by_network["ncn"]["total_m"] == pytest.approx(1500.0, rel=REL)
     # The RCN's only way was never ridden.
     assert by_network["rcn"]["ridden_m"] == pytest.approx(0.0)
-    assert by_network["rcn"]["total_m"] == pytest.approx(800.0)
+    assert by_network["rcn"]["total_m"] == pytest.approx(800.0, rel=REL)
 
 
 async def test_a_way_ridden_as_part_of_two_routes_credits_both(
@@ -202,8 +231,8 @@ async def test_a_way_ridden_as_part_of_two_routes_credits_both(
     response = await client.get("/api/coverage/cycle-network", params=BBOX)
 
     by_network = {row["network"]: row for row in response.json()["networks"]}
-    assert by_network["ncn"]["ridden_m"] == pytest.approx(1000.0)
-    assert by_network["rcn"]["ridden_m"] == pytest.approx(1000.0)
+    assert by_network["ncn"]["ridden_m"] == pytest.approx(1000.0, rel=REL)
+    assert by_network["rcn"]["ridden_m"] == pytest.approx(1000.0, rel=REL)
 
 
 async def test_a_way_carrying_two_routes_of_one_tier_is_counted_once(
@@ -238,7 +267,9 @@ async def test_a_way_carrying_two_routes_of_one_tier_is_counted_once(
     body = (await client.get("/api/coverage/cycle-network", params=BBOX)).json()
 
     ncn = next(row for row in body["networks"] if row["network"] == "ncn")
-    assert ncn["total_m"] == 1000.0, "one physical kilometre of road, not two"
+    assert ncn["total_m"] == pytest.approx(1000.0, rel=REL), (
+        "one physical kilometre of road, not two"
+    )
 
 
 async def test_the_bbox_selects_ways_not_whole_routes(
@@ -269,7 +300,46 @@ async def test_the_bbox_selects_ways_not_whole_routes(
     body = (await client.get("/api/coverage/cycle-network", params=BBOX)).json()
 
     ncn = next(row for row in body["networks"] if row["network"] == "ncn")
-    assert ncn["total_m"] == 1000.0, "the Yorkshire end of the route is not near the Chilterns"
+    assert ncn["total_m"] == pytest.approx(1000.0, rel=REL), (
+        "the Yorkshire end of the route is not near the Chilterns"
+    )
+
+
+async def test_a_way_that_only_clips_the_box_counts_only_the_part_inside(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The third instance of one family: cwm.geom && envelope is a
+    bounding-box test, true the moment a way's box merely *touches* the
+    envelope, and the old query summed the way's whole stored length
+    regardless. Measured on the England extract, a bbox near Dover pulled in
+    EuroVelo 2's 213.7 km ferry link whose line never enters the box at all
+    - only its bounding box does - inflating icn 3.87x.
+
+    This way starts at the box centre and runs due north straight through
+    the box's north edge, so only the southern part of it is actually
+    inside BBOX - the whole point of the boundary crossing this file's other
+    fixtures, all fully inside or fully outside, never exercised.
+    """
+    edge_m = haversine((LAT, LON), (LAT + 0.05, LON))
+    total_m = edge_m + 4000.0
+    db.add_all(
+        [
+            _route(1, "ncn"),
+            _member(1, 100, total_m, bearing_deg=0.0),
+            _meta(1),
+        ]
+    )
+    await db.commit()
+    await register(client, "rider@example.com")
+
+    body = (await client.get("/api/coverage/cycle-network", params=BBOX)).json()
+
+    ncn = next(row for row in body["networks"] if row["network"] == "ncn")
+    assert ncn["total_m"] < total_m * 0.7, (
+        "the way's whole stored length must not be counted, only the part the "
+        "envelope actually clips it to"
+    )
+    assert ncn["total_m"] == pytest.approx(edge_m, rel=REL)
 
 
 async def test_one_riders_coverage_never_counts_another_riders_ways(
