@@ -1,13 +1,17 @@
-"""Cycle-network coverage: ridden vs total metres of the signed network, by
-tier, for one rider.
+"""Two coverage denominators, both measured against the same
+`activity_ways` (app-owned, one row per way a rider has ever been recorded
+riding - see services/way_matching.py): how much of the *signed cycle
+network* a rider has ridden, by tier (cycle_network_coverage), and how
+much of *every bikeable road* they have ridden (road_coverage) - a wider,
+blunter question with no tiers to group by.
 
-Two tables carry this, both added alongside this feature: `cycle_way_members`
-(indexer-published, relation_id/way_id/length_m - see models.CycleWayMember)
-and `activity_ways` (app-owned, one row per way a rider has ever been
-recorded riding - see services/way_matching.py). Coverage joins them on
-way_id and filters on cycle_ways.geom, which already carries a GIST index,
-rather than on anything in cycle_way_members itself - the spatial filter is
-"which routes are near here", not "which of their member ways are".
+Cycle-network coverage joins `cycle_way_members` (indexer-published,
+relation_id/way_id/length_m - see models.CycleWayMember) to `cycle_ways`
+and filters on the member's own geom, which already carries a GIST index -
+the spatial filter is "which routes are near here", not "which of their
+member ways are". Road coverage is simpler: `osm_ways` (see models.OsmWay)
+already has one row per way, its own geometry and its own GIST index, and
+no owning relation to join through - a way is a way.
 """
 
 import uuid
@@ -129,3 +133,46 @@ async def cycle_network_coverage(
         )
     ).all()
     return [(row.network, float(row.total_m), float(row.ridden_m)) for row in rows]
+
+
+# osm_ways has one row per way already - no relation to filter through and
+# no multi-membership to deduplicate, so this is a plain LEFT JOIN rather
+# than cycle-network coverage's DISTINCT-ON dance. ow.geom && the envelope
+# is what makes it index-backed (ix_osm_ways_geom, GIST). The user_id filter
+# lives in the LEFT JOIN's own ON clause for the same reason it does above:
+# moving it to WHERE would turn the join into an inner one and silently drop
+# every unridden way, which is exactly backwards for a denominator.
+_ROAD_COVERAGE_SQL = text("""
+    SELECT ow.highway AS highway,
+           SUM(ow.length_m) AS total_m,
+           SUM(CASE WHEN aw.way_id IS NOT NULL THEN ow.length_m ELSE 0 END) AS ridden_m
+    FROM osm_ways ow
+    LEFT JOIN activity_ways aw
+           ON aw.way_id = ow.way_id AND aw.user_id = :user_id
+    WHERE ow.geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
+    GROUP BY ow.highway
+""")
+
+
+async def road_coverage(
+    db: AsyncSession, user_id: uuid.UUID, bbox: BBox
+) -> list[tuple[str, float, float]]:
+    """Ridden vs total metres per OSM `highway` class within `bbox`, as
+    (highway, total_m, ridden_m) - the all-roads denominator, wider than
+    cycle_network_coverage's signed-network one and with no tiers to
+    deduplicate across, since every way here is exactly one row.
+    """
+    min_lon, min_lat, max_lon, max_lat = bbox
+    rows = (
+        await db.execute(
+            _ROAD_COVERAGE_SQL,
+            {
+                "user_id": user_id,
+                "min_lon": min_lon,
+                "min_lat": min_lat,
+                "max_lon": max_lon,
+                "max_lat": max_lat,
+            },
+        )
+    ).all()
+    return [(row.highway, float(row.total_m), float(row.ridden_m)) for row in rows]

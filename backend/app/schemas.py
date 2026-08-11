@@ -490,6 +490,33 @@ class CoverageBackfillStatus(BaseModel):
     error: str | None = None
 
 
+class HighwayCoverage(BaseModel):
+    """Ridden vs total metres of one OSM `highway` class (residential,
+    footway, track, ...) within a bbox."""
+
+    highway: str
+    ridden_m: float
+    total_m: float
+
+
+class RoadCoverageResponse(BaseModel):
+    """How much of every bikeable road a rider has ridden, near wherever
+    their own activities are - the wider denominator: every way in
+    `osm_ways`, not only the signed cycle network CoverageResponse reports
+    on.
+
+    `available` is False whenever the answer would be misleading rather
+    than merely absent, the same three reasons CoverageResponse's own
+    docstring gives: no place index built yet, one built before this
+    feature added osm_ways (search_index_meta.osm_way_count is null), or
+    the rider has imported nothing to centre a default bbox on.
+    """
+
+    available: bool
+    reason: str | None = None
+    highways: list[HighwayCoverage] = []
+
+
 class SharedRoute(RouteResponse):
     """Public view of a shared route - no ids, no owner information."""
 
