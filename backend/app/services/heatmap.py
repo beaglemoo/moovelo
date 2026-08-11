@@ -28,10 +28,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Activity
 
-# Personal traces are looked at closer than the signed cycle network -
-# retracing your own commute at zoom 17-18 is a reasonable thing to want -
-# but the same lower bound as the cycle network: below zoom 4 a line as
-# thin as a single ride is not worth simplifying for, it is worth hiding.
+# The same bounds as the cycle network. 16 is where tiles stop being
+# generated, not where the layer stops being visible: MapLibre overzooms a
+# vector source past its maxzoom, so retracing your own commute at 18 still
+# draws, it just reuses the zoom-16 tile.
 MIN_HEATMAP_ZOOM = 4
 MAX_HEATMAP_ZOOM = 16
 
@@ -82,17 +82,22 @@ async def heatmap_tile(db: AsyncSession, user_id: uuid.UUID, z: int, x: int, y: 
     return bytes(mvt) if mvt else b""
 
 
-async def heatmap_etag(db: AsyncSession, user_id: uuid.UUID) -> str:
+async def heatmap_etag(db: AsyncSession, user_id: uuid.UUID, z: int, x: int, y: int) -> str:
     """A cheap fingerprint of one rider's activities, for HTTP caching.
 
     Cycle-network tiles are install-wide and only change when the indexer
     reruns, so they carry a long max-age. Heatmap tiles are personal and
     change the moment a ride is imported or deleted, so they cannot - the
     tile is revalidated on every request instead, and this is what makes
-    that cheap: a row count plus the newest `created_at` change on every
-    insert or delete and never otherwise, so the fingerprint is exact
-    rather than a heuristic, and costs one indexed aggregate instead of
-    hashing the tile itself.
+    that cheap: a row count plus the newest `created_at` move on every
+    insert and delete, so one indexed aggregate stands in for hashing the
+    tile itself.
+
+    The tile coordinates are part of the fingerprint. HTTP caches key on
+    the URL, so in practice one ETag per rider would already be safe - but
+    an entity tag that does not vary with the entity is a trap laid for
+    whichever future caller revalidates by tag rather than by URL, and
+    including z/x/y costs nothing.
     """
     count, latest = (
         await db.execute(
@@ -101,5 +106,6 @@ async def heatmap_etag(db: AsyncSession, user_id: uuid.UUID) -> str:
             )
         )
     ).one()
-    fingerprint = f"{user_id}:{count}:{latest.isoformat() if latest else 'none'}"
+    stamp = latest.isoformat() if latest else "none"
+    fingerprint = f"{user_id}:{count}:{stamp}:{z}/{x}/{y}"
     return f'"{hashlib.sha256(fingerprint.encode()).hexdigest()[:16]}"'

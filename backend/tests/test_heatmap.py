@@ -127,6 +127,24 @@ async def test_importing_another_ride_changes_the_etag(client: AsyncClient) -> N
     assert first_etag != second_etag
 
 
+async def test_each_tile_has_its_own_etag(client: AsyncClient) -> None:
+    """An entity tag that does not vary with the entity is a trap.
+
+    HTTP caches key on the URL, so one tag per rider would be safe today -
+    but it hands a wrong 304, and so an empty body where a tile should be,
+    to anything that revalidates by tag rather than by URL. The coordinates
+    are in the fingerprint so that cannot happen.
+    """
+    await register(client)
+    await _import(client, GPX_RIDE)
+
+    here = (await fetch(client)).headers["etag"]
+    zoomed = (await fetch(client, z=ZOOM + 1)).headers["etag"]
+    elsewhere = (await fetch(client, at=(52.9, -1.5))).headers["etag"]
+
+    assert len({here, zoomed, elsewhere}) == 3, "three tiles, three tags"
+
+
 async def test_heatmap_available_reports_whether_the_rider_has_rides(
     client: AsyncClient,
 ) -> None:

@@ -174,7 +174,7 @@ async def heatmap(
     if x >= 2**z or y >= 2**z:
         return Response(status_code=404)
 
-    etag = await heatmap_etag(db, user.id)
+    etag = await heatmap_etag(db, user.id, z, x, y)
     headers = {"Cache-Control": "private, no-cache", "ETag": etag}
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
