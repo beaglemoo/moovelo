@@ -59,6 +59,9 @@ test('ask the assistant and watch the reply stream in', async ({ page }) => {
 
 	await page.goto('/');
 
+	// Collapsed to a pill by default - expand it before the input exists.
+	await page.getByRole('button', { name: 'Ask for a route' }).click();
+
 	const ask = page.getByLabel('Ask the route assistant');
 	await expect(ask).toBeVisible();
 
@@ -72,6 +75,26 @@ test('ask the assistant and watch the reply stream in', async ({ page }) => {
 	// And the turn is over: no stop button, no lingering status line.
 	await expect(page.getByRole('button', { name: 'Ask' })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Stop' })).toBeHidden();
+});
+
+test('the docked panel never appears just to hold the assistant', async ({ page }) => {
+	await signIn(page);
+
+	// Force the feature on: this is the case the docked-panel band used to
+	// render for, all by itself, with no route drawn at all.
+	await page.route('**/api/config', async (route) => {
+		const response = await route.fetch();
+		const config = await response.json();
+		await route.fulfill({ json: { ...config, assistant_enabled: true } });
+	});
+
+	await page.goto('/');
+	// The assistant lives as a floating overlay in .map-area now, so the
+	// pill is visible with no route...
+	await expect(page.getByRole('button', { name: 'Ask for a route' })).toBeVisible();
+	// ...and the docked panel below the map - which used to render a
+	// full-width band just to hold it - does not exist at all.
+	await expect(page.locator('.panel')).toHaveCount(0);
 });
 
 test('the panel is absent when the assistant is not configured', async ({ page }) => {
@@ -91,5 +114,7 @@ test('the panel is absent when the assistant is not configured', async ({ page }
 	// wrong reason, and did - removing the gate left this test green until
 	// the wait was added.
 	await expect(page.locator('canvas').first()).toBeVisible();
+	// Neither the collapsed pill nor an expanded input exists.
+	await expect(page.getByRole('button', { name: 'Ask for a route' })).toHaveCount(0);
 	await expect(page.getByLabel('Ask the route assistant')).toHaveCount(0);
 });

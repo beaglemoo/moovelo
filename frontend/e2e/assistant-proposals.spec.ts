@@ -61,6 +61,8 @@ async function ask(page: Page, snapshot: unknown) {
 			body: proposalStream(snapshot)
 		});
 	});
+	// Collapsed to a pill by default - expand it before the input exists.
+	await page.getByRole('button', { name: 'Ask for a route' }).click();
 	await page.getByLabel('Ask the route assistant').fill('a route over the Chilterns');
 	await page.getByRole('button', { name: 'Ask' }).click();
 }
