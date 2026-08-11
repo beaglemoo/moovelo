@@ -353,6 +353,24 @@ export interface RouteQuery {
 	order?: 'asc' | 'desc';
 }
 
+/** Progress of a bulk archive import. Mirrors ArchiveImportStatus.
+ * Held in memory server-side, so a restart reports the job as interrupted
+ * rather than resuming it. */
+export interface ArchiveImportStatus {
+	id: string;
+	filename: string;
+	status: 'queued' | 'running' | 'done' | 'error';
+	total: number;
+	imported: number;
+	failed: number;
+	/** Non-rides the archive's own manifest named as such. */
+	skipped: number;
+	/** Already imported from an earlier, overlapping export. */
+	duplicates: number;
+	error: string | null;
+	problems: string[];
+}
+
 /** A ride that happened. Mirrors backend/app/schemas.py ActivitySummary. */
 export interface ActivitySummary {
 	id: string;
@@ -425,7 +443,19 @@ export const activities = {
 		const form = new FormData();
 		form.append('file', file);
 		return request<ActivityDetail>('/api/activities/import', { method: 'POST', body: form });
-	}
+	},
+	/** A Strava bulk export. Returns a job to poll, not the rides: hundreds
+	 * of files at seconds of CPU each would time out a single request. */
+	importArchive: (file: File) => {
+		const form = new FormData();
+		form.append('file', file);
+		return request<ArchiveImportStatus>('/api/activities/import/archive', {
+			method: 'POST',
+			body: form
+		});
+	},
+	archiveStatus: (id: string) =>
+		request<ArchiveImportStatus>(`/api/activities/import/archive/${id}`)
 };
 
 export const shared = {
