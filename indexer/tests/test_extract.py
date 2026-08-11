@@ -170,6 +170,26 @@ def test_the_filter_covers_every_indexed_tag() -> None:
     assert any(e.startswith("w/highway!=") and "motorway" in e for e in expressions)
 
 
+def test_the_road_filter_is_the_only_thing_INDEX_ROADS_turns_off() -> None:
+    """Off by default, and off means osmium is never asked for the ways.
+
+    That single expression is where the whole cost of all-roads coverage
+    sits: measured on England it takes the filtered extract from 45 MB to
+    469 MB and the rebuild from 37 seconds to nearly eight minutes. An
+    install that only wants place search, POIs, the cycle overlay or
+    cycle-network coverage should not pay it - and cycle-route member ways
+    still arrive either way, as members of the r/route=bicycle relations.
+    """
+    without = filter_expressions(include_roads=False)
+    with_roads = filter_expressions(include_roads=True)
+
+    assert not any(e.startswith("w/highway!=") for e in without)
+    assert "r/route=bicycle" in without, "cycle routes are not what this switches off"
+    assert any(e.startswith("nw/amenity=") for e in without), "nor are POIs"
+    # Exactly one expression separates them.
+    assert len(with_roads) == len(without) + 1
+
+
 def test_a_residential_street_and_a_footway_are_road_ways(rows: list[object]) -> None:
     found = {r.way_id: r for r in road_ways(rows)}  # type: ignore[arg-type]
 
