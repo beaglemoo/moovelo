@@ -1,0 +1,104 @@
+"""Cycle-network coverage: ridden vs total metres of the signed network, by
+tier, for one rider.
+
+Two tables carry this, both added alongside this feature: `cycle_way_members`
+(indexer-published, relation_id/way_id/length_m - see models.CycleWayMember)
+and `activity_ways` (app-owned, one row per way a rider has ever been
+recorded riding - see services/way_matching.py). Coverage joins them on
+way_id and filters on cycle_ways.geom, which already carries a GIST index,
+rather than on anything in cycle_way_members itself - the spatial filter is
+"which routes are near here", not "which of their member ways are".
+"""
+
+import uuid
+
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import SearchIndexMeta
+
+BBox = tuple[float, float, float, float]
+
+# Roughly 5.5 km of latitude either side - a degree of longitude shrinks
+# towards the poles, but a degree of latitude does not, so this buffer is
+# deliberately expressed in degrees of latitude only and applied uniformly.
+# Wide enough that a commute's worth of activities pulls in the surrounding
+# network; narrow enough that one wildly out-of-area activity does not blow
+# the default bbox out to a scan of the whole index.
+DEFAULT_BBOX_BUFFER_DEG = 0.05
+
+_BBOX_SQL = text("""
+    SELECT ST_XMin(ext) AS min_lon, ST_YMin(ext) AS min_lat,
+           ST_XMax(ext) AS max_lon, ST_YMax(ext) AS max_lat
+    FROM (SELECT ST_Extent(geom) AS ext FROM activities WHERE user_id = :user_id) e
+    WHERE ext IS NOT NULL
+""")
+
+# cw.geom && the envelope is what makes this index-backed (ix_cycle_ways_geom,
+# GIST) rather than a scan of the whole national index - the same technique
+# services/places.py's cycle-network tile query and services/heatmap.py both
+# already use, transforming the (constant) query bound rather than every row.
+# The LEFT JOIN's own ON clause carries the user_id filter, not a WHERE
+# added after it - moving it to WHERE would turn the LEFT JOIN into an inner
+# one and silently drop every unridden way, which is exactly backwards for a
+# coverage denominator.
+_COVERAGE_SQL = text("""
+    SELECT cw.network,
+           SUM(cwm.length_m) AS total_m,
+           SUM(CASE WHEN aw.way_id IS NOT NULL THEN cwm.length_m ELSE 0 END) AS ridden_m
+    FROM cycle_ways cw
+    JOIN cycle_way_members cwm ON cwm.relation_id = cw.id
+    LEFT JOIN activity_ways aw
+           ON aw.way_id = cwm.way_id AND aw.user_id = :user_id
+    WHERE cw.geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
+    GROUP BY cw.network
+""")
+
+
+async def index_meta(db: AsyncSession) -> SearchIndexMeta | None:
+    """The search index's single metadata row, or None if it has never been
+    built. Kept apart from the coverage query itself so the caller can tell
+    "never built" and "built before this feature existed" apart - both need
+    to say so plainly rather than let a missing join silently return 0%."""
+    return (await db.execute(select(SearchIndexMeta))).scalar_one_or_none()
+
+
+async def default_bbox(db: AsyncSession, user_id: uuid.UUID) -> BBox | None:
+    """A bbox around wherever this rider has actually ridden, buffered so
+    the surrounding network - ridden or not - is included in both the
+    numerator and the denominator. None when they have imported nothing to
+    centre one on.
+    """
+    row = (await db.execute(_BBOX_SQL, {"user_id": user_id})).one_or_none()
+    if row is None:
+        return None
+    min_lon, min_lat, max_lon, max_lat = row
+    return (
+        min_lon - DEFAULT_BBOX_BUFFER_DEG,
+        min_lat - DEFAULT_BBOX_BUFFER_DEG,
+        max_lon + DEFAULT_BBOX_BUFFER_DEG,
+        max_lat + DEFAULT_BBOX_BUFFER_DEG,
+    )
+
+
+async def cycle_network_coverage(
+    db: AsyncSession, user_id: uuid.UUID, bbox: BBox
+) -> list[tuple[str, float, float]]:
+    """Ridden vs total metres per network tier within `bbox`, as
+    (network, total_m, ridden_m). Empty when nothing in the index intersects
+    it - a genuine answer, not a failure.
+    """
+    min_lon, min_lat, max_lon, max_lat = bbox
+    rows = (
+        await db.execute(
+            _COVERAGE_SQL,
+            {
+                "user_id": user_id,
+                "min_lon": min_lon,
+                "min_lat": min_lat,
+                "max_lon": max_lon,
+                "max_lat": max_lat,
+            },
+        )
+    ).all()
+    return [(row.network, float(row.total_m), float(row.ridden_m)) for row in rows]

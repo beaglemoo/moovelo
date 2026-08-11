@@ -13,6 +13,7 @@ from app.api.activities import router as activities_router
 from app.api.admin import router as admin_router
 from app.api.assistant import router as assistant_router
 from app.api.auth import router as auth_router
+from app.api.coverage import router as coverage_router
 from app.api.custom_presets import router as custom_presets_router
 from app.api.llm_admin import router as llm_admin_router
 from app.api.places import router as places_router
@@ -102,6 +103,7 @@ app.include_router(custom_presets_router)
 app.include_router(llm_admin_router)
 app.include_router(assistant_router)
 app.include_router(activities_router)
+app.include_router(coverage_router)
 
 
 class SPAStaticFiles(StaticFiles):
