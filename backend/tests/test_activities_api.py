@@ -1,8 +1,14 @@
 """The activities endpoints: import, list, read, delete."""
 
+import uuid
+from datetime import UTC, datetime
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models import Activity
 from app.services.polyline import decode_polyline6
 from tests.conftest import register
 
@@ -31,6 +37,8 @@ GPX_UNDATED = b"""<?xml version="1.0" encoding="UTF-8"?>
   </trkseg></trk>
 </gpx>
 """
+
+GPX_UNDATED_2 = GPX_UNDATED.replace(b"No clock", b"No clock too")
 
 
 async def _import(client: AsyncClient, data: bytes, filename: str = "ride.gpx") -> dict:
@@ -82,17 +90,48 @@ async def test_import_requires_a_session(client: AsyncClient) -> None:
 
 
 async def test_lists_newest_first_and_dates_undated_rides_by_import(
-    client: AsyncClient,
+    client: AsyncClient, db: AsyncSession
 ) -> None:
+    """Two undated rides, and their created_at values deliberately set to
+    contradict the order they were imported in.
+
+    A single undated row cannot prove this endpoint uses
+    coalesce(started_at, created_at) rather than having quietly lost it:
+    Postgres's own default NULLS FIRST on a bare `started_at DESC` already
+    puts one undated row first, no coalesce required. A second undated row
+    does not fix that on its own either - for freshly inserted, never
+    updated rows, created_at *is* insertion order, so relying on whatever
+    incidental tie-break Postgres gives untied NULLs (measured: it happens
+    to already match insertion order here) would pass a two-undated-row
+    test just as easily as a real coalesce would, for the wrong reason.
+    Only forcing created_at to disagree with insertion order - and with the
+    interleaved dated rows either side of it - actually distinguishes the
+    two: the coalesced order below is impossible to produce by accident.
+    """
     await register(client)
-    await _import(client, GPX_OLDER)
-    await _import(client, GPX_RIDE)
-    await _import(client, GPX_UNDATED)
+    await _import(client, GPX_OLDER)  # started_at 2024-09-14
+    first = await _import(client, GPX_UNDATED)  # inserted first
+    await _import(client, GPX_RIDE)  # started_at 2026-05-03
+    second = await _import(client, GPX_UNDATED_2)  # inserted second
+
+    # Inserted first, but given a created_at *after* everything else -
+    # coalesce must place it first regardless of insertion order.
+    await db.execute(
+        update(Activity)
+        .where(Activity.id == uuid.UUID(first["id"]))
+        .values(created_at=datetime(2026, 7, 1, tzinfo=UTC))
+    )
+    # Inserted second, but given a created_at *before* everything else -
+    # coalesce must sink it to the bottom, the opposite of insertion order.
+    await db.execute(
+        update(Activity)
+        .where(Activity.id == uuid.UUID(second["id"]))
+        .values(created_at=datetime(2024, 1, 1, tzinfo=UTC))
+    )
+    await db.commit()
 
     names = [row["name"] for row in (await client.get("/api/activities")).json()]
-    # The undated ride was imported last, so it sorts first on created_at
-    # rather than sinking below every dated ride forever.
-    assert names == ["No clock", "Tuesday morning", "An older ride"]
+    assert names == ["No clock", "Tuesday morning", "An older ride", "No clock too"]
 
 
 async def test_filters_by_year(client: AsyncClient) -> None:
