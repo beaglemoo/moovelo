@@ -95,9 +95,22 @@ That yields roughly 73,000 places, 285,000 POIs and 5,500 cycle routes,
 adding about 150 MB to the database. The filter pass is the high-water
 mark: it reduces 1.6 GB to 45 MB, which is what keeps the parse cheap.
 
-**With all-roads coverage** (every bikeable OSM way, not just signed
-cycle-route members - see [docs/architecture.md](architecture.md#all-roads-coverage)
-for what "bikeable" excludes), the same extract measures:
+**With all-roads coverage**, which is **off unless you ask for it**:
+
+```sh
+INDEX_ROADS=true docker compose --profile index run --rm indexer
+```
+
+Off by default because the figures below are the whole reason to make it a
+choice. Place search, POIs, the cycle-network overlay and cycle-network
+coverage all work without it, and most installs will never want it - so an
+index built for the search box should not silently cost eight minutes and
+a gigabyte. Setting the variable and re-running the indexer is the only
+step; nothing else changes.
+
+With it on (every bikeable OSM way, not just signed cycle-route members -
+see [docs/architecture.md](architecture.md#all-roads-coverage) for what
+"bikeable" excludes), the same extract measures:
 
 | Stage | Time | Peak memory |
 |-------|------|-------------|
@@ -134,9 +147,11 @@ carries this signal (`search_index_meta.cycle_way_member_count`, null on an
 untouched pre-existing row, a real number the moment a rebuild finishes) -
 so the fix, again, is just re-running the indexer.
 
-An index built before all-roads coverage has no `osm_ways` table at all
-(`search_index_meta.osm_way_count` is null on an untouched row, migration
-0015). `/api/coverage/roads` degrades to "needs a re-index" the same way;
+An index built without `INDEX_ROADS` - which includes every index built
+before all-roads coverage existed - has no road ways
+(`search_index_meta.osm_way_count` is null, migration 0015). The two cases
+are deliberately indistinguishable, because the answer is the same in
+both: set the variable and re-run. `/api/coverage/roads` degrades to "needs a re-index" the same way;
 search, POIs, the network overlay and cycle-network coverage are all
 unaffected. This is the biggest re-index yet in wall-clock time - see the
 table above - and worth planning around rather than running unattended

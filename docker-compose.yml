@@ -49,6 +49,10 @@ services:
     environment:
       DATABASE_URL: postgresql://bikegps:${POSTGRES_PASSWORD:-bikegps}@postgres:5432/bikegps
       OSM_DIR: /custom_files
+      # Off by default: indexing every bikeable way is the difference
+      # between a 37-second rebuild and an eight-minute one, and 150 MB
+      # against 1.24 GB. Only all-roads coverage needs it.
+      INDEX_ROADS: ${INDEX_ROADS:-false}
     volumes:
       # Read-only: this reads the extract Valhalla downloaded and must
       # never write to the tiles volume. Scratch space goes in /tmp.

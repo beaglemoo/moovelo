@@ -78,12 +78,19 @@ the "Match older rides" button on /activities to backfill those.
 
 ## All-roads coverage says "needs a re-index"
 
-Same story as cycle-network coverage above, one PR later: an index built
-before all-roads coverage shipped has no `osm_ways` table at all.
-`/api/coverage/roads` says so rather than reporting 0% - re-run the
-indexer once and it starts working. As with cycle-network coverage,
-matching does not depend on the index, so activities matched before the
-re-index show their coverage the moment it catches up.
+Usually because you have not asked for it. Road ways are **off by
+default** - `/api/coverage/roads` says "needs a re-index" both for an
+index built before the feature existed and for one built without the
+switch, because the fix is the same either way:
+
+```sh
+INDEX_ROADS=true docker compose --profile index run --rm indexer
+```
+
+`/api/coverage/roads` says so rather than reporting 0%. As with
+cycle-network coverage, matching does not depend on the index, so
+activities matched before the re-index show their coverage the moment it
+catches up.
 
 **This re-index takes much longer than the ones before it - about
 8 minutes on England, against ~37 seconds before.** Keeping every
