@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, Response
 
+from app.api.activities import router as activities_router
 from app.api.admin import router as admin_router
 from app.api.assistant import router as assistant_router
 from app.api.auth import router as auth_router
@@ -83,6 +84,7 @@ app.include_router(admin_router)
 app.include_router(custom_presets_router)
 app.include_router(llm_admin_router)
 app.include_router(assistant_router)
+app.include_router(activities_router)
 
 
 class SPAStaticFiles(StaticFiles):
