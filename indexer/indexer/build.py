@@ -41,7 +41,7 @@ def build() -> int:
     with db.connect(settings.database_url) as connection:
         db.prepare_staging(connection)
 
-        totals = {"places": 0, "pois": 0, "cycle_members": 0}
+        totals = {"places": 0, "pois": 0, "cycle_members": 0, "road_ways": 0}
         for source in extracts:
             filtered = Path(settings.work_dir) / f"{source.stem}.filtered.osm.pbf"
             try:
@@ -57,14 +57,16 @@ def build() -> int:
                 totals[key] += value
 
         totals["cycle_ways"] = db.assemble_cycle_routes(connection)
+        totals["osm_ways"] = db.assemble_road_ways(connection)
         db.publish(connection, [e.name for e in extracts], totals)
 
     log.info(
-        "done in %.0fs: %d places, %d POIs, %d cycle routes",
+        "done in %.0fs: %d places, %d POIs, %d cycle routes, %d road ways",
         time.monotonic() - started,
         totals["places"],
         totals["pois"],
         totals["cycle_ways"],
+        totals["osm_ways"],
     )
     return 0
 

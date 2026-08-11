@@ -98,6 +98,20 @@ KEPT_POI_TAGS = (
     "wheelchair",
 )
 
+# highway=* values a bicycle genuinely cannot use, for the all-roads
+# coverage denominator (Phase 10, osm_ways). Everything else is kept,
+# deliberately including footway/path/bridleway/track: people ride them,
+# and dropping them would make "how much of the roads near me have I
+# ridden" lie by omission.
+#
+# access=private/no is *not* filtered here, on purpose. A locked gate or a
+# residents-only sign does not erase a road from the map, and the question
+# this denominator answers is "how much of the road network near you have
+# you ridden", not "how much of it were you allowed to ride" - the same
+# reasoning that keeps unsigned bridleways and farm tracks in rather than
+# guessing at legal access from a tag that is inconsistently mapped anyway.
+ROAD_HIGHWAY_EXCLUDE = ("construction", "motorway", "motorway_link", "proposed", "raceway")
+
 
 def filter_expressions() -> list[str]:
     """The `osmium tags-filter` arguments, derived from the tables above.
@@ -109,6 +123,9 @@ def filter_expressions() -> list[str]:
     expressions = [f"n/{key}={','.join(sorted(values))}" for key, values in PLACE_TAGS.items()]
     expressions += [f"nw/{key}={','.join(sorted(values))}" for key, values in POI_TAGS.items()]
     expressions.append("r/route=bicycle")
+    # w/highway!=a,b,c means "ways with a highway tag whose value is not
+    # one of these" - everything ridable, in one expression.
+    expressions.append(f"w/highway!={','.join(sorted(ROAD_HIGHWAY_EXCLUDE))}")
     return expressions
 
 
@@ -157,3 +174,13 @@ def cycle_network(tags: dict[str, str]) -> str | None:
         return None
     network = tags.get("network", "").lower()
     return network if network in CYCLE_NETWORKS else None
+
+
+def road_highway(tags: dict[str, str]) -> str | None:
+    """The `highway` value if this way belongs in the all-roads coverage
+    denominator, otherwise None. See ROAD_HIGHWAY_EXCLUDE for what and why
+    is left out."""
+    highway = tags.get("highway")
+    if not highway or highway in ROAD_HIGHWAY_EXCLUDE:
+        return None
+    return highway
