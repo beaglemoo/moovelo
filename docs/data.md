@@ -99,6 +99,15 @@ cycle routes are stored unmerged and the network overlay will serve tiles
 several times larger than it needs to. Re-run the indexer once after
 upgrading to fix that; nothing else needs doing.
 
+An index built before cycle-network coverage (Phase 10) has cycle routes
+but no `cycle_way_members` - the per-way lengths coverage sums. Search,
+POIs and the network overlay all still work; `/api/coverage/cycle-network`
+degrades to "needs a re-index" rather than a dishonest 0%, and stays that
+way until the indexer runs once more. Migration 0014 adds the column that
+carries this signal (`search_index_meta.cycle_way_member_count`, null on an
+untouched pre-existing row, a real number the moment a rebuild finishes) -
+so the fix, again, is just re-running the indexer.
+
 ## Refreshing data (monthly)
 
 OSM data changes constantly; Geofabrik extracts are updated daily. To

@@ -121,6 +121,13 @@ with turn-by-turn cues.
   optionally the map tiles run on your own hardware. The only external
   services are Wahoo's cloud and an optional weather provider, and only
   if you configure them.
+- Activity history: import your own rides (GPX/TCX/FIT, or a Strava bulk
+  export zip) into a separate library from planned routes, and see them as
+  a personal heatmap - a low-opacity trace of every ride, drawn on the map
+  so roads you ride more than once darken. With the place index built, a
+  coverage card on /activities shows how much of the signed cycle network
+  near you has actually been ridden, per network tier, from your own
+  activities map-matched onto OpenStreetMap way ids.
 
 ## Route intelligence
 

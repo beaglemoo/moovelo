@@ -63,6 +63,19 @@ network overlay serves tiles several times larger than they need to be.
 Re-run the indexer once after upgrading - it's safe to run again with the
 app up, and nothing else needs doing.
 
+## Cycle-network coverage says "needs a re-index"
+
+If your place index was built before Phase 10 (cycle-network coverage), it
+has cycle routes but not the per-way lengths coverage needs
+(`cycle_way_members`). `/api/coverage/cycle-network` says so explicitly
+rather than reporting 0% - re-run the indexer once, the same command as
+above, and it starts working. Nothing else needs doing: matching activities
+onto OSM way ids does not depend on the place index at all (it only calls
+Valhalla), so activities imported before the re-index are already matched
+and their coverage becomes visible the moment the index catches up. Rides
+imported before this feature existed have never been matched at all - use
+the "Match older rides" button on /activities to backfill those.
+
 ## After refreshing OSM data, the index is missing or stale
 
 Order matters here. Refreshing routing data means wiping the
