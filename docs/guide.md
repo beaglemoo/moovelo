@@ -249,12 +249,21 @@ Off unless someone configures it. An admin sets an endpoint and a model
 on the **/admin** page (or via the `LLM_*` variables); until then there
 is no chat panel and nothing calls out anywhere.
 
-Once it is on, the planner grows a chat box. Ask for what you want in
-plain words - "a 40 km gravel loop from here, with water on it", "take
-me to Ivinghoe Beacon avoiding the A41" - and the reply streams back as
-it works, with a line telling you which step it is on. Long questions
-take a while, because each round trip to the model is followed by real
-routing and searching; **Stop** ends a turn you have lost patience with.
+Once it is on, a small **Ask for a route** pill sits over the bottom-right
+of the map. Click it to open the chat card; click the **×** to collapse it
+back to a pill without losing the conversation - it stays open in the
+background, not reset. The card floats over the map rather than sitting in
+a panel below it, so you can drag it out of the way by its header to keep
+working the map - panning, zooming, checking a proposal against what's
+actually on the ground - while a turn is still running. It remembers where
+you left it and whether it was open, and re-appears there next time.
+
+Ask for what you want in plain words - "a 40 km gravel loop from here,
+with water on it", "take me to Ivinghoe Beacon avoiding the A41" - and the
+reply streams back as it works, with a line telling you which step it is
+on. Long questions take a while, because each round trip to the model is
+followed by real routing and searching; **Stop** ends a turn you have lost
+patience with.
 
 What comes back is an offer, not a change. A route it builds is drawn as
 a dashed green line with a card showing its distance and climbing;

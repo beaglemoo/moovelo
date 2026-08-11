@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import {
 		streamAssistantChat,
 		type AssistantHandle,
@@ -61,6 +61,125 @@
 	// carrying these is what lets turn three still resolve "place:1".
 	let knownHandles: AssistantHandle[] = [];
 	let controller: AbortController | null = null;
+
+	// The floating card, following the basemap-toggle precedent
+	// (BASEMAP_STORAGE_KEY, MapView.svelte) rather than inventing a new one.
+	// Collapsed to a pill by default: with nothing else able to render
+	// without a route, this used to be the only thing in the docked panel,
+	// which meant a full-width band across the bottom of the map before any
+	// work had even started.
+	const STORAGE_KEY = 'moovelo:assistant-box';
+	// How much of the header must stay reachable after a clamp - enough to
+	// grab it again, not the whole card.
+	const HEADER_MARGIN = 48;
+
+	let root = $state<HTMLDivElement | undefined>();
+	let collapsed = $state(true);
+	// Anchored bottom-right (right/bottom in the stylesheet) until the rider
+	// drags it once; from then on it is explicit left/top, and the two
+	// anchors are never mixed - see boxStyle.
+	let left = $state<number | null>(null);
+	let top = $state<number | null>(null);
+
+	function persistBox() {
+		localStorage.setItem(STORAGE_KEY, JSON.stringify({ collapsed, left, top }));
+	}
+
+	function toggleCollapsed() {
+		collapsed = !collapsed;
+		persistBox();
+	}
+
+	// Keeps the card fully inside .map-area (its positioning parent) with at
+	// least HEADER_MARGIN px reachable, so a window dragged off-screen and
+	// then resized narrower cannot strand itself out of reach. Run on drop
+	// and on window resize - not continuously during a drag.
+	function clampPosition() {
+		if (!root || left === null || top === null) return;
+		const area = root.parentElement;
+		if (!area) return;
+		const areaRect = area.getBoundingClientRect();
+		const boxRect = root.getBoundingClientRect();
+		const minLeft = HEADER_MARGIN - boxRect.width;
+		const maxLeft = Math.max(minLeft, areaRect.width - HEADER_MARGIN);
+		const maxTop = Math.max(0, areaRect.height - HEADER_MARGIN);
+		left = Math.min(Math.max(left, minLeft), maxLeft);
+		top = Math.min(Math.max(top, 0), maxTop);
+	}
+
+	const boxStyle = $derived(
+		left === null || top === null
+			? 'right: 10px; bottom: 34px; left: auto; top: auto;'
+			: `left: ${left}px; top: ${top}px; right: auto; bottom: auto;`
+	);
+
+	// Pointer Events with setPointerCapture, not mouse/touch listeners on
+	// window: one code path covers mouse, touch and pen, and capture
+	// guarantees the matching pointerup lands on this element even if the
+	// pointer leaves it mid-drag - dropping over the toolbar or the zoom
+	// controls must not lose the gesture the way an earlier map drag once
+	// did (see the comment on the route-line drag in MapView.svelte).
+	function onHeaderPointerDown(event: PointerEvent) {
+		if (event.button !== 0) return;
+		const header = event.currentTarget as HTMLElement;
+		if (!root) return;
+		const area = root.parentElement;
+		if (!area) return;
+
+		// A header drag must never reach the map underneath: stop it here
+		// rather than relying on it simply not bubbling to the right target.
+		event.preventDefault();
+		event.stopPropagation();
+
+		const areaRect = area.getBoundingClientRect();
+		const boxRect = root.getBoundingClientRect();
+		// Switches anchoring to explicit left/top on the first drag, replacing
+		// whichever corner the card started pinned to.
+		left = boxRect.left - areaRect.left;
+		top = boxRect.top - areaRect.top;
+		const originLeft = left;
+		const originTop = top;
+		const startX = event.clientX;
+		const startY = event.clientY;
+
+		header.setPointerCapture(event.pointerId);
+
+		const onMove = (moveEvent: PointerEvent) => {
+			left = originLeft + (moveEvent.clientX - startX);
+			top = originTop + (moveEvent.clientY - startY);
+		};
+		const onUp = (upEvent: PointerEvent) => {
+			header.releasePointerCapture(upEvent.pointerId);
+			header.removeEventListener('pointermove', onMove);
+			header.removeEventListener('pointerup', onUp);
+			header.removeEventListener('pointercancel', onUp);
+			clampPosition();
+			persistBox();
+		};
+		header.addEventListener('pointermove', onMove);
+		header.addEventListener('pointerup', onUp);
+		header.addEventListener('pointercancel', onUp);
+	}
+
+	onMount(() => {
+		try {
+			const raw = localStorage.getItem(STORAGE_KEY);
+			if (raw) {
+				const stored = JSON.parse(raw) as { collapsed?: unknown; left?: unknown; top?: unknown };
+				collapsed = stored.collapsed !== false;
+				if (typeof stored.left === 'number' && typeof stored.top === 'number') {
+					left = stored.left;
+					top = stored.top;
+				}
+			}
+		} catch {
+			// A corrupted or foreign value - fall back to the default corner
+			// rather than throwing.
+		}
+		// A position saved on a wider window must not strand the card off
+		// this one.
+		clampPosition();
+	});
 
 	const TOOL_LABELS: Record<string, string> = {
 		search_place: 'Searching places',
@@ -183,80 +302,192 @@
 	}
 </script>
 
-<div class="assistant">
-	<div class="assistant-head">Route assistant</div>
-	<div class="assistant-log" bind:this={log} role="log" aria-label="Assistant conversation">
-		{#if entries.length === 0}
-			<p class="assistant-hint">
-				Ask for a route - "a 40 km gravel loop from here, with water on it". Whatever it comes up
-				with becomes ordinary waypoints you can drag.
-			</p>
-		{/if}
-		{#each entries as entry, index (index)}
-			<p class="assistant-entry" class:mine={entry.role === 'user'}>
-				{stripMarkdown(entry.text)}
-			</p>
-		{/each}
-		{#if status}
-			<p class="assistant-status">{status}…</p>
-		{/if}
-		{#if error}
-			<p class="assistant-error">{error}</p>
-		{/if}
-	</div>
-	{#if proposal}
-		<div class="assistant-proposal" class:partial={incomplete}>
-			{#if incomplete}
-				<p class="assistant-proposal-warning">
-					This is as far as I got - check it before using it.
+<svelte:window onresize={clampPosition} />
+
+<div bind:this={root} class="assistant" class:collapsed style={boxStyle}>
+	{#if collapsed}
+		<button type="button" class="assistant-pill" onclick={toggleCollapsed}>
+			Ask for a route
+		</button>
+	{:else}
+		<!-- Drag by the header only: the body holds selectable text (the log,
+		     the input), and dragging from there would fight that selection.
+		     Not an interactive role - the collapse button beside it is the
+		     accessible control; this div is a pointer-only drag handle. -->
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="assistant-head" onpointerdown={onHeaderPointerDown}>
+			<span>Route assistant</span>
+			<button
+				type="button"
+				class="assistant-close"
+				onclick={toggleCollapsed}
+				aria-label="Collapse the assistant"
+			>
+				×
+			</button>
+		</div>
+		<div class="assistant-log" bind:this={log} role="log" aria-label="Assistant conversation">
+			{#if entries.length === 0}
+				<p class="assistant-hint">
+					Ask for a route - "a 40 km gravel loop from here, with water on it". Whatever it comes up
+					with becomes ordinary waypoints you can drag.
 				</p>
 			{/if}
-			<!-- Every figure here is read off the snapshot Valhalla returned,
-			     never off the model's prose - the prompt forbids inventing
-			     numbers, but this is what makes it structurally impossible for
-			     an invented one to reach the rider as a measurement. -->
-			<p class="assistant-proposal-stats">
-				{(proposal.snapshot.distance_m / 1000).toFixed(1)} km, ↗ {Math.round(
-					proposal.snapshot.ascent_m
-				)} m
-			</p>
-			<div class="assistant-proposal-buttons">
-				<button type="button" class="primary" onclick={() => onAccept?.()}>Use this route</button>
-				<button type="button" onclick={() => onDiscard?.()}>Discard</button>
+			{#each entries as entry, index (index)}
+				<p class="assistant-entry" class:mine={entry.role === 'user'}>
+					{stripMarkdown(entry.text)}
+				</p>
+			{/each}
+			{#if status}
+				<p class="assistant-status">{status}…</p>
+			{/if}
+			{#if error}
+				<p class="assistant-error">{error}</p>
+			{/if}
+		</div>
+		{#if proposal}
+			<div class="assistant-proposal" class:partial={incomplete}>
+				{#if incomplete}
+					<p class="assistant-proposal-warning">
+						This is as far as I got - check it before using it.
+					</p>
+				{/if}
+				<!-- Every figure here is read off the snapshot Valhalla returned,
+				     never off the model's prose - the prompt forbids inventing
+				     numbers, but this is what makes it structurally impossible for
+				     an invented one to reach the rider as a measurement. -->
+				<p class="assistant-proposal-stats">
+					{(proposal.snapshot.distance_m / 1000).toFixed(1)} km, ↗ {Math.round(
+						proposal.snapshot.ascent_m
+					)} m
+				</p>
+				<div class="assistant-proposal-buttons">
+					<button type="button" class="primary" onclick={() => onAccept?.()}>Use this route</button>
+					<button type="button" onclick={() => onDiscard?.()}>Discard</button>
+				</div>
 			</div>
+		{/if}
+		<div class="assistant-ask">
+			<input
+				type="text"
+				bind:value={draft}
+				onkeydown={onKeydown}
+				placeholder="Ask for a route"
+				aria-label="Ask the route assistant"
+				disabled={busy}
+			/>
+			{#if busy}
+				<button type="button" onclick={stop}>Stop</button>
+			{:else}
+				<button type="button" onclick={send} disabled={!draft.trim()}>Ask</button>
+			{/if}
 		</div>
 	{/if}
-	<div class="assistant-ask">
-		<input
-			type="text"
-			bind:value={draft}
-			onkeydown={onKeydown}
-			placeholder="Ask for a route"
-			aria-label="Ask the route assistant"
-			disabled={busy}
-		/>
-		{#if busy}
-			<button type="button" onclick={stop}>Stop</button>
-		{:else}
-			<button type="button" onclick={send} disabled={!draft.trim()}>Ask</button>
-		{/if}
-	</div>
 </div>
 
 <style>
+	/* Bottom-right is the only corner nothing else claims: the left column is
+	   the toolbar, search bar and avoid chips top to bottom; top-right is the
+	   loop/alternates cards and MapLibre's own zoom stack; bottom-left is the
+	   basemap switch and cycle-route toggle; bottom-centre is the hint/error
+	   banner. z-index 8 sits above the toolbar tier (5-6) and below the
+	   context menu and preset popover (10) and the save dialog (20). */
 	.assistant {
+		position: absolute;
+		z-index: 8;
 		display: flex;
 		flex-direction: column;
+	}
+	/* Collapsed by default. There is no backdrop-filter or translucent card
+	   anywhere else in this codebase - every other card is opaque #fff - so
+	   this is a deliberate new pattern, not an extension of one, and it needs
+	   an opaque fallback for a browser that does not support the filter:
+	   unreadable text over a busy map is the failure mode otherwise. */
+	.assistant-pill {
+		font: inherit;
+		font-size: 0.85rem;
+		padding: 0.5rem 1rem;
+		border: 1px solid #ddd;
+		border-radius: 999px;
+		background: #fdf6e3e6;
+		backdrop-filter: blur(8px);
+		box-shadow: 0 8px 30px #0003;
+		color: #073642;
+		cursor: pointer;
+	}
+	@supports not (backdrop-filter: blur(1px)) {
+		.assistant-pill {
+			background: #fdf6e3;
+		}
+	}
+	.assistant:not(.collapsed) {
+		width: min(22rem, 90vw);
+		max-height: min(60%, 26rem);
 		gap: 0.4rem;
+		padding: 0.5rem 0.6rem 0.6rem;
+		border: 1px solid #ddd;
+		border-radius: 8px;
+		background: #fdf6e3e6;
+		backdrop-filter: blur(8px);
+		box-shadow: 0 8px 30px #0003;
+		overflow: hidden;
+	}
+	@supports not (backdrop-filter: blur(1px)) {
+		.assistant:not(.collapsed) {
+			background: #fdf6e3;
+		}
+	}
+	/* No responsive breakpoint exists on any other map overlay in this
+	   codebase - they are all fixed pixel offsets - so this is the first.
+	   !important overrides the inline left/top a drag may have set: a
+	   position dragged into place on a desktop must not leak onto a phone. */
+	/* Full width on a phone, because a 22rem card floating in a 380px
+	   viewport is neither floating nor a card. Dragging is meaningless at
+	   this size, so the saved position is overridden rather than honoured.
+
+	   The bottom offset clears the map's own control row - the basemap
+	   switch and the cycle and heatmap toggles all sit at bottom: 28px and
+	   stand about 30px tall. At bottom: 10px the pill lay straight across
+	   all three, which only became visible once the heatmap overlay and
+	   this card were in one tree: each was built against a map the other
+	   had not touched yet. */
+	@media (max-width: 760px) {
+		.assistant {
+			left: 10px !important;
+			right: 10px !important;
+			top: auto !important;
+			bottom: 68px !important;
+			width: auto !important;
+		}
 	}
 	.assistant-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.4rem;
 		font-size: 0.8rem;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 		color: #93a1a1;
+		cursor: grab;
+		touch-action: none;
+		user-select: none;
+	}
+	.assistant-head:active {
+		cursor: grabbing;
+	}
+	.assistant-close {
+		border: none;
+		background: transparent;
+		padding: 0.1rem 0.2rem;
+		font-size: 0.9rem;
+		line-height: 1;
+		color: #93a1a1;
+		cursor: pointer;
 	}
 	.assistant-log {
-		height: 150px;
+		flex: 1;
+		min-height: 0;
 		overflow-y: auto;
 		display: flex;
 		flex-direction: column;

@@ -1297,6 +1297,61 @@
 		const min = Math.round((s % 3600) / 60);
 		return h ? `${h} h ${min.toString().padStart(2, '0')} min` : `${min} min`;
 	}
+
+	// The toolbar's own top offset (10px) and the search bar's (52px) below
+	// it assumed a single-row toolbar. The toolbar grows buttons as a route
+	// is planned and saved (Save, GPX, FIT, the route name, Wahoo) and wraps
+	// onto a second row on anything narrower than a wide desktop - at which
+	// point a fixed 52px sits inside the wrapped row rather than below it,
+	// and the search bar renders on top of it. Measuring the real rendered
+	// height keeps the stack (toolbar -> search bar -> avoid chips) in flow
+	// regardless of how many rows the toolbar wraps to. Defaults match the
+	// old fixed offsets, so the first paint looks the same until measured.
+	let toolbarEl = $state<HTMLDivElement | undefined>();
+	let searchBarEl = $state<HTMLDivElement | undefined>();
+	let toolbarHeight = $state(32);
+	let searchBarHeight = $state(34);
+	const STACK_TOP = 10;
+	const STACK_GAP = 10;
+	// Wrapped in its own function rather than inlined into the $derived
+	// below: TypeScript narrows `config` to its initializer's type (`null`)
+	// at the top level of the component's setup code, so `config?.search_enabled`
+	// written directly there type-errors as a property access on `never`. A
+	// function body is checked in its own scope and does not inherit that.
+	function isSearchEnabled(): boolean {
+		return config?.search_enabled ?? false;
+	}
+	const searchBarTop = $derived(STACK_TOP + toolbarHeight + STACK_GAP);
+	const searchEnabled = $derived(isSearchEnabled());
+	const avoidsTop = $derived(
+		searchEnabled ? searchBarTop + searchBarHeight + STACK_GAP : searchBarTop
+	);
+
+	// $effect, not onMount: the search bar is conditional on config (loaded
+	// asynchronously), so searchBarEl does not exist on the very first
+	// render. An effect re-subscribes whenever the bound element itself
+	// changes, including from undefined to mounted.
+	$effect(() => {
+		if (toolbarEl) {
+			const observer = new ResizeObserver((entries) => {
+				const height = entries[0]?.contentRect.height;
+				if (height) toolbarHeight = height;
+			});
+			observer.observe(toolbarEl);
+			return () => observer.disconnect();
+		}
+	});
+
+	$effect(() => {
+		if (searchBarEl) {
+			const observer = new ResizeObserver((entries) => {
+				const height = entries[0]?.contentRect.height;
+				if (height) searchBarHeight = height;
+			});
+			observer.observe(searchBarEl);
+			return () => observer.disconnect();
+		}
+	});
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -1347,7 +1402,7 @@
 			/>
 		{/if}
 		{#if config?.search_enabled}
-			<div class="search-bar">
+			<div class="search-bar" bind:this={searchBarEl} style="top: {searchBarTop}px">
 				<PlaceSearch near={mapCentre} onPick={pickPlace} />
 			</div>
 		{/if}
@@ -1377,7 +1432,27 @@
 				onDismiss={dismissAlternates}
 			/>
 		{/if}
-		<div class="toolbar">
+		<!-- One call site, deliberately. Rendering this from two branches of
+		     one conditional made Svelte treat it as two components, so `route`
+		     going from null to non-null - accepting a proposal, drawing a
+		     route, loading a saved one - destroyed the panel and mounted an
+		     empty one, taking the whole conversation with it. As a floating
+		     overlay it no longer needs to branch on `route` at all: it lives
+		     in .map-area alongside the other overlays, not in the docked
+		     panel, so it renders whenever the assistant is configured. -->
+		{#if config?.assistant_enabled}
+			<AssistantPanel
+				{waypoints}
+				centre={mapCentre}
+				{preset}
+				costingOptions={customCostingOptions}
+				{proposal}
+				onProposal={offerProposal}
+				onAccept={applyProposal}
+				onDiscard={dismissProposal}
+			/>
+		{/if}
+		<div class="toolbar" bind:this={toolbarEl}>
 			<div class="preset-anchor">
 				<PresetSelector
 					{preset}
@@ -1460,7 +1535,7 @@
 			{/if}
 		</div>
 		{#if avoids.length > 0}
-			<div class="avoids" role="group" aria-label="Avoided roads">
+			<div class="avoids" role="group" aria-label="Avoided roads" style="top: {avoidsTop}px">
 				{#each avoids as avoid, i (i)}
 					<span class="avoid-chip" title={`Near ${avoid.lat.toFixed(4)}, ${avoid.lon.toFixed(4)}`}>
 						Avoid {i + 1}
@@ -1540,89 +1615,67 @@
 		{/if}
 	</div>
 
-	{#if route || config?.assistant_enabled}
+	{#if route}
 		<div class="panel">
-			{#if route}
-				<div class="stats">
-					<span><strong>{formatDistance(route.distance_m)}</strong></span>
-					<span title={route.ride_time.length ? 'Estimated for your rider profile' : undefined}>
-						{formatDuration(
-							route.ride_time.length
-								? route.ride_time[route.ride_time.length - 1].time_s
-								: route.duration_s
-						)}
-					</span>
-					{#if route.ride_time.length}
-						<a class="ride-time-link" href="/settings">rider profile</a>
-					{/if}
-					<span>↗ {Math.round(route.ascent_m)} m</span>
-					<span>↘ {Math.round(route.descent_m)} m</span>
-				</div>
-				{#if route.surface && route.surface.total_m > 0}
-					<SurfaceBar surface={route.surface} />
+			<div class="stats">
+				<span><strong>{formatDistance(route.distance_m)}</strong></span>
+				<span title={route.ride_time.length ? 'Estimated for your rider profile' : undefined}>
+					{formatDuration(
+						route.ride_time.length
+							? route.ride_time[route.ride_time.length - 1].time_s
+							: route.duration_s
+					)}
+				</span>
+				{#if route.ride_time.length}
+					<a class="ride-time-link" href="/settings">rider profile</a>
 				{/if}
+				<span>↗ {Math.round(route.ascent_m)} m</span>
+				<span>↘ {Math.round(route.descent_m)} m</span>
+			</div>
+			{#if route.surface && route.surface.total_m > 0}
+				<SurfaceBar surface={route.surface} />
 			{/if}
 			<div class="panel-body">
-				{#if route}
-					<ElevationProfile
-						elevation={route.elevation}
-						onHover={handleElevationHover}
-						{hoveredClimb}
+				<ElevationProfile
+					elevation={route.elevation}
+					onHover={handleElevationHover}
+					{hoveredClimb}
+				/>
+				<WaypointList
+					{waypoints}
+					searchEnabled={config?.search_enabled ?? false}
+					hoveredIndex={hoveredWaypointIndex}
+					onHover={(i) => (hoveredWaypointIndex = i)}
+					onReorder={reorderWaypoint}
+					onRemove={removeWaypoint}
+				/>
+				{#if route.climbs.length > 0}
+					<ClimbsList
+						climbs={route.climbs}
+						hoveredIndex={hoveredClimbIndex}
+						onHover={(i) => (hoveredClimbIndex = i)}
 					/>
-					<WaypointList
-						{waypoints}
-						searchEnabled={config?.search_enabled ?? false}
-						hoveredIndex={hoveredWaypointIndex}
-						onHover={(i) => (hoveredWaypointIndex = i)}
-						onReorder={reorderWaypoint}
-						onRemove={removeWaypoint}
-					/>
-					{#if route.climbs.length > 0}
-						<ClimbsList
-							climbs={route.climbs}
-							hoveredIndex={hoveredClimbIndex}
-							onHover={(i) => (hoveredClimbIndex = i)}
-						/>
-					{/if}
-					{#if config?.search_enabled}
-						<PoiPanel
-							{pois}
-							truncated={poisTruncated}
-							loading={poisLoading}
-							selected={poiGroups}
-							hoveredId={hoveredPoiId}
-							onToggleGroup={togglePoiGroup}
-							onHover={(id) => (hoveredPoiId = id)}
-						/>
-					{/if}
-					{#if config?.weather_enabled}
-						<WeatherPanel
-							startTime={weatherStartTime}
-							onStartTimeChange={(value) => (weatherStartTime = value)}
-							loading={windLoading}
-							error={windError}
-							segments={windSegments}
-							truncated={windTruncated}
-							onShowWind={showWind}
-						/>
-					{/if}
 				{/if}
-				<!-- One call site, deliberately. Rendering this from two
-				     branches of the same conditional made Svelte treat it as
-				     two components, so `route` going from null to non-null -
-				     accepting a proposal, drawing a route, loading a saved one -
-				     destroyed the panel and mounted an empty one, taking the
-				     whole conversation with it. -->
-				{#if config?.assistant_enabled}
-					<AssistantPanel
-						{waypoints}
-						centre={mapCentre}
-						{preset}
-						costingOptions={customCostingOptions}
-						{proposal}
-						onProposal={offerProposal}
-						onAccept={applyProposal}
-						onDiscard={dismissProposal}
+				{#if config?.search_enabled}
+					<PoiPanel
+						{pois}
+						truncated={poisTruncated}
+						loading={poisLoading}
+						selected={poiGroups}
+						hoveredId={hoveredPoiId}
+						onToggleGroup={togglePoiGroup}
+						onHover={(id) => (hoveredPoiId = id)}
+					/>
+				{/if}
+				{#if config?.weather_enabled}
+					<WeatherPanel
+						startTime={weatherStartTime}
+						onStartTimeChange={(value) => (weatherStartTime = value)}
+						loading={windLoading}
+						error={windError}
+						segments={windSegments}
+						truncated={windTruncated}
+						onShowWind={showWind}
 					/>
 				{/if}
 			</div>
@@ -1648,10 +1701,14 @@
 	}
 	/* Its own row below the toolbar rather than centred beside it: the
 	   toolbar grows as buttons appear (Save, GPX, FIT, Wahoo, the route
-	   name), so anything sharing that line eventually collides with it. */
+	   name), so anything sharing that line eventually collides with it.
+	   `top` is set inline from a measured toolbar height (see searchBarTop
+	   in the script), not a fixed offset: a fixed 52px assumed one row, and
+	   the toolbar wraps to two or three on anything narrower than a wide
+	   desktop once a route is saved, which used to put this bar on top of
+	   the wrapped row instead of below it. */
 	.search-bar {
 		position: absolute;
-		top: 52px;
 		left: 10px;
 		z-index: 6;
 	}
@@ -1709,11 +1766,12 @@
 		color: #073642;
 		box-shadow: 0 1px 4px #0002;
 	}
-	/* Below the toolbar and the search bar (which shares its top offset when
-	   search is enabled), so the two rows never overlap. */
+	/* Below the toolbar, and below the search bar too when it is enabled -
+	   `top` is set inline from avoidsTop (see the script), which stacks on
+	   the same measured heights as the search bar rather than a fixed
+	   offset, for the same reason. */
 	.avoids {
 		position: absolute;
-		top: 96px;
 		left: 10px;
 		display: flex;
 		flex-wrap: wrap;
@@ -1933,7 +1991,6 @@
 	.panel-body :global(.pois),
 	.panel-body :global(.climbs),
 	.panel-body :global(.weather),
-	.panel-body :global(.assistant),
 	.panel-body :global(.waypoints) {
 		flex: 0 0 21rem;
 		min-width: 0;
@@ -1946,7 +2003,6 @@
 		.panel-body :global(.pois),
 		.panel-body :global(.climbs),
 		.panel-body :global(.weather),
-		.panel-body :global(.assistant),
 		.panel-body :global(.waypoints) {
 			flex: none;
 			width: 100%;

@@ -106,4 +106,24 @@ test.describe('drag the route line to insert a via', () => {
 		// And the ghost point the drag draws is cleaned up rather than stranded.
 		await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeEnabled();
 	});
+
+	test('dropping on the floating assistant card still inserts a via', async ({ page }) => {
+		// A large floating overlay - collapsed to a pill by default, sitting
+		// bottom-right over the canvas - makes this failure mode far likelier
+		// than a small button ever did.
+		await page.route('**/api/config', async (route) => {
+			const response = await route.fetch();
+			await route.fulfill({ json: { ...(await response.json()), assistant_enabled: true } });
+		});
+		await page.goto('/');
+		const { markers, grab } = await planAndGrab(page);
+
+		const pill = page.getByRole('button', { name: 'Ask for a route' });
+		await expect(pill).toBeVisible();
+		const pillBox = (await pill.boundingBox())!;
+		await dragFromTo(page, grab, [pillBox.x + pillBox.width / 2, pillBox.y + pillBox.height / 2]);
+
+		await expect(markers).toHaveCount(3, { timeout: 30_000 });
+		await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeEnabled();
+	});
 });
