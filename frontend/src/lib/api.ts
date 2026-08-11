@@ -353,6 +353,33 @@ export interface RouteQuery {
 	order?: 'asc' | 'desc';
 }
 
+/** A ride that happened. Mirrors backend/app/schemas.py ActivitySummary. */
+export interface ActivitySummary {
+	id: string;
+	/** Null when the file carried no usable timestamps - the list falls back
+	 * to created_at for ordering rather than hiding the ride. */
+	started_at: string | null;
+	name: string;
+	elapsed_time_s: number | null;
+	moving_time_s: number | null;
+	distance_m: number;
+	ascent_m: number;
+	descent_m: number;
+	source: string;
+	created_at: string;
+}
+
+export interface ActivityDetail extends ActivitySummary {
+	/** polyline6, the same encoding route legs use. */
+	shape: string;
+	elevation: ElevationPoint[];
+}
+
+export interface ActivityQuery {
+	year?: number;
+	source?: string;
+}
+
 export const routes = {
 	list: (query: RouteQuery = {}) => {
 		const params = new URLSearchParams();
@@ -381,6 +408,24 @@ export const routes = {
 	fitUrl: (id: string) => `/api/routes/${id}/export.fit`,
 	share: (id: string) => request<SavedRoute>(`/api/routes/${id}/share`, { method: 'POST' }),
 	revokeShare: (id: string) => request<SavedRoute>(`/api/routes/${id}/share`, { method: 'DELETE' })
+};
+
+export const activities = {
+	list: (query: ActivityQuery = {}) => {
+		const params = new URLSearchParams();
+		for (const [key, value] of Object.entries(query)) {
+			if (value !== undefined && value !== '') params.set(key, String(value));
+		}
+		const qs = params.toString();
+		return request<ActivitySummary[]>(`/api/activities${qs ? `?${qs}` : ''}`);
+	},
+	get: (id: string) => request<ActivityDetail>(`/api/activities/${id}`),
+	remove: (id: string) => request<void>(`/api/activities/${id}`, { method: 'DELETE' }),
+	importFile: (file: File) => {
+		const form = new FormData();
+		form.append('file', file);
+		return request<ActivityDetail>('/api/activities/import', { method: 'POST', body: form });
+	}
 };
 
 export const shared = {

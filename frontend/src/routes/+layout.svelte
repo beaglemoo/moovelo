@@ -91,6 +91,7 @@
 			<span class="brand">Moovelo</span>
 			<a href="/" class:active={page.url.pathname === '/'}>Planner</a>
 			<a href="/library" class:active={page.url.pathname === '/library'}>Library</a>
+			<a href="/activities" class:active={page.url.pathname === '/activities'}>Activities</a>
 			<a href="/settings" class:active={page.url.pathname === '/settings'}>Settings</a>
 			{#if user.is_admin}
 				<a href="/admin" class:active={page.url.pathname === '/admin'}>Admin</a>
