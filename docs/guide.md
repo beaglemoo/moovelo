@@ -432,6 +432,41 @@ It is your data only. Nobody else's rides ever appear on it, and it is
 off until you import at least one ride - there is nothing to draw before
 then, so the button stays hidden rather than sitting there doing nothing.
 
+### Cycle-network coverage
+
+The Activities page reports how much of the signed cycle network you have
+actually ridden, split by tier: national (NCN), regional, local and
+international routes each get their own percentage. The heatmap above
+shows you *where* you have been; this puts a number on it.
+
+**What the percentage means.** The area is a box around your own rides,
+not the whole country. The denominator is every signed way inside that
+box; the numerator is the ones your rides have been matched onto. Rides
+are matched to real OSM ways, not measured by proximity, so riding the
+carriageway does not credit you for the cycleway running alongside it.
+
+A way carrying two routes of the same tier counts once. A way carrying an
+NCN route *and* a local one counts towards both, because it genuinely is
+part of both networks - the tiers are reported separately and never added
+together, so nothing is double counted.
+
+Coverage needs two things that ordinary route planning does not:
+
+- **A place index that includes route members.** If you built your index
+  before this feature existed, coverage says so rather than reporting 0%,
+  which would read as "you have ridden nothing". Re-run the indexer - see
+  [docs/data.md](data.md).
+- **Your rides matched to ways.** New imports are matched as they arrive.
+  Rides imported earlier are not, so the card offers a **Match older rides**
+  button that works through them in the background. It is a button rather
+  than something that happens on its own, because matching hundreds of
+  rides is minutes of routing and should not start because you opened a
+  page.
+
+A ride that cannot be matched - it left your map extract, or followed
+paths the routing graph does not have - is kept exactly as it was. It just
+does not contribute to coverage.
+
 ## Export
 
 Every saved route (and the planner toolbar, once a route is saved) offers
