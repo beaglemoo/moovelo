@@ -441,12 +441,22 @@
 	   codebase - they are all fixed pixel offsets - so this is the first.
 	   !important overrides the inline left/top a drag may have set: a
 	   position dragged into place on a desktop must not leak onto a phone. */
+	/* Full width on a phone, because a 22rem card floating in a 380px
+	   viewport is neither floating nor a card. Dragging is meaningless at
+	   this size, so the saved position is overridden rather than honoured.
+
+	   The bottom offset clears the map's own control row - the basemap
+	   switch and the cycle and heatmap toggles all sit at bottom: 28px and
+	   stand about 30px tall. At bottom: 10px the pill lay straight across
+	   all three, which only became visible once the heatmap overlay and
+	   this card were in one tree: each was built against a map the other
+	   had not touched yet. */
 	@media (max-width: 760px) {
 		.assistant {
 			left: 10px !important;
 			right: 10px !important;
 			top: auto !important;
-			bottom: 10px !important;
+			bottom: 68px !important;
 			width: auto !important;
 		}
 	}
