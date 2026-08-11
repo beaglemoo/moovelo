@@ -23,7 +23,7 @@ flowchart LR
     end
 
     UI -->|/api/*| BE
-    BE -->|/route, /height, /trace_attributes, /isochrone, /route (map_snap)| VH
+    BE -->|/route, /trace_route, /trace_attributes, /height, /isochrone| VH
     BE --> PG
     IDX -->|reads the extract Valhalla downloaded, read-only| VH
     IDX -->|publishes places/pois/cycle_ways/osm_ways| PG
