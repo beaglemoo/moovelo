@@ -238,6 +238,54 @@ some off-topic prose in a chat box, at a bounded cost, on an install only
 your own users can reach. If that still bothers you, point `LLM_BASE_URL`
 at a local model and it costs nothing at all.
 
+## Why is there no Strava sync?
+
+Because Strava's own terms do not permit what this feature is for.
+
+Their **API Policy 6.2** says you "may not retain Strava Data in your
+cache for longer than seven (7) days," and states explicitly that such a
+cache is not a Persistent Index. There is no exception for the
+authenticated user's own data. A personal heatmap is a persistent index
+of years of activity geometry - precisely what that clause forbids.
+
+**API Policy 5.3** goes further: it prohibits using Strava data "in
+connection with the development, training, evaluation, or operation of
+any AI Application," and extends that to data "derived from, aggregated
+from, anonymized from, or generated using Strava Data." Moovelo ships an
+optional route assistant, so that clause is at minimum arguable even
+though the assistant never sees your library.
+
+Their **API Agreement 2.3** does allow showing your own data back to you,
+which is the one clause that would have helped. It is not enough on its
+own.
+
+So the OAuth path was dropped, and Moovelo reads the **bulk export**
+instead. That archive is your own data, handed to you by Strava under
+data-portability rules - not API data - so neither clause attaches to it.
+It also happens to be simpler: no registered application, no client
+secret, no Strava subscription, and nothing that expires.
+
+To get one: Strava web, Settings, My Account, "Download or Delete Your
+Account", then "Request your archive". It arrives by email as a zip.
+Upload that zip on the Activities page.
+
+What Moovelo does with it:
+
+- Reads `activities.csv` for the name and type of each ride, and uses
+  those names in preference to whatever the files call themselves.
+- **Keeps only rides.** Runs, swims and walks are skipped and the count
+  is reported rather than being dropped in silence. An activity whose
+  type is missing or in a language this does not recognise is imported
+  rather than lost.
+- Handles the mix of `.gpx`, `.fit`, `.tcx` and their gzipped forms that
+  a real export contains.
+- **Deduplicates on the Strava activity id**, so requesting a fresh
+  archive next year and uploading it again adds only the new rides.
+- Reports what failed, per file, instead of failing the whole import.
+
+Nothing leaves your network at any point. The archive is a file you
+already have.
+
 ## Can I use it without a Wahoo?
 
 Yes. Wahoo integration is entirely optional - leave `WAHOO_CLIENT_ID`/`WAHOO_CLIENT_SECRET`

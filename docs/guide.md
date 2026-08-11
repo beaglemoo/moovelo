@@ -391,6 +391,21 @@ A few details worth knowing:
   better record of the ride than a lookup would be.
 - The same 20 MB and 100,000-point limits apply as to route import.
 
+### Importing a Strava export
+
+Upload the zip Strava emails you when you request your archive, and every
+ride in it lands in one go - the whole thing is read on a worker, with a
+progress line rather than a spinner, because hundreds of files take
+minutes.
+
+Runs, swims and walks are skipped and counted. Re-uploading a later
+archive adds only the rides you did since, so keeping the history current
+costs nothing. A file that will not parse costs that one ride and says
+which, rather than failing the import.
+
+There is no Strava *sync*, and that is deliberate - see
+[the FAQ](faq.md#why-is-there-no-strava-sync) for the clause numbers.
+
 Moovelo can tell a *course* file from an *activity* file, because both
 formats say which they are - so a course exported from Moovelo and
 re-imported comes back as a route, not as a ride you never did.

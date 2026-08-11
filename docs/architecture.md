@@ -1068,6 +1068,7 @@ backend/app/
     ├── importer.py          # GPX/TCX/FIT parsing for uploaded files
     ├── import_routes.py     # map matching an imported track back onto the network
     ├── activities.py        # a parsed track into a stored ride (no matching, no backfill)
+    ├── activity_import.py   # Strava bulk-export zip: manifest, caps, background worker
     ├── places.py            # place search, reverse geocode, POIs along a route
     ├── climbs.py            # profile segmentation + HC/1-4 categorisation
     ├── geo.py               # shape concatenation and distance helpers
