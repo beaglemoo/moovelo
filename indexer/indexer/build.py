@@ -57,16 +57,23 @@ def build() -> int:
                 totals[key] += value
 
         totals["cycle_ways"] = db.assemble_cycle_routes(connection)
-        totals["osm_ways"] = db.assemble_road_ways(connection)
+        # Left absent rather than zero when roads were not indexed: the
+        # publish step writes NULL for a missing count, and NULL is what
+        # tells /api/coverage/roads to say "not indexed" instead of
+        # reporting a dishonest 0%.
+        if settings.index_roads:
+            totals["osm_ways"] = db.assemble_road_ways(connection)
         db.publish(connection, [e.name for e in extracts], totals)
 
     log.info(
-        "done in %.0fs: %d places, %d POIs, %d cycle routes, %d road ways",
+        "done in %.0fs: %d places, %d POIs, %d cycle routes, %s",
         time.monotonic() - started,
         totals["places"],
         totals["pois"],
         totals["cycle_ways"],
-        totals["osm_ways"],
+        f"{totals['osm_ways']} road ways"
+        if "osm_ways" in totals
+        else "road ways not indexed (INDEX_ROADS is off)",
     )
     return 0
 

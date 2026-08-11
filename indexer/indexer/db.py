@@ -402,8 +402,13 @@ def publish(
                 # existed: that NULL is exactly what tells
                 # /api/coverage/cycle-network and /api/coverage/roads a
                 # rebuild is needed rather than reporting a dishonest 0%.
+                #
+                # osm_ways is absent, and so NULL, whenever INDEX_ROADS was
+                # off - the same signal for the same reason. "Not indexed"
+                # and "indexed and you have ridden none of it" must not look
+                # alike.
                 counts["cycle_members"],
-                counts["osm_ways"],
+                counts.get("osm_ways"),
             ),
         )
     connection.commit()

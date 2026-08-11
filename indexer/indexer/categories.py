@@ -113,7 +113,7 @@ KEPT_POI_TAGS = (
 ROAD_HIGHWAY_EXCLUDE = ("construction", "motorway", "motorway_link", "proposed", "raceway")
 
 
-def filter_expressions() -> list[str]:
+def filter_expressions(include_roads: bool = True) -> list[str]:
     """The `osmium tags-filter` arguments, derived from the tables above.
 
     Places are looked for on nodes only: a town mapped as an administrative
@@ -123,9 +123,16 @@ def filter_expressions() -> list[str]:
     expressions = [f"n/{key}={','.join(sorted(values))}" for key, values in PLACE_TAGS.items()]
     expressions += [f"nw/{key}={','.join(sorted(values))}" for key, values in POI_TAGS.items()]
     expressions.append("r/route=bicycle")
-    # w/highway!=a,b,c means "ways with a highway tag whose value is not
-    # one of these" - everything ridable, in one expression.
-    expressions.append(f"w/highway!={','.join(sorted(ROAD_HIGHWAY_EXCLUDE))}")
+    if include_roads:
+        # w/highway!=a,b,c means "ways with a highway tag whose value is not
+        # one of these" - everything ridable, in one expression.
+        #
+        # This one line is where the cost of all-roads coverage is paid:
+        # measured on England it takes the filtered extract from 45 MB to
+        # 469 MB, and the run from 37 seconds to nearly eight minutes.
+        # Cycle-route member ways still arrive without it, as members of the
+        # r/route=bicycle relations above.
+        expressions.append(f"w/highway!={','.join(sorted(ROAD_HIGHWAY_EXCLUDE))}")
     return expressions
 
 
