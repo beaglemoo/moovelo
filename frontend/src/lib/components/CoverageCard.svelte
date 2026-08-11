@@ -3,7 +3,9 @@
 		coverage,
 		type CoverageBackfillStatus,
 		type CoverageResponse,
-		type NetworkCoverage
+		type HighwayCoverage,
+		type NetworkCoverage,
+		type RoadCoverageResponse
 	} from '$lib/api';
 	import { onDestroy } from 'svelte';
 
@@ -17,8 +19,31 @@
 	};
 	const NETWORK_ORDER = ['icn', 'ncn', 'rcn', 'lcn'];
 
-	let data: CoverageResponse | null = $state(null);
-	let loadError: string | null = $state(null);
+	// A friendlier label for the highway classes a rider is most likely to
+	// see; anything else falls back to the raw OSM tag, which is still a
+	// legible word. There is no fixed, small set of classes the way
+	// icn/ncn/rcn/lcn is, so this is deliberately not exhaustive.
+	const HIGHWAY_LABELS: Record<string, string> = {
+		primary: 'Primary roads',
+		secondary: 'Secondary roads',
+		tertiary: 'Tertiary roads',
+		trunk: 'Trunk roads',
+		unclassified: 'Unclassified roads',
+		residential: 'Residential streets',
+		living_street: 'Living streets',
+		service: 'Service roads',
+		cycleway: 'Cycleways',
+		track: 'Tracks',
+		path: 'Paths',
+		footway: 'Footways',
+		bridleway: 'Bridleways',
+		pedestrian: 'Pedestrian streets'
+	};
+
+	let networkData: CoverageResponse | null = $state(null);
+	let networkError: string | null = $state(null);
+	let roadData: RoadCoverageResponse | null = $state(null);
+	let roadError: string | null = $state(null);
 	let job: CoverageBackfillStatus | null = $state(null);
 	let jobError: string | null = $state(null);
 	let pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -29,9 +54,14 @@
 
 	async function load() {
 		try {
-			data = await coverage.cycleNetwork();
+			networkData = await coverage.cycleNetwork();
 		} catch (err) {
-			loadError = err instanceof Error ? err.message : 'Could not load coverage';
+			networkError = err instanceof Error ? err.message : 'Could not load coverage';
+		}
+		try {
+			roadData = await coverage.roads();
+		} catch (err) {
+			roadError = err instanceof Error ? err.message : 'Could not load road coverage';
 		}
 	}
 	load();
@@ -59,44 +89,97 @@
 			if (job.status === 'queued' || job.status === 'running') {
 				pollJob();
 			} else {
-				// A finished backfill is exactly what changed the numbers below.
+				// A finished backfill is exactly what changed the numbers below,
+				// for both denominators - reload them both.
 				void load();
 			}
 		}, 1500);
 	}
 
-	function sortedRows(current: CoverageResponse | null): NetworkCoverage[] {
+	function sortedNetworkRows(current: CoverageResponse | null): NetworkCoverage[] {
 		if (!current) return [];
 		return current.networks
 			.filter((row) => row.total_m > 0)
 			.sort((a, b) => NETWORK_ORDER.indexOf(a.network) - NETWORK_ORDER.indexOf(b.network));
 	}
-	const rows: NetworkCoverage[] = $derived(sortedRows(data));
+	const networkRows: NetworkCoverage[] = $derived(sortedNetworkRows(networkData));
+
+	function sortedHighwayRows(current: RoadCoverageResponse | null): HighwayCoverage[] {
+		if (!current) return [];
+		// Busiest classes first - there is no fixed, small ordering here the
+		// way icn/ncn/rcn/lcn has one, so distance ridden stands in.
+		return current.highways.filter((row) => row.total_m > 0).sort((a, b) => b.total_m - a.total_m);
+	}
+	const roadRows: HighwayCoverage[] = $derived(sortedHighwayRows(roadData));
+
+	function anyAvailable(
+		network: CoverageResponse | null,
+		road: RoadCoverageResponse | null
+	): boolean {
+		return Boolean(network?.available) || Boolean(road?.available);
+	}
+
+	// Rendered only once there is something to say - either section on its
+	// own, or nothing at all before the first response lands.
+	const showCard = $derived(Boolean(networkError || roadError || networkData || roadData));
+	// One backfill button for both sections: matching a ride's ways
+	// improves the numerator for both denominators at once.
+	const showBackfill = $derived(anyAvailable(networkData, roadData));
 </script>
 
-{#if loadError}
-	<p class="error">{loadError}</p>
-{:else if data && !data.available}
-	<div class="card muted">
-		<p>{data.reason}</p>
-	</div>
-{:else if data && rows.length > 0}
+{#if showCard}
 	<div class="card">
-		<div class="rows">
-			{#each rows as row (row.network)}
-				<div class="row">
-					<span class="label">{NETWORK_LABELS[row.network] ?? row.network}</span>
-					<span class="pct">{Math.round((row.ridden_m / row.total_m) * 100)}%</span>
+		{#if networkError}
+			<p class="error">{networkError}</p>
+		{:else if networkData && !networkData.available}
+			<section class="muted">
+				<h4>Cycle network</h4>
+				<p>{networkData.reason}</p>
+			</section>
+		{:else if networkData && networkRows.length > 0}
+			<section>
+				<h4>Cycle network</h4>
+				<div class="rows">
+					{#each networkRows as row (row.network)}
+						<div class="row">
+							<span class="label">{NETWORK_LABELS[row.network] ?? row.network}</span>
+							<span class="pct">{Math.round((row.ridden_m / row.total_m) * 100)}%</span>
+						</div>
+					{/each}
 				</div>
-			{/each}
-		</div>
-		<button type="button" onclick={runBackfill} disabled={job?.status === 'running'}>
-			{job?.status === 'running' || job?.status === 'queued'
-				? `Matching… ${job.matched + job.unmatched} of ${job.total || '?'}`
-				: 'Match older rides'}
-		</button>
-		{#if jobError}
-			<p class="error">{jobError}</p>
+			</section>
+		{/if}
+
+		{#if roadError}
+			<p class="error">{roadError}</p>
+		{:else if roadData && !roadData.available}
+			<section class="muted">
+				<h4>All roads</h4>
+				<p>{roadData.reason}</p>
+			</section>
+		{:else if roadData && roadRows.length > 0}
+			<section>
+				<h4>All roads</h4>
+				<div class="rows">
+					{#each roadRows as row (row.highway)}
+						<div class="row">
+							<span class="label">{HIGHWAY_LABELS[row.highway] ?? row.highway}</span>
+							<span class="pct">{Math.round((row.ridden_m / row.total_m) * 100)}%</span>
+						</div>
+					{/each}
+				</div>
+			</section>
+		{/if}
+
+		{#if showBackfill}
+			<button type="button" onclick={runBackfill} disabled={job?.status === 'running'}>
+				{job?.status === 'running' || job?.status === 'queued'
+					? `Matching… ${job.matched + job.unmatched} of ${job.total || '?'}`
+					: 'Match older rides'}
+			</button>
+			{#if jobError}
+				<p class="error">{jobError}</p>
+			{/if}
 		{/if}
 	</div>
 {/if}
@@ -110,14 +193,27 @@
 		margin: 0.8rem 0;
 		font-size: 0.9rem;
 	}
-	.card.muted {
+	section {
+		margin-bottom: 0.6rem;
+	}
+	section.muted {
 		color: #657b83;
+	}
+	section:last-of-type {
+		margin-bottom: 0.5rem;
+	}
+	h4 {
+		margin: 0 0 0.3rem;
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: #657b83;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
 	}
 	.rows {
 		display: flex;
 		flex-direction: column;
 		gap: 0.2rem;
-		margin-bottom: 0.5rem;
 	}
 	.row {
 		display: flex;

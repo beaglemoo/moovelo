@@ -435,6 +435,24 @@ export interface CoverageBackfillStatus {
 	error: string | null;
 }
 
+/** Ridden vs total metres of one OSM `highway` class (residential, footway,
+ * track, ...) within a bbox. Mirrors backend/app/schemas.py HighwayCoverage. */
+export interface HighwayCoverage {
+	highway: string;
+	ridden_m: number;
+	total_m: number;
+}
+
+/** How much of every bikeable road a rider has ridden - the wider
+ * denominator alongside CoverageResponse's signed-network one. Mirrors
+ * backend/app/schemas.py RoadCoverageResponse. Same `available`/`reason`
+ * contract as CoverageResponse. */
+export interface RoadCoverageResponse {
+	available: boolean;
+	reason: string | null;
+	highways: HighwayCoverage[];
+}
+
 export const routes = {
 	list: (query: RouteQuery = {}) => {
 		const params = new URLSearchParams();
@@ -509,8 +527,12 @@ export const coverage = {
 	 * activities are (services/coverage.py:default_bbox) - the /activities
 	 * card has no map to derive one from itself. */
 	cycleNetwork: () => request<CoverageResponse>('/api/coverage/cycle-network'),
+	/** Same no-bbox convention as cycleNetwork - the wider "every bikeable
+	 * road" denominator, alongside it on the same card. */
+	roads: () => request<RoadCoverageResponse>('/api/coverage/roads'),
 	/** Match every activity that has never been attempted - queued, not
-	 * inline, the same reasoning as importArchive above. */
+	 * inline, the same reasoning as importArchive above. Feeds both
+	 * cycleNetwork and roads: one matching pass improves both denominators. */
 	backfill: () => request<CoverageBackfillStatus>('/api/coverage/backfill', { method: 'POST' }),
 	backfillStatus: (id: string) => request<CoverageBackfillStatus>(`/api/coverage/backfill/${id}`)
 };
