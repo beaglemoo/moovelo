@@ -55,9 +55,10 @@ fresh database or `SIGNUPS_ENABLED=true`. It is not part of CI.
   (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`).
 - Keep commits atomic - one logical change per commit.
 - New behavior needs a test; bug fixes need a regression test.
-- External services (Valhalla, Wahoo, the weather provider) are mocked
-  in tests - never call them for real from the test suite. Mock fixtures
-  should be captured from real responses, not written from documentation.
+- External services (Valhalla, Wahoo, the weather provider, the LLM
+  endpoint) are mocked in tests - never call them for real from the test
+  suite. Mock fixtures should be captured from real responses, not
+  written from documentation.
 - Update the docs (`README.md`, `docs/`) when behavior or configuration
   changes.
 
@@ -80,9 +81,21 @@ design rests on. Place names from OpenStreetMap are untrusted input in
 prompts, never instructions. See the Route assistant section of
 `docs/architecture.md` before starting.
 
+Rides that actually happened (as opposed to routes that were planned)
+live in their own activity history: import from GPX/TCX/FIT or a Strava
+bulk-export zip, a personal heatmap built from your own traces, and
+coverage of the signed cycle network and (opt-in) every bikeable road,
+matched onto OpenStreetMap way ids. This is deliberately not a Strava
+*sync* - the OAuth path was dropped over Strava's API Policy 6.2/5.3, see
+`docs/faq.md#why-is-there-no-strava-sync` before proposing one. An
+activity is a record, not an intention: it has no preset and is never
+re-routed, and there is no update endpoint by design - keep that
+distinction if you touch `models.Activity` or `services/activities.py`.
+
 Permanently out of scope: social features (comments, likes, feeds),
-photos, live ride recording / GPS tracking, native mobile apps, and
-i18n. Anything that would make the app call out to a third-party
-service by default is also out - external integrations must be opt-in
-via configuration and off otherwise. Open an issue to discuss before
-building anything sizable.
+photos, live ride *recording* / GPS tracking (importing a file recorded
+elsewhere is in scope; turning Moovelo into a recording app is not),
+native mobile apps, and i18n. Anything that would make the app call out
+to a third-party service by default is also out - external integrations
+must be opt-in via configuration and off otherwise. Open an issue to
+discuss before building anything sizable.
