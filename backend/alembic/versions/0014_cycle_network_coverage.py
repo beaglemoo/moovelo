@@ -10,6 +10,7 @@ Create Date: 2026-08-11
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+from geoalchemy2 import Geometry
 from sqlalchemy.dialects import postgresql
 
 from alembic import op
@@ -21,13 +22,18 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # Published by the indexer, alongside places/pois/cycle_ways. Member-way
-    # *geometry* is deliberately not stored here - that was what made the
-    # cycle-network overlay expensive before the ST_LineMerge in
-    # assemble_cycle_routes, and coverage only ever needs a length to sum.
-    # The spatial filter a coverage query needs (which routes are "near you")
-    # is served by joining through cycle_ways.geom instead, which already
-    # carries a GIST index.
+    # Published by the indexer, alongside places/pois/cycle_ways.
+    #
+    # Members carry their own geometry, unlike CycleWay's merged shape. The
+    # ST_LineMerge in assemble_cycle_routes exists because unmerged parts
+    # resist simplification and made the overlay *tile* expensive; this
+    # table is never tiled, so that reasoning does not reach it - and
+    # without member geometry "coverage near you" cannot be asked at all.
+    # Filtering through cycle_ways.geom instead tests the envelope of an
+    # entire national route: measured on the England extract, a 12 km box
+    # around Tring pulled in 8,301 member ways totalling 1,921 km, against
+    # 125 km of network actually inside it. A 15x overstatement, because
+    # NCN 1's envelope covers most of the country.
     op.create_table(
         "cycle_way_members",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
@@ -38,6 +44,14 @@ def upgrade() -> None:
         sa.Column("relation_id", sa.BigInteger(), nullable=False),
         sa.Column("way_id", sa.BigInteger(), nullable=False),
         sa.Column("length_m", sa.Float(), nullable=False),
+        # The way's own shape, so a coverage bbox selects the ways actually
+        # in it. spatial_index=False with the index named below, matching
+        # Place, Poi and CycleWay.
+        sa.Column(
+            "geom",
+            Geometry(geometry_type="LINESTRING", srid=4326, spatial_index=False),
+            nullable=False,
+        ),
     )
     # Leads with relation_id, which is how the coverage query reaches this
     # table (joined from cycle_ways.id) - and doubles as the natural-key
@@ -51,6 +65,11 @@ def upgrade() -> None:
     # The other direction: matching an activity's ridden way ids back to the
     # routes they belong to.
     op.create_index("ix_cycle_way_members_way", "cycle_way_members", ["way_id"])
+    # What makes "the network near here" a bounding-box lookup rather than a
+    # scan of every member way in the country.
+    op.create_index(
+        "ix_cycle_way_members_geom", "cycle_way_members", ["geom"], postgresql_using="gist"
+    )
 
     # App-owned, unlike the table above: written by the backend as activities
     # are map-matched, not by the indexer. One row per way a rider has ever

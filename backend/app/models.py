@@ -355,13 +355,16 @@ class CycleWayMember(Base):
     """One OSM way belonging to one signed cycle route, with its own length.
 
     Published by the indexer alongside CycleWay, from the same member table
-    `assemble_cycle_routes` collapses into CycleWay.geom - but unlike that
-    table, member *geometry* is not carried through: the merge into one
-    MULTILINESTRING per relation is what makes the network overlay tile
-    affordable (see CycleWay's own history), and coverage only ever needs a
-    length to sum, never a shape to draw. The spatial filter a coverage
-    query needs ("routes near here") is served by joining through
-    CycleWay.geom instead, which already carries a GIST index.
+    `assemble_cycle_routes` collapses into CycleWay.geom - and unlike that
+    table, members keep their own shape. The merge into one MULTILINESTRING
+    per relation is what makes the network overlay *tile* affordable, and
+    this table is never tiled, so that constraint does not reach it.
+
+    It has to keep the geometry: filtering coverage through CycleWay.geom
+    instead tests the envelope of a whole national route. Measured on the
+    England extract, a 12 km box around Tring selected 8,301 member ways
+    totalling 1,921 km against the 125 km actually inside it, because NCN
+    1's envelope spans most of the country.
     """
 
     __tablename__ = "cycle_way_members"
@@ -370,10 +373,14 @@ class CycleWayMember(Base):
     relation_id: Mapped[int] = mapped_column(BigInteger)
     way_id: Mapped[int] = mapped_column(BigInteger)
     length_m: Mapped[float] = mapped_column(Float)
+    geom: Mapped[Any] = mapped_column(
+        Geometry(geometry_type="LINESTRING", srid=4326, spatial_index=False)
+    )
 
     __table_args__ = (
         Index("ix_cycle_way_members_relation_way", "relation_id", "way_id", unique=True),
         Index("ix_cycle_way_members_way", "way_id"),
+        Index("ix_cycle_way_members_geom", "geom", postgresql_using="gist"),
     )
 
 

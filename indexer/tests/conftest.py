@@ -63,10 +63,12 @@ CREATE TABLE cycle_way_members (
     id bigserial PRIMARY KEY,
     relation_id bigint NOT NULL,
     way_id bigint NOT NULL,
-    length_m double precision NOT NULL
+    length_m double precision NOT NULL,
+    geom geometry(LineString, 4326) NOT NULL
 );
 CREATE UNIQUE INDEX ix_cycle_way_members_relation_way
     ON cycle_way_members (relation_id, way_id);
+CREATE INDEX ix_cycle_way_members_geom ON cycle_way_members USING gist (geom);
 
 CREATE TABLE search_index_meta (
     id boolean PRIMARY KEY DEFAULT true CHECK (id),

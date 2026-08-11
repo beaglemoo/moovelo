@@ -59,12 +59,16 @@ def test_publish_populates_cycle_way_members_with_lengths(database_url: str) -> 
     with db.connect(database_url) as connection:
         _build(database_url, connection, _rows())
         rows = connection.execute(
-            "SELECT relation_id, way_id, length_m FROM cycle_way_members "
+            "SELECT relation_id, way_id, length_m, ST_AsText(geom) FROM cycle_way_members "
             "ORDER BY relation_id, way_id"
         ).fetchall()
 
     assert [(r[0], r[1]) for r in rows] == [(1, 100), (1, 101), (2, 100)]
-    assert all(length_m > 0 for _, _, length_m in rows)
+    assert all(length_m > 0 for _, _, length_m, _ in rows)
+    # The shape comes through too, not just the length. Without it a
+    # coverage bbox has to filter on the whole route's envelope, which
+    # measured 15x too generous on the England extract.
+    assert all(wkt and wkt.startswith("LINESTRING") for _, _, _, wkt in rows)
     # Way 100 is ridden as part of two different routes; both rows describe
     # the same physical way and must carry the same length.
     assert rows[0][2] == pytest.approx(rows[2][2])

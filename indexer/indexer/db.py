@@ -44,7 +44,7 @@ POI_COLUMNS = ("osm_type", "osm_id", "name", "name_norm", "category", "osm_tags"
 CYCLE_COLUMNS = ("id", "ref", "name", "network", "operator", "geom")
 # For cycle-network coverage (Phase 10): which OSM ways make up each route,
 # and how long each one is - deliberately no geometry, see assemble_cycle_routes.
-CYCLE_MEMBER_COLUMNS = ("relation_id", "way_id", "length_m")
+CYCLE_MEMBER_COLUMNS = ("relation_id", "way_id", "length_m", "geom")
 
 COLUMNS: dict[str, tuple[str, ...]] = {
     "places": PLACE_COLUMNS,
@@ -218,10 +218,14 @@ def assemble_cycle_routes(connection: psycopg.Connection[Any]) -> int:
     50 kB merged first. 98 ms for all 5,545 routes, once, here rather than
     in every tile request.
 
-    cycle_way_members_stage carries no geometry of its own - `way_owners` in
-    extract.py already guarantees at most one row per (relation_id, way_id),
-    so this is a plain per-row length, not an aggregate - and it is the last
-    thing read from the raw member table before it is dropped.
+    Members keep their own geometry as well as their length. The merge is
+    what makes the overlay tile cheap, and members are never tiled - but a
+    coverage query cannot ask "the network near here" without member
+    shapes, because a relation's own envelope spans the whole route. This
+    is the last thing read from the raw member table before it is dropped.
+    `way_owners` in extract.py already guarantees at most one row per
+    (relation_id, way_id), so the length is a plain per-row value rather
+    than an aggregate.
     """
     with connection.cursor() as cursor:
         cursor.execute(
@@ -236,8 +240,8 @@ def assemble_cycle_routes(connection: psycopg.Connection[Any]) -> int:
         inserted = cursor.rowcount
         cursor.execute(
             sql.SQL("""
-                INSERT INTO {} (relation_id, way_id, length_m)
-                SELECT relation_id, way_id, ST_Length(geography(geom))
+                INSERT INTO {} (relation_id, way_id, length_m, geom)
+                SELECT relation_id, way_id, ST_Length(geography(geom)), geom
                 FROM {}
             """).format(
                 sql.Identifier(_stage("cycle_way_members")), sql.Identifier(RAW_MEMBER_TABLE)
