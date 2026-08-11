@@ -368,6 +368,33 @@ An imported route's waypoints are just its start and end - editing it in
 the planner re-routes between them, which throws away the imported track
 and its cues. Moovelo asks before letting that happen.
 
+## Activities
+
+Rides you actually did live under **Activities**, separately from the
+routes you planned. Import a GPX, TCX or FIT file straight off a head
+unit and it lands there, with its date, distance, moving time and ascent.
+
+The distinction is deliberate. A route is a plan: it has a preset, it can
+be re-routed, it can be pushed to your head unit. An activity is a
+record. It is stored exactly as it was recorded - no map matching, no
+elevation backfill, no re-routing - because a picture of where you rode
+should show where you rode, wandering GPS and all. There is no edit
+button for the same reason.
+
+A few details worth knowing:
+
+- **Moving time** excludes standing still and excludes gaps left by a
+  paused recording, so a long cafe stop does not inflate it.
+- **A file with no timestamps** still imports. It is dated by when you
+  imported it and labelled as such, rather than showing a blank date.
+- **Elevation** comes from the file itself. Your own barometer is a
+  better record of the ride than a lookup would be.
+- The same 20 MB and 100,000-point limits apply as to route import.
+
+Moovelo can tell a *course* file from an *activity* file, because both
+formats say which they are - so a course exported from Moovelo and
+re-imported comes back as a route, not as a ride you never did.
+
 ## Export
 
 Every saved route (and the planner toolbar, once a route is saved) offers

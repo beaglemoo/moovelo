@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="moovelo-e2e" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata><name>E2E ride fixture</name></metadata>
+  <trk><name>E2E ride fixture</name><trkseg>
+      <trkpt lat="51.795547" lon="-0.657902"><ele>134.0</ele><time>2026-05-03T08:00:00Z</time></trkpt>
+      <trkpt lat="51.795276" lon="-0.658464"><ele>131.0</ele><time>2026-05-03T08:00:10Z</time></trkpt>
+      <trkpt lat="51.796390" lon="-0.659237"><ele>132.0</ele><time>2026-05-03T08:00:20Z</time></trkpt>
+      <trkpt lat="51.799075" lon="-0.658270"><ele>129.0</ele><time>2026-05-03T08:00:30Z</time></trkpt>
+      <trkpt lat="51.800947" lon="-0.657690"><ele>126.0</ele><time>2026-05-03T08:00:40Z</time></trkpt>
+      <trkpt lat="51.804241" lon="-0.657294"><ele>123.0</ele><time>2026-05-03T08:00:50Z</time></trkpt>
+      <trkpt lat="51.805564" lon="-0.657361"><ele>124.0</ele><time>2026-05-03T08:01:00Z</time></trkpt>
+      <trkpt lat="51.806854" lon="-0.658212"><ele>125.0</ele><time>2026-05-03T08:01:10Z</time></trkpt>
+      <trkpt lat="51.807261" lon="-0.658515"><ele>125.0</ele><time>2026-05-03T08:01:20Z</time></trkpt>
+      <trkpt lat="51.807420" lon="-0.658417"><ele>125.6</ele><time>2026-05-03T08:01:30Z</time></trkpt>
+      <trkpt lat="51.807520" lon="-0.657933"><ele>126.0</ele><time>2026-05-03T08:01:40Z</time></trkpt>
+      <trkpt lat="51.809051" lon="-0.655409"><ele>134.9</ele><time>2026-05-03T08:01:50Z</time></trkpt>
+      <trkpt lat="51.810537" lon="-0.651904"><ele>133.1</ele><time>2026-05-03T08:02:00Z</time></trkpt>
+      <trkpt lat="51.812160" lon="-0.649724"><ele>130.0</ele><time>2026-05-03T08:02:10Z</time></trkpt>
+      <trkpt lat="51.813496" lon="-0.647932"><ele>124.3</ele><time>2026-05-03T08:02:20Z</time></trkpt>
+  </trkseg></trk>
+</gpx>
