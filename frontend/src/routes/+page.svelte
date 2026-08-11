@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import type { FeatureCollection } from 'geojson';
 	import {
+		activities,
 		fetchConfig,
 		places,
 		planRoute,
@@ -65,6 +66,11 @@
 	let error: string | null = $state(null);
 	let hoverPoint: [number, number] | null = $state(null);
 	let config: AppConfig | null = $state(null);
+	// Whether this rider has any activities, so MapView can decide whether
+	// the heatmap toggle is worth showing - a separate, per-user fetch
+	// rather than a field on AppConfig, which the unauthenticated share page
+	// also reads.
+	let heatmapAvailable = $state(false);
 
 	let fitTrigger = $state(0);
 	let flyTo: Waypoint | null = $state(null);
@@ -203,6 +209,7 @@
 
 	fetchConfig().then((c) => (config = c));
 	wahoo.status().then((s) => (wahooStatus = s));
+	activities.heatmapAvailable().then((r) => (heatmapAvailable = r.available));
 
 	// Bumped whenever the push in flight stops describing what is on screen.
 	// A poll that outlives its generation must not write status: it would
@@ -1366,6 +1373,7 @@
 				resolvePlaceName={config.search_enabled ? placeNameAt : undefined}
 				cycleNetworkAvailable={config.search_enabled}
 				cycleNetworkVersion={config.search_index_version}
+				{heatmapAvailable}
 				{pois}
 				{hoveredPoiId}
 				onHoverPoi={(id) => (hoveredPoiId = id)}

@@ -373,6 +373,82 @@ cannot be typed ("could not determine data type of parameter $1"), and an
 empty array parameter cannot either ("could not determine polymorphic
 type because input has type unknown"). Both need an explicit `CAST`.
 
+## Personal heatmap
+
+`GET /api/activities/heatmap/{z}/{x}/{y}.mvt` serves one rider's own
+activity traces as Mapbox vector tiles, drawn as a single low-opacity line
+layer so roads ridden more than once darken where the strokes overlap in
+the browser's own alpha compositing. This is a line overlay, not grid
+aggregation - a deliberate choice, so the heatmap shows where you actually
+rode rather than a smoothed density surface.
+
+`services/heatmap.py` is the same tile-generation shape as the
+cycle-network overlay (`ST_AsMVT` + `ST_AsMVTGeom` + a zoom-derived
+`ST_Simplify` tolerance, `ST_Transform` on the constant tile envelope so
+`ix_activities_geom` still serves the bounding-box filter) with one
+difference: **no `ST_LineMerge`**. A `cycle_ways` row is a route relation
+assembled from however many disconnected member ways the indexer
+collected - averaging 195 parts, which is what defeated simplification
+until they were merged. An `activities` row is already one continuous GPS
+trace stored as a single `LINESTRING`, so there is nothing to merge, and
+merging traces together is exactly what would defeat the point of a
+heatmap - the darkening comes from *keeping* every ride a separate
+feature that composites over the others where they coincide.
+
+The one line in the query that matters is `WHERE user_id = :user_id`.
+Getting it wrong is invisible in single-user testing and would silently
+draw every rider's traces on every rider's map;
+`tests/test_heatmap.py::test_one_riders_heatmap_never_shows_another_riders_rides`
+exists specifically to catch it, and was run once against the query with
+that filter removed to confirm it actually fails without it.
+
+### Caching is the opposite of the cycle-network overlay's
+
+Cycle-network tiles are install-wide and only change when the indexer
+reruns (monthly at most), so they carry `Cache-Control: private,
+max-age=86400`. Heatmap tiles are personal and change the moment a rider
+imports or deletes a ride, so a day-long cache would hide a fresh import
+for a day. The endpoint instead sends `private, no-cache` (forcing
+revalidation on every request) plus an `ETag`: a SHA-256 of the rider's
+activity count and their newest `created_at`, both cheap indexed
+aggregates and exact rather than heuristic - they change on every insert
+or delete and never otherwise. A matching `If-None-Match` gets a 304
+instead of a re-fetch, so panning around an unchanged map is still cheap.
+
+### Availability
+
+`GET /api/activities/heatmap-available` (an `EXISTS`, not a `COUNT`)
+tells the planner whether this rider has anything to draw before it
+bothers asking - the toggle button is left out of the map entirely for a
+rider with nothing imported, rather than offered as a control that would
+only ever fetch empty tiles. This could not live on `GET /api/config`
+alongside `search_enabled`: that endpoint is also read by the
+unauthenticated share page for `tile_url_cyclosm`, and a per-rider field
+on it would either leak between riders or 401 the share page.
+
+### Tile size
+
+Measured against a throwaway database seeded with two synthetic riders -
+a handful of favourite commute/loop corridors ridden repeatedly with GPS
+jitter between recordings (the way a heatmap actually darkens), plus a
+long tail of one-off rides, both scaled to a Chilterns-sized county:
+
+| rider | rides | z6 | z10 | z12 | z14 | z16 |
+|---|---|---|---|---|---|---|
+| decade (~10y, 3/wk) | 1,550 | 164 kB | 320 kB | 54 kB | 8 kB | 0.3 kB |
+| moderate (~3y, 3/wk) | 470 | 50 kB | 92 kB | 15 kB | 2 kB | 0.2 kB |
+
+Sizes are uncompressed (gzip over HTTP shrinks a repetitive protobuf like
+this further, not measured here). They do not grow monotonically with
+zoom the way the cycle-network overlay's do: the largest tiles are around
+z10, where a single tile still covers most of a rider's whole area *and*
+`ST_Simplify`'s tolerance is fine enough to keep most of each trace's
+points. `ST_LineMerge` is not an available lever here (see above), so a
+power rider's mid-zoom tiles are genuinely larger than the cycle
+network's merged, country-wide 50 kB tile. This is worth watching rather
+than ignoring - grid aggregation is the documented fallback if real usage
+turns out worse than this synthetic county-scale rider.
+
 ## Wahoo sync
 
 `services/wahoo.py` implements OAuth against api.wahooligan.com (tokens
@@ -1043,7 +1119,7 @@ backend/app/
 │                            #   SearchIndexMeta, UserSettings, LLMSettings
 ├── schemas.py               # request/response models
 ├── api/
-│   ├── activities.py        # /api/activities: import, list, read, delete
+│   ├── activities.py        # /api/activities: import, list, read, delete, heatmap tiles
 │   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface,
 │   │                        #   /api/route/isochrone, /api/route/loop, /api/route/alternates
 │   ├── places.py            # /api/places: search, reverse, pois-along-route
@@ -1069,6 +1145,7 @@ backend/app/
     ├── import_routes.py     # map matching an imported track back onto the network
     ├── activities.py        # a parsed track into a stored ride (no matching, no backfill)
     ├── activity_import.py   # Strava bulk-export zip: manifest, caps, background worker
+    ├── heatmap.py           # personal heatmap tiles: per-user MVT + ETag
     ├── places.py            # place search, reverse geocode, POIs along a route
     ├── climbs.py            # profile segmentation + HC/1-4 categorisation
     ├── geo.py               # shape concatenation and distance helpers
