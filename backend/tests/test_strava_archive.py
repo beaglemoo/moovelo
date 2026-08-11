@@ -5,11 +5,15 @@ third party by definition - so each one is tripped on its own rather than
 assumed to work because the others do.
 """
 
+import inspect
 import io
 import uuid
 import zipfile
+from collections.abc import Iterable, Iterator
+from typing import Any, get_args
 
 import pytest
+from fastapi import UploadFile
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -457,6 +461,57 @@ def test_remember_refuses_rather_than_growing_past_the_tracked_cap() -> None:
 # guarded route, matching test_import_api.py's own
 # test_oversized_upload_is_refused_before_the_body_is_parsed for
 # /api/routes/import.
+
+
+def test_every_upload_route_is_covered_by_the_pre_read_guard() -> None:
+    """The guard is a table keyed on exact paths, so it drifts silently.
+
+    That is how the archive route went unguarded in the first place: the old
+    check matched a path suffix the new route did not share, and nothing
+    failed. An explicit table fixes today's routes and has the same failure
+    mode tomorrow - add a route, forget the entry, get no signal. This test
+    is the signal. It asks FastAPI which routes actually take an upload
+    rather than being told, so a new one is covered the day it appears.
+
+    Routers included with include_router are nested rather than flattened in
+    this FastAPI version: app.routes holds _IncludedRouter objects whose real
+    routes hang off `original_router`, not off `routes`. Hence the walk, which
+    follows both and so keeps working if a future version flattens them or
+    renames the attribute back.
+    """
+    from fastapi.routing import APIRoute
+
+    from app.main import _UPLOAD_GUARDS, app
+
+    def walk(routes: Iterable[Any]) -> Iterator[APIRoute]:
+        for route in routes:
+            if isinstance(route, APIRoute):
+                yield route
+            nested = getattr(route, "routes", None)
+            if nested:
+                yield from walk(nested)
+            included = getattr(route, "original_router", None)
+            if included is not None and getattr(included, "routes", None):
+                yield from walk(included.routes)
+
+    upload_routes = {
+        route.path
+        for route in walk(app.routes)
+        if "POST" in route.methods
+        # These arrive as Annotated[UploadFile, File()], so the bare
+        # annotation is never UploadFile itself - get_args unwraps it.
+        and any(
+            param.annotation is UploadFile or UploadFile in get_args(param.annotation)
+            for param in inspect.signature(route.endpoint).parameters.values()
+        )
+    }
+
+    assert upload_routes, "found no upload routes at all - this test has stopped working"
+    unguarded = upload_routes - set(_UPLOAD_GUARDS)
+    assert not unguarded, (
+        f"these routes accept an upload with no pre-read size guard: {sorted(unguarded)}. "
+        "Add them to _UPLOAD_GUARDS in app/main.py with the right cap."
+    )
 
 
 async def test_the_single_ride_endpoint_is_refused_before_the_body_is_parsed(
