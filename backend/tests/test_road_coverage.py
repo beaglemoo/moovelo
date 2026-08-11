@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Activity, ActivityWay, OsmWay, SearchIndexMeta, User
+from app.services.geo import destination_point, haversine
 from tests.conftest import register
 
 # Same point as test_coverage.py's own choice, so a reviewer already
@@ -21,24 +22,37 @@ LAT, LON = 51.8000, -0.6500
 BBOX = {"min_lat": LAT - 0.05, "min_lon": LON - 0.05, "max_lat": LAT + 0.05, "max_lon": LON + 0.05}
 ELSEWHERE = {"min_lat": 55.0, "min_lon": 2.0, "max_lat": 55.1, "max_lon": 2.1}
 
+# The coverage query now clips every way to the query envelope before
+# summing its length (ST_Intersection, cast to geography), so a fixture's
+# geometry has to actually be the length it claims. Postgres computes the
+# clipped length on a WGS84 spheroid; destination_point/haversine
+# (services/geo.py) use a sphere, so the two never match to the bit - REL is
+# a tolerance for that, not a fudge for the bug this file exists to catch.
+REL = 0.01
+
 
 def _way(
     way_id: int,
     highway: str,
     length_m: float,
     at: tuple[float, float] = (LAT, LON),
+    bearing_deg: float = 0.0,
 ) -> OsmWay:
-    """A road way with its own short shape - what a coverage bbox actually
-    selects on, unlike a relation's envelope in the cycle-network case.
+    """A road way with its own real shape, `length_m` long - what a coverage
+    bbox actually selects on, and (since coverage clips) what it sums too.
     osm_ways has no relation to be confused by, but the bbox still has to
-    test the way's own geometry rather than anything wider."""
+    test the way's own geometry rather than anything wider. Default bearing
+    is due north for the same headroom reason as test_coverage.py's own
+    `_member`: BBOX's latitude buffer is constant while its longitude buffer
+    shrinks with cos(latitude)."""
     lat, lon = at
+    end_lat, end_lon = destination_point(at, bearing_deg, length_m)
     return OsmWay(
         way_id=way_id,
         highway=highway,
         name=None,
         length_m=length_m,
-        geom=f"SRID=4326;LINESTRING({lon} {lat},{lon + 0.001} {lat + 0.001})",
+        geom=f"SRID=4326;LINESTRING({lon} {lat},{end_lon} {end_lat})",
     )
 
 
@@ -118,9 +132,9 @@ async def test_a_rider_with_no_activities_gets_an_honest_zero(
     assert body["available"] is True
     by_highway = {row["highway"]: row for row in body["highways"]}
     assert by_highway["residential"]["ridden_m"] == pytest.approx(0.0)
-    assert by_highway["residential"]["total_m"] == pytest.approx(1000.0)
+    assert by_highway["residential"]["total_m"] == pytest.approx(1000.0, rel=REL)
     assert by_highway["footway"]["ridden_m"] == pytest.approx(0.0)
-    assert by_highway["footway"]["total_m"] == pytest.approx(500.0)
+    assert by_highway["footway"]["total_m"] == pytest.approx(500.0, rel=REL)
 
 
 async def test_a_bbox_with_no_roads_in_it_is_an_empty_list_not_a_failure(
@@ -146,10 +160,10 @@ async def test_coverage_arithmetic(client: AsyncClient, db: AsyncSession) -> Non
     response = await client.get("/api/coverage/roads", params=BBOX)
 
     by_highway = {row["highway"]: row for row in response.json()["highways"]}
-    assert by_highway["residential"]["ridden_m"] == pytest.approx(1000.0)
-    assert by_highway["residential"]["total_m"] == pytest.approx(1000.0)
+    assert by_highway["residential"]["ridden_m"] == pytest.approx(1000.0, rel=REL)
+    assert by_highway["residential"]["total_m"] == pytest.approx(1000.0, rel=REL)
     assert by_highway["footway"]["ridden_m"] == pytest.approx(0.0)
-    assert by_highway["footway"]["total_m"] == pytest.approx(500.0)
+    assert by_highway["footway"]["total_m"] == pytest.approx(500.0, rel=REL)
 
 
 async def test_the_bbox_selects_ways_by_their_own_geometry(
@@ -170,7 +184,43 @@ async def test_the_bbox_selects_ways_by_their_own_geometry(
     body = (await client.get("/api/coverage/roads", params=BBOX)).json()
 
     track = next(row for row in body["highways"] if row["highway"] == "track")
-    assert track["total_m"] == 1000.0, "the Yorkshire way is not near the Chilterns"
+    assert track["total_m"] == pytest.approx(1000.0, rel=REL), (
+        "the Yorkshire way is not near the Chilterns"
+    )
+
+
+async def test_a_way_that_only_clips_the_box_counts_only_the_part_inside(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Same family as cycle-network coverage's own boundary test: ow.geom &&
+    envelope is a bounding-box test, true the moment a way's box merely
+    *touches* the envelope, and the old query summed the way's whole stored
+    length regardless - measured ~6.5% too generous on an ordinary inland
+    box, real data.
+
+    This way starts at the box centre and runs due north straight through
+    the box's north edge, so only the southern part of it is actually
+    inside BBOX.
+    """
+    edge_m = haversine((LAT, LON), (LAT + 0.05, LON))
+    total_m = edge_m + 4000.0
+    db.add_all(
+        [
+            _way(100, "track", total_m, bearing_deg=0.0),
+            _meta(1),
+        ]
+    )
+    await db.commit()
+    await register(client, "rider@example.com")
+
+    body = (await client.get("/api/coverage/roads", params=BBOX)).json()
+
+    track = next(row for row in body["highways"] if row["highway"] == "track")
+    assert track["total_m"] < total_m * 0.7, (
+        "the way's whole stored length must not be counted, only the part the "
+        "envelope actually clips it to"
+    )
+    assert track["total_m"] == pytest.approx(edge_m, rel=REL)
 
 
 async def test_one_riders_coverage_never_counts_another_riders_ways(

@@ -66,6 +66,24 @@ _BBOX_SQL = text("""
 # carrying both an NCN route and a local one is genuinely part of both
 # networks, and each tier's percentage is reported on its own - nothing sums
 # them into a single figure, which is the only thing that would double count.
+#
+# A third instance of the same family as the two above: cwm.geom && envelope
+# is a bounding-box test, true the moment a way's box merely *touches* the
+# envelope, and cwm.length_m is the way's whole stored length regardless of
+# how much of it is actually inside. Measured on the England extract: a bbox
+# near Dover pulled in EuroVelo 2's 213.7 km ferry link whose line never
+# enters the box at all (only its bounding box does), inflating icn 3.87x;
+# an ordinary inland box still inflated ~6.5%. ST_Intersection clips each
+# way to the envelope before ST_Length is asked about it, cast to geography
+# for the same metres-on-a-spheroid unit the indexer used to write
+# length_m in the first place (indexer/indexer/db.py). This has to happen
+# inside the DISTINCT ON subquery, not after it: the dedup picks one row per
+# (network, way_id), and if length were computed outside that pick it would
+# be trivially correct, but computing it inside means the row DISTINCT ON
+# keeps is exactly the row whose clipped length is reported - there is only
+# ever one geom per way here (member rows for the same way carry the same
+# shape regardless of which relation they belong to), so which duplicate
+# survives does not change the clipped length either way.
 _COVERAGE_SQL = text("""
     SELECT network,
            SUM(length_m) AS total_m,
@@ -73,7 +91,12 @@ _COVERAGE_SQL = text("""
     FROM (
         SELECT DISTINCT ON (cw.network, cwm.way_id)
                cw.network AS network,
-               cwm.length_m AS length_m,
+               ST_Length(
+                   ST_Intersection(
+                       cwm.geom,
+                       ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
+                   )::geography
+               ) AS length_m,
                (aw.way_id IS NOT NULL) AS ridden
         FROM cycle_way_members cwm
         JOIN cycle_ways cw ON cw.id = cwm.relation_id
@@ -142,15 +165,29 @@ async def cycle_network_coverage(
 # lives in the LEFT JOIN's own ON clause for the same reason it does above:
 # moving it to WHERE would turn the join into an inner one and silently drop
 # every unridden way, which is exactly backwards for a denominator.
+#
+# Same clip-before-sum fix as _COVERAGE_SQL above, for the same reason: &&
+# is a bounding-box test and ow.length_m is the way's whole stored length,
+# so a way that only *touches* the envelope was being counted whole.
 _ROAD_COVERAGE_SQL = text("""
-    SELECT ow.highway AS highway,
-           SUM(ow.length_m) AS total_m,
-           SUM(CASE WHEN aw.way_id IS NOT NULL THEN ow.length_m ELSE 0 END) AS ridden_m
-    FROM osm_ways ow
-    LEFT JOIN activity_ways aw
-           ON aw.way_id = ow.way_id AND aw.user_id = :user_id
-    WHERE ow.geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
-    GROUP BY ow.highway
+    SELECT highway,
+           SUM(clipped_m) AS total_m,
+           SUM(CASE WHEN ridden THEN clipped_m ELSE 0 END) AS ridden_m
+    FROM (
+        SELECT ow.highway AS highway,
+               ST_Length(
+                   ST_Intersection(
+                       ow.geom,
+                       ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
+                   )::geography
+               ) AS clipped_m,
+               (aw.way_id IS NOT NULL) AS ridden
+        FROM osm_ways ow
+        LEFT JOIN activity_ways aw
+               ON aw.way_id = ow.way_id AND aw.user_id = :user_id
+        WHERE ow.geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
+    ) clipped
+    GROUP BY highway
 """)
 
 
