@@ -6,6 +6,7 @@
 		type ArchiveImportStatus
 	} from '$lib/api';
 	import { onDestroy } from 'svelte';
+	import CoverageCard from '$lib/components/CoverageCard.svelte';
 	import ImportResults from '$lib/components/ImportResults.svelte';
 	import { km } from '$lib/format';
 	import { ACCEPTED_FILES, activityImportQueue } from '$lib/import.svelte';
@@ -204,6 +205,8 @@
 	{/if}
 
 	<ImportResults queue={activityImportQueue} />
+
+	<CoverageCard />
 
 	{#if loaded && items.length > 0}
 		<div class="controls">
