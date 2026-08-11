@@ -410,6 +410,19 @@ Moovelo can tell a *course* file from an *activity* file, because both
 formats say which they are - so a course exported from Moovelo and
 re-imported comes back as a route, not as a ride you never did.
 
+### Your personal heatmap
+
+Once you have imported at least one ride, a **Heatmap** button appears
+next to the map's basemap and cycle-routes controls. It draws every ride
+you have imported as a faint line, so roads you have ridden more than
+once show up darker where the lines overlap - the same idea as the
+heatmaps in other cycling apps, but built entirely from your own imports
+and never leaving your own instance.
+
+It is your data only. Nobody else's rides ever appear on it, and it is
+off until you import at least one ride - there is nothing to draw before
+then, so the button stays hidden rather than sitting there doing nothing.
+
 ## Export
 
 Every saved route (and the planner toolbar, once a route is saved) offers
