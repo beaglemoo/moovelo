@@ -127,23 +127,28 @@ request in the process for the duration, not merely the uploader's.
 
 ## The place index
 
-`places`, `pois` and `cycle_ways` hold settlements, useful stops and
-signed cycle routes parsed out of the same OpenStreetMap extract Valhalla
-already downloads. Nothing external is involved: no Nominatim, no
-Overpass, no outbound calls.
+`places`, `pois`, `cycle_ways`, `cycle_way_members` and `osm_ways` hold
+settlements, useful stops, signed cycle routes (and the ways that make
+them up) and every bikeable road, all parsed out of the same OpenStreetMap
+extract Valhalla already downloads. Nothing external is involved: no
+Nominatim, no Overpass, no outbound calls.
 
-These four tables are the only ones the app never writes. An opt-in
+These five tables are the only ones the app never writes. An opt-in
 indexer sidecar (`indexer/`, compose profile `index`) fills them; the
 backend reads them. It mounts the `valhalla_tiles` volume read-only and
 works in three stages:
 
 1. **`osmium tags-filter`** streams the extract down to just the tagged
-   objects and the nodes and members they reference - 1.6 GB to 45 MB for
-   England, in about nine seconds. This is what keeps the rest cheap:
-   parsing the whole extract with node-location caching would be the
-   largest memory consumer on the machine. (The `-R` flag looks like it
-   would help and does the opposite - it *omits* referenced objects,
-   which would leave every way without coordinates.)
+   objects and the nodes and members they reference. This is what keeps
+   the rest cheap: parsing the whole extract with node-location caching
+   would be the largest memory consumer on the machine. (The `-R` flag
+   looks like it would help and does the opposite - it *omits* referenced
+   objects, which would leave every way without coordinates.) Before
+   all-roads coverage this reduced England's 1.6 GB to 45 MB in about nine
+   seconds; keeping every `highway=*` way (minus what a bike cannot ride -
+   see [All-roads coverage](#all-roads-coverage)) costs far more of what
+   this stage exists to avoid - see that section for the measured size and
+   what it means for a small install.
 2. **Two pyosmium passes.** The first reads relations only and flattens
    cycle superroutes, because a route relation can have other relations
    as members and a child is not guaranteed to appear before its parent.
@@ -153,8 +158,10 @@ works in three stages:
    COPY needs its own connection - a `COPY IN` occupies its connection
    for the whole transfer, so three on one connection deadlock silently.
 
-A full England rebuild takes about 37 seconds and answers every request
-throughout. `search_index_meta`
+A full England rebuild took about 37 seconds before all-roads coverage;
+with it, ~8 minutes (see [All-roads coverage](#all-roads-coverage) for the
+breakdown) - still a background job the app answers every request
+throughout, just a longer one. `search_index_meta`
 holds a single row - enforced by a boolean primary key with a `CHECK` -
 recording when the index was last built and from what. `GET /api/config`
 reports its existence as `search_enabled`, and the frontend hides the
@@ -557,6 +564,91 @@ the rider's own activities (`ST_Extent`, buffered ~5.5 km) - what the
 predates member lengths, no activities to centre a default bbox on) with
 its own `reason` string, rather than a bare 0% that would read as "you have
 ridden nothing" no matter which of those is actually true.
+
+## All-roads coverage
+
+The second denominator alongside the signed-network one: "how much of
+*every* bikeable road near you have you ridden", not only the ways that
+happen to carry a National/Regional/Local Cycle Network relation.
+
+**`osm_ways`** is published by the indexer, one row per OSM highway way
+kept by `categories.py:road_highway` - every `highway=*` value except
+`motorway`, `motorway_link`, `proposed`, `construction` and `raceway`.
+Footways, paths, bridleways and tracks are kept on purpose - people ride
+them, and dropping them would make the denominator lie by omission.
+`access=private`/`no` is not filtered either: a locked gate does not erase
+a road from the map, and the question is "how much of the network near
+you", not "how much you were allowed on". Unlike `cycle_way_members`, a
+road way has no owning relation, so `way_id` is both the natural key and
+the primary key - there is nothing else it could be.
+
+Extending the `osmium tags-filter` prefilter from "places, POIs and cycle
+routes" to "...and every bikeable way" is the whole cost of this feature.
+Measured on the England extract:
+
+| | Before (v0.3.0 - v0.6.0) | With all-roads coverage |
+|---|---|---|
+| Filtered extract | 45 MB | 469 MB |
+| Objects kept | places + POIs + cycle-route ways | + 6,477,862 more ways |
+| Pass B (extract + concurrent COPY) | ~25 s | ~6 min 18 s |
+| Indexer container peak memory | ~200 MB | ~772 MiB |
+| Assemble (simplify + measure) + publish | ~3 s | ~1 min 22 s |
+| **Total build time** | ~37 s | **~7 min 53 s** |
+
+The `osmium tags-filter` prefilter is unaffected in memory (~2.2 GB,
+dominated by the 1.6 GB input regardless of how many objects match) but
+takes slightly longer (~13 s vs ~9 s) scanning for the wider tag set.
+Everything after it is where the cost actually lands: pass B's
+node-location cache, the largest memory consumer in the stack (see
+[The place index](#the-place-index)), now has to resolve coordinates for
+roughly two orders of magnitude more ways than cycle-route members alone.
+That the indexer container's own peak stayed under 800 MB - not the
+multi-gigabyte blowout the risk this feature carries was framed around -
+is the load-bearing finding here: pyosmium's node cache is compact enough
+that this fits a modest VPS, just a slower single indexer run than any
+table before it added.
+
+**Geometry is simplified before it is ever written to `osm_ways`.**
+Nothing draws it - it is only summed and bbox-tested - so
+`assemble_road_ways` transforms to Web Mercator, runs
+`ST_SimplifyPreserveTopology` at a 10 m tolerance (metres at every
+latitude England spans, not degrees - `ST_Simplify` on a raw 4326
+geometry would mean the tolerance shrank near the poles and grew at the
+equator), and transforms back. Length is measured from the *unsimplified*
+shape in the same statement, so a coarse display tolerance can never
+quietly shrink the ridden-vs-total figures coverage sums - only the
+stored shape gets coarser. Measured on the England extract with one-off
+instrumentation added for this write-up (`sum(pg_column_size(geom))`
+before and after, on the raw and staged tables): 882 MB of full-fidelity
+geometry became 426 MB simplified - 52% smaller, for a shape used only for
+a bounding-box test.
+
+**On disk**, 6,477,862 ways occupy 791 MB of table plus 445 MB of indexes
+(266 MB GIST on `geom`, 139 MB primary key on `way_id`, 40 MB btree on
+`highway`) - 1.24 GB total, taking the England database from roughly
+150 MB (places/pois/cycle routes) to about 1.5 GB.
+
+**`GET /api/coverage/roads`** is `/cycle-network`'s SQL with the relation
+join and per-tier `DISTINCT ON` removed - `osm_ways` already has one row
+per way, so there is nothing to deduplicate:
+
+```sql
+SELECT ow.highway,
+       SUM(ow.length_m) AS total_m,
+       SUM(CASE WHEN aw.way_id IS NOT NULL THEN ow.length_m ELSE 0 END) AS ridden_m
+FROM osm_ways ow
+LEFT JOIN activity_ways aw ON aw.way_id = ow.way_id AND aw.user_id = :user_id
+WHERE ow.geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
+GROUP BY ow.highway
+```
+
+Bbox handling, `available: false` degradation and the default-bbox helper
+are shared with `/cycle-network` via `api/coverage.py`'s `_explicit_bbox`
+and `_resolve_bbox` rather than forked - the only new failure mode is
+`search_index_meta.osm_way_count IS NULL`, meaning the index predates this
+feature. `test_road_coverage.py::test_one_riders_coverage_never_counts_another_riders_ways`
+was run once against a version of this query with the `user_id` filter
+removed, the same proof `/cycle-network`'s own isolation test carries.
 
 ## Wahoo sync
 
@@ -1224,12 +1316,12 @@ backend/app/
 ├── db.py                    # async engine + session factory
 ├── version.py               # APP_VERSION, read from pyproject.toml (never installed as a package)
 ├── models.py                # User, Session, Route, Activity, ActivityWay, CustomPreset,
-│                            #   WahooAccount, Place, Poi, CycleWay, CycleWayMember,
+│                            #   WahooAccount, Place, Poi, CycleWay, CycleWayMember, OsmWay,
 │                            #   SearchIndexMeta, UserSettings, LLMSettings
 ├── schemas.py               # request/response models
 ├── api/
 │   ├── activities.py        # /api/activities: import, list, read, delete, heatmap tiles
-│   ├── coverage.py          # /api/coverage: cycle-network %, backfill queue + status
+│   ├── coverage.py          # /api/coverage: cycle-network % + all-roads %, backfill queue/status
 │   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface,
 │   │                        #   /api/route/isochrone, /api/route/loop, /api/route/alternates
 │   ├── places.py            # /api/places: search, reverse, pois-along-route
@@ -1247,7 +1339,7 @@ backend/app/
     ├── presets.py           # the three costing bundles + resolve_costing
     ├── polyline.py          # polyline6 decoder
     ├── valhalla.py          # httpx client, error mapping, elevation, ascent calc, _parse_trip
-    │                        #   (route/alternates), match_ways (map_snap, cycle-network coverage)
+    │                        #   (route/alternates), match_ways (map_snap, both coverage denominators)
     ├── ride_time.py         # gradient/surface/FTP model, computed on read only
     ├── loop.py              # "N km loop from here": bearing search + scoring + dedup
     ├── auth.py, oidc.py     # password hashing, sessions, OIDC client
@@ -1257,7 +1349,8 @@ backend/app/
     ├── activities.py        # a parsed track into a stored ride
     ├── activity_import.py   # Strava bulk-export zip: manifest, caps, background worker
     ├── way_matching.py      # map_snap matching + WayMatchQueue (new imports + backfill)
-    ├── coverage.py          # ridden vs total metres per network tier, default bbox
+    ├── coverage.py          # ridden vs total metres per network tier and per highway class,
+    │                        #   default bbox
     ├── heatmap.py           # personal heatmap tiles: per-user MVT + ETag
     ├── places.py            # place search, reverse geocode, POIs along a route
     ├── climbs.py            # profile segmentation + HC/1-4 categorisation

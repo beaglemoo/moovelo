@@ -76,6 +76,27 @@ and their coverage becomes visible the moment the index catches up. Rides
 imported before this feature existed have never been matched at all - use
 the "Match older rides" button on /activities to backfill those.
 
+## All-roads coverage says "needs a re-index"
+
+Same story as cycle-network coverage above, one PR later: an index built
+before all-roads coverage shipped has no `osm_ways` table at all.
+`/api/coverage/roads` says so rather than reporting 0% - re-run the
+indexer once and it starts working. As with cycle-network coverage,
+matching does not depend on the index, so activities matched before the
+re-index show their coverage the moment it catches up.
+
+**This re-index takes much longer than the ones before it - about
+8 minutes on England, against ~37 seconds before.** Keeping every
+bikeable road (not just the signed network) takes the filtered extract
+from ~45 MB to ~470 MB; the indexer container's own peak memory stayed
+under 800 MB even so, so this is a slower rebuild rather than one that
+needs more RAM than a modest VPS has - see
+[docs/data.md](data.md#the-place-index-optional) for the measured
+numbers. It is still a one-shot batch job with no lock held for most of
+its runtime (see [docs/architecture.md](architecture.md#the-place-index)),
+just a longer one; plan for the wall-clock time on a small host rather
+than running it unattended alongside everything else.
+
 ## After refreshing OSM data, the index is missing or stale
 
 Order matters here. Refreshing routing data means wiping the
