@@ -22,6 +22,8 @@ from app.api.routes import shared_router
 from app.api.settings import router as settings_router
 from app.api.wahoo import router as wahoo_router
 from app.config import settings
+from app.services.activity_import import MAX_ARCHIVE_BYTES
+from app.services.activity_import import queue as archive_queue
 from app.services.importer import MAX_FILE_BYTES
 from app.services.valhalla import ValhallaClient
 from app.services.wahoo_queue import queue as wahoo_queue
@@ -30,14 +32,20 @@ from app.services.wahoo_queue import queue as wahoo_queue
 # limit sits slightly above the file limit rather than rejecting a legitimate
 # upload that happens to sit right on it.
 MAX_UPLOAD_BYTES = MAX_FILE_BYTES + 1024 * 1024
+# An activity upload may be a whole Strava export rather than one ride, so it
+# gets its own ceiling. Applying the single-file limit to it would reject
+# every real archive.
+MAX_ACTIVITY_UPLOAD_BYTES = MAX_ARCHIVE_BYTES + 1024 * 1024
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.valhalla = ValhallaClient()
     await wahoo_queue.start()
+    await archive_queue.start()
     yield
     await wahoo_queue.stop()
+    await archive_queue.stop()
     await app.state.valhalla.close()
 
 
@@ -55,11 +63,14 @@ async def reject_oversized_uploads(request: Request, call_next: Any) -> Response
     endpoint's own chunked read.
     """
     if request.method == "POST" and request.url.path.endswith("/import"):
+        archive = request.url.path.startswith("/api/activities")
+        cap = MAX_ACTIVITY_UPLOAD_BYTES if archive else MAX_UPLOAD_BYTES
+        readable = (MAX_ARCHIVE_BYTES if archive else MAX_FILE_BYTES) // (1024 * 1024)
         declared = request.headers.get("content-length")
-        if declared and declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
+        if declared and declared.isdigit() and int(declared) > cap:
             return JSONResponse(
                 status_code=413,
-                content={"detail": f"File is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB."},
+                content={"detail": f"Upload is larger than {readable} MB."},
             )
     response: Response = await call_next(request)
     return response

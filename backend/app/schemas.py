@@ -395,6 +395,25 @@ class SavedRoute(RouteResponse):
     share_token: str | None = None
 
 
+class ArchiveImportStatus(BaseModel):
+    """Progress of a bulk archive import. Held in memory, not in the database:
+    a job is file bytes plus a counter, and neither survives a restart."""
+
+    id: uuid.UUID
+    filename: str
+    status: str
+    total: int
+    imported: int
+    failed: int
+    # Non-rides named as such by the archive's own manifest - runs, swims,
+    # walks. Reported rather than silently dropped.
+    skipped: int
+    # Rides already imported from an earlier, overlapping export.
+    duplicates: int
+    error: str | None = None
+    problems: list[str] = []
+
+
 class ActivitySummary(BaseModel):
     """A ride as the library lists it - no geometry, no elevation series."""
 

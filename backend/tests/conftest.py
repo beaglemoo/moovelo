@@ -136,6 +136,9 @@ async def client(
     # The Wahoo queue worker opens its own sessions outside the request
     # dependency; point it at the same throwaway database.
     monkeypatch.setattr("app.services.wahoo_queue.session_factory", db_factory)
+    # Same for the archive import worker, which likewise opens its own
+    # sessions outside the request dependency.
+    monkeypatch.setattr("app.services.activity_import.session_factory", db_factory)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as http:
         yield http

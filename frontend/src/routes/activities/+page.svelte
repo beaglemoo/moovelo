@@ -1,5 +1,11 @@
 <script lang="ts">
-	import { activities, type ActivityQuery, type ActivitySummary } from '$lib/api';
+	import {
+		activities,
+		type ActivityQuery,
+		type ActivitySummary,
+		type ArchiveImportStatus
+	} from '$lib/api';
+	import { onDestroy } from 'svelte';
 	import ImportResults from '$lib/components/ImportResults.svelte';
 	import { km } from '$lib/format';
 	import { ACCEPTED_FILES, activityImportQueue } from '$lib/import.svelte';
@@ -10,12 +16,60 @@
 	let error: string | null = $state(null);
 	let query: ActivityQuery = $state({});
 
+	// A bulk export is one file that becomes hundreds of rides, so it takes a
+	// different path from a single upload: submit, then poll a job. Kept apart
+	// from the per-file queue rather than folded into it, because the two
+	// report progress in genuinely different units.
+	let archive: ArchiveImportStatus | null = $state(null);
+	let archiveError: string | null = $state(null);
+	let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+	onDestroy(() => {
+		if (pollTimer) clearTimeout(pollTimer);
+	});
+
 	async function chooseFiles(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		if (!input.files?.length) return;
-		await activityImportQueue.add(input.files);
+		const picked = [...input.files];
 		// Let the same file be picked again after a failed attempt.
 		input.value = '';
+
+		const zips = picked.filter((file) => file.name.toLowerCase().endsWith('.zip'));
+		const singles = picked.filter((file) => !file.name.toLowerCase().endsWith('.zip'));
+
+		if (singles.length) await activityImportQueue.add(singles);
+		for (const zip of zips) await startArchive(zip);
+	}
+
+	async function startArchive(file: File) {
+		archiveError = null;
+		try {
+			archive = await activities.importArchive(file);
+			pollArchive();
+		} catch (err) {
+			archiveError = err instanceof Error ? err.message : 'Could not read that archive';
+		}
+	}
+
+	function pollArchive() {
+		if (pollTimer) clearTimeout(pollTimer);
+		pollTimer = setTimeout(async () => {
+			if (!archive) return;
+			try {
+				archive = await activities.archiveStatus(archive.id);
+			} catch {
+				// A job the server has forgotten - a restart, or eviction once
+				// enough later jobs finished. Stop asking rather than looping.
+				archive = null;
+				return;
+			}
+			if (archive.status === 'queued' || archive.status === 'running') {
+				pollArchive();
+			} else {
+				void refresh();
+			}
+		}, 1500);
 	}
 
 	// Same shape as the library's: the queue finishing is what refreshes the
@@ -99,7 +153,7 @@
 			bind:this={fileInput}
 			type="file"
 			multiple
-			accept={ACCEPTED_FILES}
+			accept={`${ACCEPTED_FILES},.zip`}
 			onchange={chooseFiles}
 			hidden
 		/>
@@ -115,6 +169,38 @@
 
 	{#if error}
 		<p class="error">{error}</p>
+	{/if}
+
+	{#if archiveError}
+		<p class="error">{archiveError}</p>
+	{/if}
+
+	{#if archive}
+		<div class="archive" class:done={archive.status === 'done'}>
+			<strong>{archive.filename}</strong>
+			{#if archive.status === 'error'}
+				<span class="error">{archive.error}</span>
+			{:else if archive.status === 'done'}
+				<span>
+					{archive.imported} imported
+					{#if archive.duplicates}· {archive.duplicates} already had{/if}
+					{#if archive.skipped}· {archive.skipped} not rides{/if}
+					{#if archive.failed}· {archive.failed} failed{/if}
+				</span>
+				<button type="button" onclick={() => (archive = null)}>Dismiss</button>
+			{:else}
+				<span>
+					reading… {archive.imported + archive.failed} of {archive.total || '?'}
+				</span>
+			{/if}
+		</div>
+		{#if archive.problems.length}
+			<ul class="problems">
+				{#each archive.problems as problem (problem)}
+					<li>{problem}</li>
+				{/each}
+			</ul>
+		{/if}
 	{/if}
 
 	<ImportResults queue={activityImportQueue} />
@@ -198,6 +284,27 @@
 	}
 	.error {
 		color: #dc322f;
+	}
+	.archive {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		flex-wrap: wrap;
+		background: #fdf6e3;
+		border: 1px solid #eee8d5;
+		border-radius: 6px;
+		padding: 0.5rem 0.7rem;
+		margin: 0.8rem 0 0.4rem;
+		font-size: 0.9rem;
+	}
+	.archive.done {
+		border-color: #859900;
+	}
+	.problems {
+		margin: 0 0 0.8rem;
+		padding-left: 1.2rem;
+		color: #657b83;
+		font-size: 0.85rem;
 	}
 	.controls {
 		display: flex;
