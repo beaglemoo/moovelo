@@ -25,7 +25,7 @@ from app.schemas import (
     HeatmapAvailability,
 )
 from app.services.activities import activity_from_track, name_from_filename
-from app.services.activity_import import MAX_ARCHIVE_BYTES, ImportJob
+from app.services.activity_import import MAX_ARCHIVE_BYTES, ImportJob, QueueFullError
 from app.services.activity_import import queue as archive_queue
 from app.services.geo import coords_from_wkt
 from app.services.heatmap import MAX_HEATMAP_ZOOM, MIN_HEATMAP_ZOOM, heatmap_etag, heatmap_tile
@@ -91,7 +91,11 @@ async def import_archive(
         raise HTTPException(status_code=400, detail="Expected a .zip archive.")
 
     data = await _read_capped(file, MAX_ARCHIVE_BYTES)
-    return _job(archive_queue.submit(user.id, filename, data))
+    try:
+        job = archive_queue.submit(user.id, filename, data)
+    except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    return _job(job)
 
 
 @router.get("/import/archive/{job_id}")

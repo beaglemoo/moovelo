@@ -18,8 +18,12 @@ from app.models import Activity, User
 from app.services import activity_import
 from app.services.activity_import import (
     MAX_ENTRIES,
+    MAX_QUEUED_ARCHIVES,
+    MAX_TRACKED_JOBS,
     ArchiveError,
     ArchiveImportQueue,
+    ImportJob,
+    QueueFullError,
     is_ride,
     list_entries,
     read_manifest,
@@ -381,6 +385,66 @@ async def test_polling_an_unknown_job_is_a_404(client: AsyncClient) -> None:
     await register(client)
     response = await client.get(f"/api/activities/import/archive/{uuid.uuid4()}")
     assert response.status_code == 404
+
+
+# --- Backpressure -------------------------------------------------------------
+#
+# One worker processes one archive at a time, and every queued item carries
+# the whole archive - up to MAX_ARCHIVE_BYTES. Before this, asyncio.Queue()
+# had no maxsize, so nothing stopped a burst of submissions holding
+# gigabytes resident with nothing to show for it. No worker task runs in
+# these tests (submit() alone never drains the queue - see _run's own note
+# above), so filling it to capacity is deterministic.
+
+
+async def test_the_queue_refuses_once_it_is_full() -> None:
+    queue = ArchiveImportQueue()
+    for i in range(MAX_QUEUED_ARCHIVES):
+        queue.submit(uuid.uuid4(), f"a{i}.zip", b"x")
+
+    with pytest.raises(QueueFullError, match="already queued"):
+        queue.submit(uuid.uuid4(), "one-too-many.zip", b"x")
+
+
+async def test_the_archive_endpoint_reports_a_full_queue_as_429(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _always_full(*args: object, **kwargs: object) -> ImportJob:
+        raise QueueFullError("no room right now")
+
+    monkeypatch.setattr("app.api.activities.archive_queue.submit", _always_full)
+    await register(client)
+
+    response = await client.post(
+        "/api/activities/import/archive",
+        files={"file": ("export.zip", _export(), "application/zip")},
+    )
+
+    assert response.status_code == 429
+    assert "no room right now" in response.json()["detail"]
+
+
+def test_remember_refuses_rather_than_growing_past_the_tracked_cap() -> None:
+    """The scenario _remember's own eviction loop cannot resolve on its own:
+    every tracked slot occupied by a job that is still queued or running, so
+    there is nothing finished to evict and make room for a new one. The old
+    code fell through its `while` loop and inserted anyway, silently growing
+    _jobs past MAX_TRACKED_JOBS - reproduced directly here since the queue's
+    own bound (MAX_QUEUED_ARCHIVES, far below MAX_TRACKED_JOBS) now makes
+    this unreachable through submit() in ordinary use.
+    """
+    queue = ArchiveImportQueue()
+    for i in range(MAX_TRACKED_JOBS):
+        job = ImportJob(id=uuid.uuid4(), user_id=uuid.uuid4(), filename=f"a{i}.zip")
+        job.status = "running"
+        queue._jobs[job.id] = job
+
+    with pytest.raises(QueueFullError):
+        queue._remember(ImportJob(id=uuid.uuid4(), user_id=uuid.uuid4(), filename="new.zip"))
+
+    assert len(queue._jobs) == MAX_TRACKED_JOBS, (
+        "the cap must hold even when nothing can be evicted"
+    )
 
 
 # --- The pre-read upload guard -----------------------------------------------
