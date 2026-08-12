@@ -1,5 +1,6 @@
 <script lang="ts">
 	import {
+		ApiError,
 		coverage,
 		type CoverageBackfillStatus,
 		type CoverageResponse,
@@ -8,6 +9,7 @@
 		type RoadCoverageResponse
 	} from '$lib/api';
 	import { onDestroy } from 'svelte';
+	import { Poller } from '$lib/latest';
 
 	// icn/ncn/rcn/lcn, in the order a rider would expect to read them - widest
 	// network first - and only shown when the bbox actually has one.
@@ -46,11 +48,12 @@
 	let roadError: string | null = $state(null);
 	let job: CoverageBackfillStatus | null = $state(null);
 	let jobError: string | null = $state(null);
-	let pollTimer: ReturnType<typeof setTimeout> | null = null;
+	// Same teardown gap the archive poller had: clearing the scheduled timer
+	// does nothing about a status request already in flight, whose callback
+	// would arm a fresh timer after onDestroy had already run.
+	const jobPoll = new Poller();
 
-	onDestroy(() => {
-		if (pollTimer) clearTimeout(pollTimer);
-	});
+	onDestroy(() => jobPoll.stop());
 
 	async function load() {
 		try {
@@ -70,30 +73,32 @@
 		jobError = null;
 		try {
 			job = await coverage.backfill();
-			pollJob();
+			void pollJob();
 		} catch (err) {
 			jobError = err instanceof Error ? err.message : 'Could not start matching';
 		}
 	}
 
-	function pollJob() {
-		if (pollTimer) clearTimeout(pollTimer);
-		pollTimer = setTimeout(async () => {
-			if (!job) return;
+	async function pollJob() {
+		await jobPoll.run(async () => {
+			if (!job) return false;
 			try {
 				job = await coverage.backfillStatus(job.id);
-			} catch {
-				job = null;
-				return;
+			} catch (err) {
+				if (err instanceof ApiError && err.status === 404) {
+					job = null;
+				} else {
+					jobError = err instanceof Error ? err.message : 'Lost track of that match run';
+				}
+				return false;
 			}
-			if (job.status === 'queued' || job.status === 'running') {
-				pollJob();
-			} else {
-				// A finished backfill is exactly what changed the numbers below,
-				// for both denominators - reload them both.
-				void load();
-			}
+			return job.status === 'queued' || job.status === 'running';
 		}, 1500);
+		// A finished backfill is exactly what changed the numbers below, for
+		// both denominators - reload them both. Reached however polling ended,
+		// including a job that errored, so the card never sits on figures the
+		// run has already superseded.
+		void load();
 	}
 
 	function sortedNetworkRows(current: CoverageResponse | null): NetworkCoverage[] {

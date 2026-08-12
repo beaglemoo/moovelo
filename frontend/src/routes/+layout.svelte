@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, auth, type UserInfo } from '$lib/api';
-	import { importQueue } from '$lib/import.svelte';
+	import { activityImportQueue, importQueue } from '$lib/import.svelte';
 	import { unsaved } from '$lib/unsaved.svelte';
 	import type { Snippet } from 'svelte';
 
@@ -35,6 +35,18 @@
 		dropping = false;
 		const files = [...(event.dataTransfer?.files ?? [])];
 		if (files.length === 0) return;
+
+		// A file dropped on /activities is a ride, not a plan - that page has
+		// its own import queue for exactly this, and forcing a navigation off
+		// it used to abandon whatever it was doing (an in-flight archive
+		// poll's status, in particular) with no way to recover it. Everywhere
+		// else defaults to a planned route, including the planner itself,
+		// which is what most dropped files actually are.
+		if (page.url.pathname.startsWith('/activities')) {
+			await activityImportQueue.add(files);
+			return;
+		}
+
 		// Importing leaves the planner, so unsaved edits would vanish silently.
 		if (
 			unsaved.dirty &&
