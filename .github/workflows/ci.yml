@@ -39,7 +39,12 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run mypy app
+      # The guard script is typed like everything else but lives outside the
+      # backend package, so `mypy app` never saw it and a strict-mode
+      # regression in it reached main. Named explicitly rather than moved:
+      # it must stay importable by plain python3 with no venv, which is what
+      # lets the config-surface job run before any dependency is installed.
+      - run: uv run mypy app ../deploy/check-config-surface.py
       - name: pytest (fails if the DB tests were skipped)
         shell: bash
         run: uv run pytest -q -rs | tee /tmp/pytest.out
