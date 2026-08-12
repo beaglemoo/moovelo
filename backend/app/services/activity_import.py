@@ -273,16 +273,22 @@ class ArchiveImportQueue:
     def full(self) -> bool:
         """Whether there is nowhere to put another archive right now.
 
-        Exposed so the upload endpoint can refuse *before* spending the cost
-        of reading a body that would only be refused afterwards anyway -
-        `_read_capped` buffers up to MAX_ARCHIVE_BYTES in memory, and a queue
-        that is only consulted once that read is done does not bound
-        anything, since the memory is already spent by the time the check
-        runs. This is not a reservation: two requests racing this check
-        against the same not-yet-full queue can both pass it and both start
-        reading before either calls submit(), so it closes the common case -
-        a queue already saturated by earlier jobs - rather than every
-        concurrent-burst case. submit()'s own check, after the read, remains
+        Exposed so the upload endpoint can refuse before spending the cost of
+        the in-memory copy: `_read_capped` buffers up to MAX_ARCHIVE_BYTES
+        into a bytes object, and a queue consulted only once that copy exists
+        bounds nothing, since the memory is already spent by the time the
+        check runs.
+
+        This does not get ahead of the request body itself. FastAPI parses and
+        spools the whole multipart payload to produce the endpoint's
+        UploadFile parameter, so the bytes have already been received before
+        any code in the endpoint runs - only middleware sees a request early
+        enough for that, which is why the size cap lives there.
+
+        Nor is it a reservation: two requests racing this check against the
+        same not-yet-full queue can both pass it and both go on to read, so it
+        closes the common case - a queue already saturated by earlier jobs -
+        rather than every concurrent-burst case. submit()'s own check remains
         the actual enforcement of the cap.
         """
         return self._queue.full()

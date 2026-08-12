@@ -1447,7 +1447,8 @@ frontend/src/
     ├── unsaved.svelte.ts        # $state singleton: unsaved-edits flag for the layout's file drop
     ├── history.svelte.ts        # $state singleton: undo/redo stack over planner inputs
     ├── latest.ts                # Latest (ownership token) + Poller (settle-on-every-exit poll loop),
-    │                            #   the one "latest wins" mechanism every async-state call site uses
+    │                            #   used by the activities page and CoverageCard. The planner predates
+    │                            #   it and still has its own routeToken/claimRoute of the same shape
     ├── import.svelte.ts         # $state ImportQueue: sequential upload, shared by library import,
     │                            #   the window-wide drop target and the activities page
     ├── map/MapView.svelte       # MapLibre init, layers, interactions, basemap/cycle-network/heatmap toggles

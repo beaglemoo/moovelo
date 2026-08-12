@@ -95,12 +95,22 @@ async def import_archive(
     if not _is_archive(filename):
         raise HTTPException(status_code=400, detail="Expected a .zip archive.")
 
-    # Checked before the read, not only after: a queue already saturated by
-    # earlier jobs is refused without first buffering up to MAX_ARCHIVE_BYTES
-    # of a body that was only ever going to be rejected. This does not close
-    # every race (two requests can both pass this check before either
-    # finishes reading), so submit()'s own check below is still the real
-    # enforcement - see ArchiveImportQueue.full().
+    # Checked before _read_capped, not only after: a queue already saturated
+    # by earlier jobs is refused without first buffering up to
+    # MAX_ARCHIVE_BYTES into memory for a body that was only ever going to be
+    # rejected.
+    #
+    # It does NOT avoid receiving the body. FastAPI has already parsed and
+    # spooled the whole multipart payload by the time this line runs - that is
+    # what producing the `file` parameter above means, and it is the same
+    # mechanism reject_oversized_uploads in main.py was written as middleware
+    # to get ahead of. Refusing before the read would have to live there too.
+    # What this saves is the second, in-memory copy; test_activity_import_
+    # queue_gate.py pins both halves.
+    #
+    # Nor is it a reservation: two requests can both pass this check against
+    # the same not-yet-full queue, so submit()'s own check below is still the
+    # real enforcement - see ArchiveImportQueue.full().
     if archive_queue.full():
         raise HTTPException(
             status_code=429,
