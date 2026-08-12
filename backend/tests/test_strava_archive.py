@@ -5,6 +5,7 @@ third party by definition - so each one is tripped on its own rather than
 assumed to work because the others do.
 """
 
+import gzip
 import inspect
 import io
 import uuid
@@ -157,6 +158,30 @@ def test_a_member_with_a_lying_size_header_fails_as_one_ride() -> None:
     archive.getinfo("activities/big.gpx").file_size = 10  # a hostile archive would
     with pytest.raises(ArchiveError, match="could not be read"):
         activity_import._read_entry(archive, "activities/big.gpx", activity_import.MAX_FILE_BYTES)
+
+
+def test_a_gzip_member_that_expands_past_the_per_file_limit_is_refused() -> None:
+    """The gzip-bomb case, one layer further in than the zip-bomb test
+    above: `_decompress_member` runs on a member `_read_entry` already
+    accepted (a .gz payload is itself small - it is what is *inside* the
+    gzip stream that can be enormous), so it needs its own cap rather than
+    inheriting `_read_entry`'s. A tiny run of zero bytes compresses to a
+    few hundred bytes but gunzips to far more than MAX_FILE_BYTES, and the
+    check must trip while still streaming rather than after the whole
+    thing is held in memory - the same reasoning `_read_entry`'s own bomb
+    test gives for the outer, still-compressed layer.
+    """
+    bomb = gzip.compress(b"\0" * (25 * 1024 * 1024))
+    with pytest.raises(ArchiveError, match="per-file limit"):
+        activity_import._decompress_member("activities/big.gpx.gz", bomb)
+
+
+def test_a_gzip_member_within_the_limit_is_decompressed_fine() -> None:
+    """The positive control for the test above: a real, ordinary member
+    must still come back intact, so the cap is not simply refusing every
+    gzip member outright."""
+    payload = GPX
+    assert activity_import._decompress_member("ride.gpx.gz", gzip.compress(payload)) == payload
 
 
 def test_something_that_is_not_a_zip_says_so() -> None:
