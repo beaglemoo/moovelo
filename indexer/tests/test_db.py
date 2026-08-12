@@ -294,3 +294,105 @@ def test_a_way_repeated_across_overlapping_extracts_is_stored_once(database_url:
         total = connection.execute("SELECT count(*) FROM osm_ways").fetchone()[0]
 
     assert total == 2
+
+
+# --- osm_ways provenance across an extract change (migration 0016) ---------
+
+
+def test_a_roads_off_rebuild_against_a_different_extract_leaves_provenance_naming_the_old_one(
+    database_url: str,
+) -> None:
+    """The scenario a pass-3 finder never got to run: index one extract with
+    roads on, then rebuild against a *different* extract with roads off.
+
+    source_files (search_index_meta's own column) is unconditionally
+    overwritten every run - that is correct, it describes the run that just
+    finished - but osm_ways itself was left untouched by the second build, so
+    without its own provenance column nothing distinguishes "osm_ways
+    matches source_files" from "osm_ways is a leftover from a country the
+    rest of the index no longer describes". osm_ways_source_files exists to
+    carry the *real* provenance of the table that was actually, physically
+    left alone.
+    """
+    with db.connect(database_url) as connection:
+        # Build 1: "england", roads on.
+        db.prepare_staging(connection)
+        counts = db.load(database_url, _road_rows())
+        counts["cycle_ways"] = db.assemble_cycle_routes(connection)
+        counts["osm_ways"] = db.assemble_road_ways(connection)
+        db.publish(connection, ["england-latest.osm.pbf"], counts)
+
+        # Build 2: a different extract, roads off - exactly build.py's own
+        # shape when settings.index_roads is False.
+        db.prepare_staging(connection)
+        counts2 = db.load(database_url, [])
+        counts2["cycle_ways"] = db.assemble_cycle_routes(connection)
+        assert "osm_ways" not in counts2
+        db.publish(connection, ["wales-latest.osm.pbf"], counts2)
+
+        row = connection.execute(
+            "SELECT source_files, osm_way_count, osm_ways_source_files FROM search_index_meta"
+        ).fetchone()
+        road_names = connection.execute(
+            "SELECT way_id, name FROM osm_ways ORDER BY way_id"
+        ).fetchall()
+
+    source_files, osm_way_count, osm_ways_source_files = row
+    # The rest of the index really did move on to Wales...
+    assert source_files == ["wales-latest.osm.pbf"]
+    # ...while osm_ways itself, and its own count, are still England's -
+    # untouched, exactly as a roads-off run promises.
+    assert osm_way_count == 2
+    assert [name for _, name in road_names] == ["Church Street", None]
+    # And now there is a column that says so, rather than nothing at all:
+    # this is what lets /api/coverage/roads tell the two apart.
+    assert osm_ways_source_files == ["england-latest.osm.pbf"]
+    assert osm_ways_source_files != source_files
+
+
+def test_a_roads_on_rebuild_against_a_new_extract_updates_provenance_too(
+    database_url: str,
+) -> None:
+    """The other side of the same fix: a rebuild that *does* touch osm_ways
+    must not leave the old extract's name behind - carrying forward is only
+    for a run that left the table alone."""
+    with db.connect(database_url) as connection:
+        db.prepare_staging(connection)
+        counts = db.load(database_url, _road_rows())
+        counts["cycle_ways"] = db.assemble_cycle_routes(connection)
+        counts["osm_ways"] = db.assemble_road_ways(connection)
+        db.publish(connection, ["england-latest.osm.pbf"], counts)
+
+        db.prepare_staging(connection)
+        counts2 = db.load(database_url, _road_rows()[:1])
+        counts2["cycle_ways"] = db.assemble_cycle_routes(connection)
+        counts2["osm_ways"] = db.assemble_road_ways(connection)
+        db.publish(connection, ["great-britain-latest.osm.pbf"], counts2)
+
+        row = connection.execute(
+            "SELECT source_files, osm_ways_source_files FROM search_index_meta"
+        ).fetchone()
+
+    assert row[0] == row[1] == ["great-britain-latest.osm.pbf"]
+
+
+def test_a_first_roads_off_build_leaves_provenance_null_not_a_stale_guess(
+    database_url: str,
+) -> None:
+    """The never-built end of the same fix, mirroring
+    test_a_first_build_with_roads_off_leaves_the_count_null_not_zero for the
+    new column: with nothing to carry forward, provenance must read as
+    "never built" (NULL), not silently claim this run's files for a table
+    that was never actually populated."""
+    with db.connect(database_url) as connection:
+        db.prepare_staging(connection)
+        counts = db.load(database_url, [])
+        counts["cycle_ways"] = db.assemble_cycle_routes(connection)
+        assert "osm_ways" not in counts
+        db.publish(connection, ["tring.osm.pbf"], counts)
+
+        osm_ways_source_files = connection.execute(
+            "SELECT osm_ways_source_files FROM search_index_meta"
+        ).fetchone()[0]
+
+    assert osm_ways_source_files is None
