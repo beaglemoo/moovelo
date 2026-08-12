@@ -62,9 +62,24 @@ def test_a_field_in_a_nested_block_is_still_a_field(guard: Any, tmp_path: Path) 
         "    try:\n"
         '        attempted: str = "c"\n'
         "    except Exception:\n"
-        '        recovered: str = "d"\n',
+        '        recovered: str = "d"\n'
+        "    with open('x') as fh:\n"
+        '        managed: str = "e"\n'
+        "    match 1:\n"
+        "        case 1:\n"
+        '            matched: str = "f"\n',
     )
-    assert guard.settings_fields(config) == {"plain", "gated", "attempted", "recovered"}
+    assert guard.settings_fields(config) == {
+        "plain",
+        "gated",
+        "attempted",
+        "recovered",
+        "managed",
+        # `match` was missed by the first version of this fix, which listed
+        # the block types to descend into rather than the ones to skip. It is
+        # here as the standing case against enumerating syntax.
+        "matched",
+    }
 
 
 def test_a_name_bound_inside_a_method_is_not_a_field(guard: Any, tmp_path: Path) -> None:
@@ -77,8 +92,16 @@ def test_a_name_bound_inside_a_method_is_not_a_field(guard: Any, tmp_path: Path)
         '    real: str = "a"\n'
         "    def helper(self) -> None:\n"
         "        local: int = 1\n"
+        "    async def async_helper(self) -> None:\n"
+        "        async_local: int = 1\n"
         "    class Nested:\n"
-        "        inner: int = 2\n",
+        "        inner: int = 2\n"
+        # A def INSIDE a block is the case generic descent could get wrong:
+        # the skip has to hold wherever the def is found, not just at the
+        # class body's top level.
+        "    if True:\n"
+        "        def gated_helper() -> None:\n"
+        "            gated_local: int = 3\n",
     )
     assert guard.settings_fields(config) == {"real"}
 
