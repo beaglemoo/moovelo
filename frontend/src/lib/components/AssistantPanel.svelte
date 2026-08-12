@@ -453,18 +453,30 @@
 	   viewport is neither floating nor a card. Dragging is meaningless at
 	   this size, so the saved position is overridden rather than honoured.
 
-	   The bottom offset clears the map's own control row - the basemap
-	   switch and the cycle and heatmap toggles all sit at bottom: 28px and
-	   stand about 30px tall. At bottom: 10px the pill lay straight across
-	   all three, which only became visible once the heatmap overlay and
-	   this card were in one tree: each was built against a map the other
-	   had not touched yet. */
+	   The bottom offset clears two things stacked below it, not one. The
+	   basemap switch and the cycle and heatmap toggles sit at bottom: 28px
+	   and stand about 30px tall - at bottom: 10px the pill lay straight
+	   across all three, which only became visible once the heatmap overlay
+	   and this card were in one tree: each was built against a map the other
+	   had not touched yet.
+
+	   Below THAT, +page.svelte's own .hint ("Click the map to add
+	   waypoints...") sits centred at bottom: 18px and, with no route planned
+	   yet, is on screen at the exact same moment as this pill's default
+	   collapsed state - the two are the very first thing a new rider sees.
+	   .hint has no max-width, so on a narrow phone its text wraps to two or
+	   three lines and grows to 65-85px tall; bottom: 68px left only a sliver
+	   of that covered before the pill's own box started, and measuring both
+	   boxes at real phone widths (360-428px) confirmed they overlapped at
+	   every one of them. 120px clears a three-line .hint (bottom 18 to
+	   ~102px) with room to spare, and still sits well clear of the map
+	   control row's own 58px ceiling. */
 	@media (max-width: 760px) {
 		.assistant {
 			left: 10px !important;
 			right: 10px !important;
 			top: auto !important;
-			bottom: 68px !important;
+			bottom: 120px !important;
 			width: auto !important;
 		}
 	}
