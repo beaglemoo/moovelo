@@ -610,13 +610,24 @@ generated, never true of a raw GPS recording. Coverage instead uses
 `shape_match: map_snap` (`ValhallaClient.match_ways`), the same mode
 `trace_route` already uses to recover maneuvers for an imported file:
 downsampled to ~15 m spacing, chunked at 1000 points with no shared
-boundary point (only aggregate metres per way matter, not continuous
-geometry), requesting `edge.way_id` and `edge.length`. Costing is the
+boundary point, requesting `edge.way_id` and `edge.length`. Costing is the
 gravel bundle regardless of anything the rider might plan with - an
 activity carries no preset, it is a recording - and unlike edge_walk,
 map_snap genuinely uses costing to decide what a trace can snap to, so the
 most surface-tolerant bundle is what keeps a real towpath or bridleway
 ride from under-matching.
+
+Not sharing a boundary point was believed to be free - nothing needs a
+continuous shape back, only aggregate metres per way - but measured
+against real traces it is not: without a shared point, each chunk's own
+`map_snap` independently decides where its trace starts and ends near the
+cut, and a way straddling the boundary can come up 20-56 m short of its
+true matched length rather than the two chunks summing correctly. Left as
+a known, one-directional source of undercounting (never over-counting)
+rather than "fixed" by sharing a point instead - that would very likely
+trade it for double-counting, since a shared point can land mid-edge and
+both chunks would then report a length for it, with no lookup from way id
+back to that edge to deduplicate it (`ValhallaClient.match_ways`).
 
 A way credited from a sub-5-metre sliver (a chunk boundary can contribute
 one) is dropped as noise (`MIN_MATCHED_WAY_LENGTH_M`) rather than counted -
@@ -644,15 +655,44 @@ this feature shipped have never been attempted.
 Ridden vs total metres per network tier (icn/ncn/rcn/lcn), within a bbox:
 
 ```sql
-SELECT cw.network,
-       SUM(cwm.length_m) AS total_m,
-       SUM(CASE WHEN aw.way_id IS NOT NULL THEN cwm.length_m ELSE 0 END) AS ridden_m
-FROM cycle_ways cw
-JOIN cycle_way_members cwm ON cwm.relation_id = cw.id
-LEFT JOIN activity_ways aw ON aw.way_id = cwm.way_id AND aw.user_id = :user_id
-WHERE cw.geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
-GROUP BY cw.network
+SELECT network,
+       SUM(length_m) AS total_m,
+       SUM(CASE WHEN ridden THEN length_m ELSE 0 END) AS ridden_m
+FROM (
+    SELECT DISTINCT ON (cw.network, cwm.way_id)
+           cw.network AS network,
+           ST_Length(ST_Intersection(cwm.geom, envelope)::geography) AS length_m,
+           (aw.way_id IS NOT NULL) AS ridden
+    FROM cycle_way_members cwm
+    JOIN cycle_ways cw ON cw.id = cwm.relation_id
+    LEFT JOIN activity_ways aw ON aw.way_id = cwm.way_id AND aw.user_id = :user_id
+    WHERE cwm.geom && envelope
+    ORDER BY cw.network, cwm.way_id, ridden DESC
+) member
+GROUP BY network
 ```
+
+(`envelope` above is `ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)`,
+inlined twice in the real query.) Filtering `cwm.geom` rather than
+`cycle_ways.geom`, and the `DISTINCT ON (cw.network, cwm.way_id)` dedup,
+are the two fixes described under [Cycle-network
+coverage](#cycle-network-coverage) above - both already visible in this
+shape. A third, the same family again, was found later and is not yet
+described there:
+
+- **Clipped before summed.** `cwm.geom && envelope` is a bounding-box
+  test, true the moment a way's *box* merely touches the query area, and
+  the unclipped `cwm.length_m` is the way's whole stored length regardless
+  of how much of it actually falls inside. A box near Dover pulled in
+  EuroVelo 2's 213.7 km cross-Channel ferry link - whose line never enters
+  the box at all, only its bounding box does - inflating that box's icn
+  figure 3.87x; an ordinary inland box still inflated ~6.5%.
+  `ST_Intersection` clips each way to the envelope before `ST_Length` is
+  asked about it (cast to `geography`, the same metres-on-a-spheroid unit
+  the indexer used to write `length_m` in the first place -
+  `indexer/indexer/db.py`), and it has to happen inside the `DISTINCT ON`
+  subquery rather than after it, so the row the dedup keeps is the one
+  whose clipped length is actually reported.
 
 The `user_id` filter lives in the `LEFT JOIN`'s own `ON` clause, not a
 `WHERE` added after it - moving it to `WHERE` would turn the join into an
@@ -736,16 +776,24 @@ a bounding-box test.
 
 **`GET /api/coverage/roads`** is `/cycle-network`'s SQL with the relation
 join and per-tier `DISTINCT ON` removed - `osm_ways` already has one row
-per way, so there is nothing to deduplicate:
+per way, so there is nothing to deduplicate - but the same clip-before-sum
+fix applies, for the same reason: `ow.geom && envelope` is a bounding-box
+test, and a way that only touches the box was being counted at its whole
+stored length rather than the length actually inside it.
 
 ```sql
-SELECT ow.highway,
-       SUM(ow.length_m) AS total_m,
-       SUM(CASE WHEN aw.way_id IS NOT NULL THEN ow.length_m ELSE 0 END) AS ridden_m
-FROM osm_ways ow
-LEFT JOIN activity_ways aw ON aw.way_id = ow.way_id AND aw.user_id = :user_id
-WHERE ow.geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
-GROUP BY ow.highway
+SELECT highway,
+       SUM(clipped_m) AS total_m,
+       SUM(CASE WHEN ridden THEN clipped_m ELSE 0 END) AS ridden_m
+FROM (
+    SELECT ow.highway AS highway,
+           ST_Length(ST_Intersection(ow.geom, envelope)::geography) AS clipped_m,
+           (aw.way_id IS NOT NULL) AS ridden
+    FROM osm_ways ow
+    LEFT JOIN activity_ways aw ON aw.way_id = ow.way_id AND aw.user_id = :user_id
+    WHERE ow.geom && envelope
+) clipped
+GROUP BY highway
 ```
 
 Bbox handling, `available: false` degradation and the default-bbox helper

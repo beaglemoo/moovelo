@@ -449,10 +449,16 @@ international routes each get their own percentage. The heatmap above
 shows you *where* you have been; this puts a number on it.
 
 **What the percentage means.** The area is a box around your own rides,
-not the whole country. The denominator is every signed way inside that
-box; the numerator is the ones your rides have been matched onto. Rides
-are matched to real OSM ways, not measured by proximity, so riding the
-carriageway does not credit you for the cycleway running alongside it.
+not the whole country. The denominator is the length of every signed way
+that actually falls *inside* that box, not a way's whole length the
+moment it merely comes near - a way is clipped to the box before it's
+measured, so a route that only brushes the edge of your box with a long
+way elsewhere isn't counted as if all of it were there (one cross-Channel
+ferry link was measured inflating a nearby box's figure almost 4x before
+this was fixed). The numerator is the ones your rides have been matched
+onto. Rides are matched to real OSM ways, not measured by proximity, so
+riding the carriageway does not credit you for the cycleway running
+alongside it.
 
 A way carrying two routes of the same tier counts once. A way carrying an
 NCN route *and* a local one counts towards both, because it genuinely is
