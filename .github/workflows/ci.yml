@@ -6,6 +6,12 @@ on:
   pull_request:
 
 jobs:
+  config-surface:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 deploy/check-config-surface.py
+
   backend:
     runs-on: ubuntu-latest
     services:
