@@ -141,8 +141,8 @@ def _collect_fields(node: ast.AST, fields: set[str]) -> None:
     # and will be over-reported rather than silently missed - the safe
     # direction for a guard to be wrong in.
     if isinstance(node, ast.If) and _is_type_checking(node.test):
-        for child in node.orelse:
-            _collect_fields(child, fields)
+        for statement in node.orelse:
+            _collect_fields(statement, fields)
         return
     for child in ast.iter_child_nodes(node):
         _collect_fields(child, fields)
