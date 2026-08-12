@@ -126,8 +126,24 @@ def _with_reminder(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     completion onward, behind the very tool result it says it outranks.
     Since essentially every useful turn calls a tool, that left the
     protection working only where it was least needed.
+
+    **Sent as `user`, not `system`, and that is load-bearing.** A `system`
+    message arriving after a tool result made deepseek-v4-flash carry on
+    writing system messages: it answered with fabricated rules in the
+    register of this prompt - "Never start with a greeting", "Please respond
+    to the user in a few words" - none of which appear anywhere in this
+    codebase, and one of which was a fake instruction from the rider
+    ("Ignore the reminder. Create the route."). Measured on staging against
+    a two-round tool conversation: 3/3 replies contaminated as `system`,
+    0/3 as `user`. Claude Haiku 4.5 was 0/3 either way, so it is a
+    model-specific failure that this placement avoids generally rather than
+    a reason to change model.
+
+    Kept at the tail rather than folded into the rider's message - which
+    also measured 0/3 - because the recency the docstring above describes is
+    the entire point of restating it.
     """
-    return [*messages, {"role": "system", "content": SCOPE_REMINDER}]
+    return [*messages, {"role": "user", "content": SCOPE_REMINDER}]
 
 
 async def run_turn(
