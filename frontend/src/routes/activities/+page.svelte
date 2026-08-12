@@ -249,7 +249,14 @@
 		<p class="error">{error}</p>
 	{/if}
 
-	{#if archiveError}
+	<!-- Suppressed once the archive card is showing this exact message itself
+	     (archive.status === 'error' with the same text) - polling's own catch
+	     sets both archiveError and archive.error together, and rendering both
+	     put the same failure on screen twice, reproduced live. Left showing
+	     here for every OTHER case (an upload that failed before a job even
+	     existed to carry it, or a stale card from an earlier run still on
+	     screen) so a real, distinct error is never hidden. -->
+	{#if archiveError && !(archive?.status === 'error' && archive.error === archiveError)}
 		<p class="error">{archiveError}</p>
 	{/if}
 
@@ -258,6 +265,15 @@
 			<strong>{archive.filename}</strong>
 			{#if archive.status === 'error'}
 				<span class="error">{archive.error}</span>
+				<button
+					type="button"
+					onclick={() => {
+						archive = null;
+						archiveError = null;
+					}}
+				>
+					Dismiss
+				</button>
 			{:else if archive.status === 'done'}
 				<span>
 					{archive.imported} imported
