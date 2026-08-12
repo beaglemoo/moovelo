@@ -11,7 +11,7 @@
 	import CoverageCard from '$lib/components/CoverageCard.svelte';
 	import ImportResults from '$lib/components/ImportResults.svelte';
 	import { km } from '$lib/format';
-	import { ACCEPTED_FILES, activityImportQueue } from '$lib/import.svelte';
+	import { ACCEPTED_FILES, activityImportQueue, pendingArchives } from '$lib/import.svelte';
 
 	let fileInput: HTMLInputElement | undefined = $state();
 	let items: ActivitySummary[] = $state([]);
@@ -117,6 +117,13 @@
 					archive = null;
 				} else {
 					archiveError = err instanceof Error ? err.message : 'Lost track of that import';
+					// The card must stop claiming to be running. Leaving it on
+					// its last "reading... 3 of 10" would be a lie, and worse,
+					// archiveBusy derives from this status - a frozen 'running'
+					// locks the Import button with no way back except leaving
+					// the page. That is worse than the bug this catch was
+					// written to fix, which at least re-enabled the button.
+					archive = { ...archive, status: 'error', error: archiveError };
 				}
 				return false;
 			}
@@ -124,6 +131,17 @@
 		}, 1500);
 		if (archiveOwner.isCurrent(token)) void refresh();
 	}
+
+	// A .zip dropped on this page lands here: the layout's drop handler has no
+	// archive machinery of its own, so it leaves the file for whoever can
+	// actually show its progress.
+	$effect(() => {
+		if (!pendingArchives.files.length) return;
+		const waiting = pendingArchives.drain();
+		void (async () => {
+			for (const zip of waiting) await startArchive(zip);
+		})();
+	});
 
 	// Same shape as the library's: the queue finishing is what refreshes the
 	// list, not this page having been the thing that started it.
