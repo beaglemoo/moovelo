@@ -25,7 +25,12 @@ from app.schemas import (
     HeatmapAvailability,
 )
 from app.services.activities import activity_from_track, name_from_filename
-from app.services.activity_import import MAX_ARCHIVE_BYTES, ImportJob, QueueFullError
+from app.services.activity_import import (
+    MAX_ARCHIVE_BYTES,
+    MAX_QUEUED_ARCHIVES,
+    ImportJob,
+    QueueFullError,
+)
 from app.services.activity_import import queue as archive_queue
 from app.services.geo import coords_from_wkt
 from app.services.heatmap import MAX_HEATMAP_ZOOM, MIN_HEATMAP_ZOOM, heatmap_etag, heatmap_tile
@@ -89,6 +94,21 @@ async def import_archive(
     filename = file.filename or ""
     if not _is_archive(filename):
         raise HTTPException(status_code=400, detail="Expected a .zip archive.")
+
+    # Checked before the read, not only after: a queue already saturated by
+    # earlier jobs is refused without first buffering up to MAX_ARCHIVE_BYTES
+    # of a body that was only ever going to be rejected. This does not close
+    # every race (two requests can both pass this check before either
+    # finishes reading), so submit()'s own check below is still the real
+    # enforcement - see ArchiveImportQueue.full().
+    if archive_queue.full():
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"{MAX_QUEUED_ARCHIVES} archive imports are already queued. "
+                "Try again in a few minutes."
+            ),
+        )
 
     data = await _read_capped(file, MAX_ARCHIVE_BYTES)
     try:

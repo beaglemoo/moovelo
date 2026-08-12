@@ -270,6 +270,23 @@ class ArchiveImportQueue:
     async def start(self) -> None:
         self._worker = asyncio.create_task(self._run())
 
+    def full(self) -> bool:
+        """Whether there is nowhere to put another archive right now.
+
+        Exposed so the upload endpoint can refuse *before* spending the cost
+        of reading a body that would only be refused afterwards anyway -
+        `_read_capped` buffers up to MAX_ARCHIVE_BYTES in memory, and a queue
+        that is only consulted once that read is done does not bound
+        anything, since the memory is already spent by the time the check
+        runs. This is not a reservation: two requests racing this check
+        against the same not-yet-full queue can both pass it and both start
+        reading before either calls submit(), so it closes the common case -
+        a queue already saturated by earlier jobs - rather than every
+        concurrent-burst case. submit()'s own check, after the read, remains
+        the actual enforcement of the cap.
+        """
+        return self._queue.full()
+
     async def stop(self) -> None:
         if self._worker is not None:
             self._worker.cancel()
