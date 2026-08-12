@@ -934,8 +934,21 @@
 	// already in progress. Reads `waypoints` only to track-and-rerun after a
 	// rebuild replaces `markers` with fresh elements - it does nothing with
 	// the value itself.
+	//
+	// The read has to touch every element, not just name the array: `void
+	// waypoints` only subscribes to *reassignment* of the prop, and
+	// +page.svelte never reassigns it - every edit is push/splice/an index
+	// write in place. Proved live with a minimal repro of this exact shape:
+	// with a bare `void` read, this effect fires once on mount and then
+	// never again for a push, so hovering a row in the waypoint list and then
+	// adding or removing a waypoint left the OLD marker glowing (or nothing
+	// glowing at all) on the freshly rebuilt set, even though the row itself
+	// still showed as hovered - stashing this fix and rerunning the repro
+	// without it reproduced exactly that. `.forEach` touches `.length` and
+	// every index, which is what actually registers push, splice AND a
+	// same-length index write (setStart/setEnd) as dependencies.
 	$effect(() => {
-		void waypoints;
+		waypoints.forEach(() => {});
 		const hovered = hoveredWaypointIndex;
 		markers.forEach((marker, i) => {
 			marker.getElement().classList.toggle('marker-hovered', i === hovered);
