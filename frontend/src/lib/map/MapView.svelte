@@ -1262,6 +1262,7 @@
 	<button
 		type="button"
 		class="overlay-toggle heatmap-toggle"
+		class:heatmap-toggle-solo={!cycleNetworkAvailable}
 		class:active={heatmap}
 		aria-pressed={heatmap}
 		title="Show where you've ridden before"
@@ -1323,11 +1324,18 @@
 		border-color: #268bd2;
 		color: #fff;
 	}
-	/* Offset past "Cycle routes", which the toggle before it may or may not
-	 * render - fixed rather than flow-based, matching how .overlay-toggle
-	 * itself is positioned relative to .basemap-switch. */
+	/* Offset past "Cycle routes" - fixed rather than flow-based, matching how
+	 * .overlay-toggle itself is positioned relative to .basemap-switch.
+	 * cycleNetworkAvailable and heatmapAvailable are independent (search_enabled
+	 * vs. this rider having any activities), so the network toggle before this
+	 * one is not guaranteed to render - .heatmap-toggle-solo drops straight
+	 * into .overlay-toggle's own 132px slot instead of leaving a bare gap
+	 * where a toggle that never rendered would have been. */
 	.heatmap-toggle {
 		left: 232px;
+	}
+	.heatmap-toggle.heatmap-toggle-solo {
+		left: 132px;
 	}
 	.heatmap-toggle.active {
 		background: #dc322f;
