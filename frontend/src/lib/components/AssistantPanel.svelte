@@ -44,6 +44,21 @@
 	interface Entry {
 		role: 'user' | 'assistant';
 		text: string;
+		// Prose the model produced in a round that ended in a tool call -
+		// "let me search for that", "now I will plan it". The panel already
+		// says what each tool is doing (TOOL_LABELS drives `status`), so
+		// rendering this as well showed the rider the same progress twice and
+		// stacked every round's narration into one bubble ahead of the answer.
+		//
+		// Kept rather than dropped, for two reasons: it still goes back to the
+		// model as conversation history, and it is the fallback if a turn puts
+		// its only prose in a round that also called a tool.
+		steps?: string[];
+	}
+
+	/** What a turn said, narration included - the model's own view of it. */
+	function historyText(entry: Entry): string {
+		return [...(entry.steps ?? []), entry.text].filter(Boolean).join(' ');
 	}
 
 	let entries = $state<Entry[]>([]);
@@ -227,8 +242,8 @@
 		incomplete = null;
 		controller = new AbortController();
 		const history = entries
-			.filter((entry) => entry.text || entry.role === 'user')
-			.map((entry) => ({ role: entry.role, content: entry.text }));
+			.map((entry) => ({ role: entry.role, content: historyText(entry) }))
+			.filter((entry) => entry.content || entry.role === 'user');
 
 		try {
 			const stream = streamAssistantChat(
@@ -248,6 +263,9 @@
 						appendToReply(event.text);
 						break;
 					case 'tool_call':
+						// Every delta of this round arrived before this frame, so
+						// whatever is in the bubble now is narration, not the answer.
+						setAside();
 						status = TOOL_LABELS[event.name] ?? 'Working';
 						break;
 					case 'tool_result':
@@ -278,6 +296,18 @@
 			busy = false;
 			status = '';
 			controller = null;
+			// On every exit path, not just the clean one: a turn can end - done,
+			// aborted, failed - with its prose sitting in `steps` because the
+			// round that produced it also called a tool. Narration is a poor
+			// answer, but it is the answer the model gave, and the alternative
+			// here is the blank bubble the next branch then deletes.
+			const last = entries.at(-1);
+			if (last?.role === 'assistant' && !last.text && last.steps?.length) {
+				entries = [
+					...entries.slice(0, -1),
+					{ ...last, text: last.steps[last.steps.length - 1], steps: last.steps.slice(0, -1) }
+				];
+			}
 			// An aborted or failed turn can leave the placeholder empty; drop it
 			// rather than showing a blank bubble.
 			if (entries.at(-1)?.role === 'assistant' && !entries.at(-1)?.text) {
@@ -286,10 +316,22 @@
 		}
 	}
 
+	/** Move the current round's prose out of the bubble and into the trail. */
+	function setAside() {
+		const last = entries.at(-1);
+		if (!last || last.role !== 'assistant' || !last.text.trim()) return;
+		entries = [
+			...entries.slice(0, -1),
+			{ ...last, text: '', steps: [...(last.steps ?? []), last.text.trim()] }
+		];
+	}
+
 	function appendToReply(text: string) {
 		const last = entries.at(-1);
 		if (!last || last.role !== 'assistant') return;
-		entries = [...entries.slice(0, -1), { role: 'assistant', text: last.text + text }];
+		// Spread, not a fresh literal: `steps` holds the narration set aside by
+		// earlier rounds of this same turn, and rebuilding the entry dropped it.
+		entries = [...entries.slice(0, -1), { ...last, text: last.text + text }];
 		scrollToEnd();
 	}
 
