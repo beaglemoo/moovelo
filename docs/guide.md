@@ -382,6 +382,9 @@ and its cues. Moovelo asks before letting that happen.
 Rides you actually did live under **Activities**, separately from the
 routes you planned. Import a GPX, TCX or FIT file straight off a head
 unit and it lands there, with its date, distance, moving time and ascent.
+Dropping files anywhere on this page - including a Strava export .zip -
+imports them here rather than treating them as a route to plan, which is
+what dropping a file elsewhere in the app does.
 
 The distinction is deliberate. A route is a plan: it has a preset, it can
 be re-routed, it can be pushed to your head unit. An activity is a
@@ -411,6 +414,12 @@ Runs, swims and walks are skipped and counted. Re-uploading a later
 archive adds only the rides you did since, so keeping the history current
 costs nothing. A file that will not parse costs that one ride and says
 which, rather than failing the import.
+
+The archive itself is capped at 500 MB, which comfortably covers a full
+Strava export. Only a handful of archives can be queued at once - if
+you've just uploaded several and the import worker hasn't caught up yet,
+a further upload is turned away with a message asking you to try again in
+a few minutes, rather than piling up unprocessed in memory.
 
 There is no Strava *sync*, and that is deliberate - see
 [the FAQ](faq.md#why-is-there-no-strava-sync) for the clause numbers.

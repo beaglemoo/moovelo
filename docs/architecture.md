@@ -407,6 +407,27 @@ imported/failed/skipped/duplicate counts and up to 20 per-file problem
 strings). A job is process memory only, so a restart mid-import reports
 "interrupted", not a silent resume against bytes that are gone.
 
+The archive itself is capped at `MAX_ARCHIVE_BYTES` (500 MB), and the
+queue behind the one worker is bounded to `MAX_QUEUED_ARCHIVES` (5) -
+`submit` refuses outright with a 429 once it is full, rather than an
+unbounded burst of submissions holding gigabytes of archive bytes resident
+with nothing to show for it but a longer queue. 5 * 500 MB is already a
+generous 2.5 GB of ride data waiting its turn.
+
+That cap is enforced twice: `_read_capped` here bounds what actually gets
+read, but `main.py`'s `reject_oversized_uploads` middleware rejects an
+oversized `Content-Length` before FastAPI ever spools the body into a temp
+file, which is the only check early enough to matter for a genuinely huge
+upload. Its per-path cap is an explicit table
+(`/api/routes/import`, `/api/activities/import`,
+`/api/activities/import/archive`, each with its own byte limit) rather
+than a `path.endswith("/import")` heuristic - that heuristic used to miss
+this endpoint entirely (its path doesn't end in `/import`) and, separately,
+matched the single-ride `/api/activities/import` against the much larger
+archive ceiling purely because both paths start with `/api/activities`. A
+route added to the table with no entry gets no pre-read guard rather than
+silently inheriting the wrong one.
+
 **Reading the archive never trusts the archive.** `list_entries` bounds
 entry count (`MAX_ENTRIES`, 20,000) and claimed total size before opening
 anything, and `_read_entry`/`_decompress_member` read every member -
@@ -438,20 +459,32 @@ collide on the same Strava id. Files with no derivable id (a hand-built
 zip) are imported unconditionally; there is nothing to deduplicate them
 against.
 
-**One failed file costs that file, not the archive.** Each entry is
-parsed inside its own `try`/`except`, and a `RouteImportError` or
-`ArchiveError` increments `failed` and appends a `path: reason` string to
-`problems` rather than aborting the loop - the same "degrade per unit of
-work, not the whole request" shape as `trace_route`'s chunking. The
-manifest's own activity name wins over whatever the file calls itself,
-since it is the name the rider actually gave the ride.
+**One failed file costs that file, not the archive - literally, not just
+by intent.** Each entry is parsed *and committed* inside its own
+`try`/`except`: a `RouteImportError`, `ArchiveError` or a raw
+`SQLAlchemyError` rolls back that one entry, increments `failed`, and
+appends a problem string to `problems` rather than aborting the loop - the
+same "degrade per unit of work, not the whole request" shape as
+`trace_route`'s chunking. The commit has to sit *inside* the loop, not
+once at the end: SQLAlchemy batches pending inserts that share a table
+into one multi-row `INSERT`, so without a commit between entries, a
+single row Postgres refuses (a stray `NaN` that slipped past the
+importer's own guard, say) took every row queued alongside it down in the
+same statement - including rides already counted as imported earlier in
+the same batch. A `SQLAlchemyError`'s own message carries the query and
+its bound parameters, which is neither readable nor safe to hand back
+verbatim, so that case collapses to a generic "could not be saved" in
+`problems`; a `RouteImportError`/`ArchiveError` still shows its
+rider-facing reason unchanged. The manifest's own activity name wins over
+whatever the file calls itself, since it is the name the rider actually
+gave the ride.
 
-Newly created activities are handed to `way_matching.py`'s queue **after
-the whole archive commits**, the same "off the request path" reasoning
-`POST /api/activities/import` uses for a single file: matching hundreds
-of rides is itself minutes of Valhalla round trips, so coverage lags a
-bulk import by however long that queue takes to drain, rather than
-holding the archive job open for it.
+Newly created activities are handed to `way_matching.py`'s queue once
+every entry in the archive has been read and individually committed, the
+same "off the request path" reasoning `POST /api/activities/import` uses
+for a single file: matching hundreds of rides is itself minutes of
+Valhalla round trips, so coverage lags a bulk import by however long that
+queue takes to drain, rather than holding the archive job open for it.
 
 ## Personal heatmap
 
