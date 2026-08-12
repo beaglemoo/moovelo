@@ -79,6 +79,14 @@
 		archivePoll.stop();
 		archivePoll = new Poller();
 		archiveError = null;
+		// The card is a single slot describing THE CURRENT attempt, so a new
+		// attempt clears it rather than leaving an earlier job's result beside
+		// this one's. Without this the two could describe different uploads at
+		// once - an undismissed failure from ride1.zip still on screen while
+		// ride2.zip is being sent - and any rule relating them has to guess
+		// which upload the card belongs to. It cannot be made to guess wrong
+		// if it can only ever hold one.
+		archive = null;
 		try {
 			const started = await activities.importArchive(file);
 			if (!archiveOwner.isCurrent(token)) return;
@@ -249,14 +257,16 @@
 		<p class="error">{error}</p>
 	{/if}
 
-	<!-- Suppressed once the archive card is showing this exact message itself
-	     (archive.status === 'error' with the same text) - polling's own catch
-	     sets both archiveError and archive.error together, and rendering both
-	     put the same failure on screen twice, reproduced live. Left showing
-	     here for every OTHER case (an upload that failed before a job even
-	     existed to carry it, or a stale card from an earlier run still on
-	     screen) so a real, distinct error is never hidden. -->
-	{#if archiveError && !(archive?.status === 'error' && archive.error === archiveError)}
+	<!-- Suppressed while the card is itself reporting a failure: polling's own
+	     catch sets archiveError and the card's error together, and rendering
+	     both put the same failure on screen twice, reproduced live.
+	     Deliberately NOT a comparison of the two message strings. That version
+	     hid a brand-new upload's error whenever its text happened to match an
+	     older, undismissed card's - and generic texts ("Failed to fetch") match
+	     constantly. Since startArchive() clears the card, it can only ever
+	     describe the current attempt, so "the card is showing an error" is
+	     enough to know the banner would be a duplicate. -->
+	{#if archiveError && archive?.status !== 'error'}
 		<p class="error">{archiveError}</p>
 	{/if}
 
