@@ -1,10 +1,12 @@
 <script lang="ts">
 	import {
 		activities,
+		ApiError,
 		type ActivityQuery,
 		type ActivitySummary,
 		type ArchiveImportStatus
 	} from '$lib/api';
+	import { Latest, Poller } from '$lib/latest';
 	import { onDestroy } from 'svelte';
 	import CoverageCard from '$lib/components/CoverageCard.svelte';
 	import ImportResults from '$lib/components/ImportResults.svelte';
@@ -23,11 +25,27 @@
 	// report progress in genuinely different units.
 	let archive: ArchiveImportStatus | null = $state(null);
 	let archiveError: string | null = $state(null);
-	let pollTimer: ReturnType<typeof setTimeout> | null = null;
+	// Stops for good on unmount, including a status request already in
+	// flight at that moment - clearing only the scheduled timer would let
+	// that request's own callback arm a fresh one nothing is left to clear,
+	// and the page would go on polling invisibly after it was gone.
+	// Replaced per run rather than reused: stop() is permanent, and starting a
+	// second import must end the first one's polling for good.
+	let archivePoll = new Poller();
+	// The Import button only disables once `archive` is set from the POST's
+	// response, not from the click - so a slow first upload leaves a window
+	// where a second can start while the first has no tracked job yet. Whoever
+	// claimed last owns the card; an earlier upload's response landing
+	// afterwards is discarded rather than reverting the display to a job that
+	// was superseded before it ever reported anything.
+	const archiveOwner = new Latest();
+	// Five independent things call refresh(): mount, the year filter, a
+	// delete, an import batch finishing, and an archive finishing. Without an
+	// owner the earlier of two overlapping calls can resolve last and put a
+	// stale list back on screen.
+	const listOwner = new Latest();
 
-	onDestroy(() => {
-		if (pollTimer) clearTimeout(pollTimer);
-	});
+	onDestroy(() => archivePoll.stop());
 
 	// Only the single-file queue gated the Import button - an archive still
 	// queued or running left it clickable, and the backend has one worker for
@@ -57,36 +75,54 @@
 	}
 
 	async function startArchive(file: File) {
+		const token = archiveOwner.claim();
+		archivePoll.stop();
+		archivePoll = new Poller();
 		archiveError = null;
 		try {
-			archive = await activities.importArchive(file);
+			const started = await activities.importArchive(file);
+			if (!archiveOwner.isCurrent(token)) return;
+			archive = started;
 		} catch (err) {
+			if (!archiveOwner.isCurrent(token)) return;
 			archiveError = err instanceof Error ? err.message : 'Could not read that archive';
 			return;
 		}
-		await pollArchiveUntilDone();
+		await pollArchiveUntilDone(token);
 	}
 
 	/** Polls until the job leaves queued/running, then resolves - so a
 	 * caller awaiting this (chooseFiles, serialising several .zip files) only
 	 * moves on once this one has actually finished, not once it was merely
 	 * accepted. */
-	async function pollArchiveUntilDone(): Promise<void> {
-		while (archive && (archive.status === 'queued' || archive.status === 'running')) {
+	async function pollArchiveUntilDone(token: number): Promise<void> {
+		const poller = archivePoll;
+		await poller.run(async () => {
+			if (!archiveOwner.isCurrent(token) || !archive) return false;
+			if (archive.status !== 'queued' && archive.status !== 'running') return false;
 			const jobId = archive.id;
-			await new Promise<void>((resolve) => {
-				pollTimer = setTimeout(resolve, 1500);
-			});
 			try {
-				archive = await activities.archiveStatus(jobId);
-			} catch {
-				// A job the server has forgotten - a restart, or eviction once
-				// enough later jobs finished. Stop asking rather than looping.
-				archive = null;
-				return;
+				const next = await activities.archiveStatus(jobId);
+				if (!archiveOwner.isCurrent(token)) return false;
+				archive = next;
+			} catch (err) {
+				if (!archiveOwner.isCurrent(token)) return false;
+				// Only a 404 means the job is genuinely gone - a restart, or
+				// eviction once enough later jobs finished - and only then is
+				// silently dropping the card the right answer. A 500 or a
+				// dropped connection used to look identical: the card vanished
+				// mid-import with nothing said, which for a multi-minute import
+				// of hundreds of files reads as "it lost my rides".
+				if (err instanceof ApiError && err.status === 404) {
+					archive = null;
+				} else {
+					archiveError = err instanceof Error ? err.message : 'Lost track of that import';
+				}
+				return false;
 			}
-		}
-		void refresh();
+			return true;
+		}, 1500);
+		if (archiveOwner.isCurrent(token)) void refresh();
 	}
 
 	// Same shape as the library's: the queue finishing is what refreshes the
@@ -101,10 +137,17 @@
 	});
 
 	async function refresh() {
+		const token = listOwner.claim();
 		try {
-			items = await activities.list(query);
+			const rows = await activities.list(query);
+			// A newer refresh started while this one was in flight, so this
+			// answer is already out of date - applying it would put the
+			// previous filter's rows back on screen.
+			if (!listOwner.isCurrent(token)) return;
+			items = rows;
 			loaded = true;
 		} catch (err) {
+			if (!listOwner.isCurrent(token)) return;
 			error = err instanceof Error ? err.message : 'Failed to load activities';
 		}
 	}
