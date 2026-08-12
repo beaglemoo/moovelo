@@ -21,10 +21,12 @@ bike.example.com {
         }
         reverse_proxy <docker-host>:17777
     }
-    request_body {
-        max_size 21MB
+    handle {
+        request_body {
+            max_size 21MB
+        }
+        reverse_proxy <docker-host>:17777
     }
-    reverse_proxy <docker-host>:17777
 }
 ```
 

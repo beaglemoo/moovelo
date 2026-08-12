@@ -51,7 +51,12 @@
 	// Same teardown gap the archive poller had: clearing the scheduled timer
 	// does nothing about a status request already in flight, whose callback
 	// would arm a fresh timer after onDestroy had already run.
-	const jobPoll = new Poller();
+	// Replaced per run rather than reused. Poller now ends a previous run
+	// itself, but a fresh instance per click keeps the intent obvious and
+	// matches the archive card - the sibling site that got this right while
+	// this one did not, which is how a second overlapping poll was reachable
+	// from a double click.
+	let jobPoll = new Poller();
 
 	onDestroy(() => jobPoll.stop());
 
@@ -71,6 +76,8 @@
 
 	async function runBackfill() {
 		jobError = null;
+		jobPoll.stop();
+		jobPoll = new Poller();
 		try {
 			job = await coverage.backfill();
 			void pollJob();
@@ -80,7 +87,8 @@
 	}
 
 	async function pollJob() {
-		await jobPoll.run(async () => {
+		const poller = jobPoll;
+		await poller.run(async () => {
 			if (!job) return false;
 			try {
 				job = await coverage.backfillStatus(job.id);
@@ -89,6 +97,10 @@
 					job = null;
 				} else {
 					jobError = err instanceof Error ? err.message : 'Lost track of that match run';
+					// Same reason as the archive card: a status frozen at
+					// 'running' leaves the button disabled with nothing to
+					// clear it.
+					job = { ...job, status: 'error', error: jobError };
 				}
 				return false;
 			}
