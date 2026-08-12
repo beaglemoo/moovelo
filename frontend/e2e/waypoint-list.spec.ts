@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Waypoint list panel (Phase 8, PR5): reorder via the up/down buttons and
 // remove a waypoint via its row button. Native HTML5 drag-and-drop is the
@@ -13,7 +13,7 @@ const password = 'e2e-waypoints-password-1';
 
 test('waypoint list: reorder and remove', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 
 	const registered = await page.request.post('/api/auth/register', {
 		data: { email, password }

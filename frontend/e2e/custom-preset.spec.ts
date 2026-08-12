@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Custom costing (Phase 8 PR1): the sliders popover routes with a custom
 // bundle, the Custom pill reflects it, and a saved preset can be re-applied.
@@ -26,7 +26,7 @@ async function planASampleRoute(page: import('@playwright/test').Page) {
 
 test('custom costing routes, saves as a preset, and re-applies', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 
 	const registered = await page.request.post('/api/auth/register', {
 		data: { email, password }

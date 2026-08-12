@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Searches for a place and turns the result into a waypoint.
 //
@@ -12,7 +12,7 @@ const password = 'e2e-search-password-1';
 
 test('search for a place and route from it', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 	const config = await page.request.get('/api/config').then((r) => r.json());
 	test.skip(
 		!config.search_enabled,

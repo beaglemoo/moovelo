@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Avoids ("not that road", Valhalla exclude_locations): right-click the
 // route line to mark a point to route around, which re-plans the route with
@@ -11,7 +11,7 @@ const password = 'e2e-avoids-password-1';
 
 test('avoid a road from the context menu, then remove it', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 
 	const registered = await page.request.post('/api/auth/register', {
 		data: { email, password }
@@ -111,7 +111,7 @@ test('avoid a road from the context menu, then remove it', async ({ page }) => {
 test('adding an avoid drops loop candidates found before it', async ({ page }) => {
 	const email = `e2e-loop-avoid-${Date.now()}@example.com`;
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 	expect(
 		(
 			await page.request.post('/api/auth/register', {
@@ -170,7 +170,7 @@ test('adding an avoid drops loop candidates found before it', async ({ page }) =
 test('adding an avoid drops alternates found before it', async ({ page }) => {
 	const email = `e2e-alt-avoid-${Date.now()}@example.com`;
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 	expect(
 		(
 			await page.request.post('/api/auth/register', {
@@ -218,7 +218,7 @@ test('adding an avoid drops alternates found before it', async ({ page }) => {
 test('undoing a preset change drops alternates costed under it', async ({ page }) => {
 	const email = `e2e-preset-undo-${Date.now()}@example.com`;
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 	expect(
 		(
 			await page.request.post('/api/auth/register', {

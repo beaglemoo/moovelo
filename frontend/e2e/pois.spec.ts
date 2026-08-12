@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // POIs along a planned route, and the hover sync between the list and the
 // map. Gated on the place index like the search spec: the indexer is
@@ -10,7 +10,7 @@ const password = 'e2e-pois-password-1';
 
 test('find POIs on a route and sync hover with the map', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 	const config = await page.request.get('/api/config').then((r) => r.json());
 	test.skip(
 		!config.search_enabled,

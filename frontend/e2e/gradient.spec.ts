@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Gradient colouring on the elevation chart. Frontend-only: plans a real
 // route so the ~500-point elevation array has genuine (unsmoothed)
@@ -13,7 +13,7 @@ const password = 'e2e-gradient-password-1';
 
 test('elevation chart colours the route by gradient band', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 
 	const registered = await page.request.post('/api/auth/register', {
 		data: { email, password }

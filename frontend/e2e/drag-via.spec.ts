@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Drag-to-reroute: grabbing the route line and dropping it somewhere else
 // inserts a via waypoint there and re-plans. Part of the core loop, and until
@@ -16,7 +16,7 @@ const password = 'e2e-drag-password-1';
 test.describe('drag the route line to insert a via', () => {
 	test.beforeEach(async ({ page }) => {
 		const status = await page.request.get('/api/auth/status').then((r) => r.json());
-		test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+		test.skip(!canRegister(status), NEEDS_REGISTRATION);
 		const registered = await page.request.post('/api/auth/register', {
 			data: { email: `e2e-drag-${Date.now()}-${Math.random()}@example.com`, password }
 		});

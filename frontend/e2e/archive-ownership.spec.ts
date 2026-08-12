@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister, NEEDS_REGISTRATION } from './support/auth';
+import { registerOrSkip } from './support/auth';
 
 // Two archive imports started before the first has reported anything: whoever
 // started LAST must own the card, and the earlier one's late response must be
@@ -35,14 +35,6 @@ function job(id: string, filename: string, status: 'running' | 'done') {
 	};
 }
 
-async function registerOrSkip(page: import('@playwright/test').Page, label: string) {
-	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), NEEDS_REGISTRATION);
-	const email = `e2e-archive-own-${label}-${Date.now()}@example.com`;
-	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
-	expect(registered.ok()).toBeTruthy();
-}
-
 /** Drops a .zip on the window, the way +layout.svelte actually receives one.
  * The bytes are an empty zip's End Of Central Directory record; the upload is
  * mocked, so nothing ever parses them. */
@@ -59,7 +51,7 @@ async function dropZip(page: import('@playwright/test').Page, name: string) {
 }
 
 test('the Import button cannot start a second archive while one is uploading', async ({ page }) => {
-	await registerOrSkip(page, 'button');
+	await registerOrSkip(page, 'e2e-archive-own-button', password);
 
 	let release: () => void = () => {};
 	const gate = new Promise<void>((resolve) => (release = resolve));
@@ -90,7 +82,7 @@ test('the Import button cannot start a second archive while one is uploading', a
 });
 
 test('a second dropped archive is not clobbered by the first, slower one', async ({ page }) => {
-	await registerOrSkip(page, 'drop');
+	await registerOrSkip(page, 'e2e-archive-own-drop', password);
 
 	// A's POST is held open so B can be started while A has no tracked job -
 	// the real window, reachable by drop because a drop never looks at the
