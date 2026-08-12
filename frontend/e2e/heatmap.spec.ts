@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
+import { canRegister } from './support/auth';
 
 // The personal heatmap toggle: hidden for a rider with nothing imported,
 // shown and persisted once they have a ride. Runs against the dev compose
@@ -13,10 +14,7 @@ const ride = fileURLToPath(new URL('./fixtures/tring-ride.gpx', import.meta.url)
 
 test('the heatmap toggle appears only once a ride is imported, and persists', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(
-		!(status.setup_required || (status.signups_enabled && status.password_login)),
-		'needs a fresh DB or SIGNUPS_ENABLED=true with password login'
-	);
+	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
 
 	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
 	expect(registered.ok()).toBeTruthy();

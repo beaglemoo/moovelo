@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
+import { canRegister } from './support/auth';
 
 // The archive card and the page-level error banner used to be related by
 // comparing their MESSAGE TEXT: the banner hid itself whenever the card
@@ -23,10 +24,7 @@ const SHARED_ERROR = 'Could not read that archive';
 
 test('a second upload failing with a familiar message is still reported', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(
-		!(status.setup_required || (status.signups_enabled && status.password_login)),
-		'needs a fresh DB or SIGNUPS_ENABLED=true with password login'
-	);
+	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
 	const email = `e2e-archive-error-banner-${Date.now()}@example.com`;
 	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
 	expect(registered.ok()).toBeTruthy();

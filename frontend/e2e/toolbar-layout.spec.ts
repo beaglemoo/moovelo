@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { canRegister } from './support/auth';
 
 // The toolbar wraps onto a second (or third) row on anything narrower than
 // a wide desktop once a route is saved and grows Save/GPX/FIT/the route
@@ -9,10 +10,7 @@ const password = 'e2e-toolbar-layout-password-1';
 
 test('the search bar never overlaps a wrapped toolbar', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(
-		!(status.setup_required || (status.signups_enabled && status.password_login)),
-		'needs a fresh DB or SIGNUPS_ENABLED=true with password login'
-	);
+	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
 	const email = `e2e-toolbar-layout-${Date.now()}@example.com`;
 	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
 	expect(registered.ok()).toBeTruthy();

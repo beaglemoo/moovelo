@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { canRegister } from './support/auth';
 
 // Isochrone overlay from the map's context menu: "how far can I get in N
 // minutes" from a chosen point. Origin-anchored rather than route-anchored,
@@ -10,10 +11,7 @@ const password = 'e2e-isochrone-password-1';
 
 test('show and hide an isochrone from the context menu', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(
-		!(status.setup_required || (status.signups_enabled && status.password_login)),
-		'needs a fresh DB or SIGNUPS_ENABLED=true with password login'
-	);
+	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
 
 	const registered = await page.request.post('/api/auth/register', {
 		data: { email, password }

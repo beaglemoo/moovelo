@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { canRegister } from './support/auth';
 
 // The chat panel over a stubbed stream.
 //
@@ -22,10 +23,7 @@ function sse(frames: [string, unknown][]): string {
 
 async function signIn(page: import('@playwright/test').Page) {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(
-		!(status.setup_required || (status.signups_enabled && status.password_login)),
-		'needs a fresh DB or SIGNUPS_ENABLED=true with password login'
-	);
+	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
 	const email = `e2e-assistant-${Date.now()}-${accounts++}@example.com`;
 	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
 	expect(registered.ok()).toBeTruthy();

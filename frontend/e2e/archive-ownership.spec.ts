@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
+import { canRegister } from './support/auth';
 
 // `archive` and `pollTimer` in activities/+page.svelte used to be single,
 // unkeyed variables shared by every startArchive() call. The Import button
@@ -31,10 +32,7 @@ function statusPayload(id: string, filename: string, status: 'running' | 'done')
 
 test('a second archive import is not clobbered by the first, slower one', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(
-		!(status.setup_required || (status.signups_enabled && status.password_login)),
-		'needs a fresh DB or SIGNUPS_ENABLED=true with password login'
-	);
+	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
 	const email = `e2e-archive-ownership-${Date.now()}@example.com`;
 	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
 	expect(registered.ok()).toBeTruthy();
