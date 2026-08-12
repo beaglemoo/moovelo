@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Regression test: right-clicking a waypoint marker must open its context
 // menu without inserting a phantom via point (markers bubble events to the
@@ -11,7 +11,7 @@ const password = 'e2e-remove-password-1';
 
 test('remove waypoint via marker context menu', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 
 	const registered = await page.request.post('/api/auth/register', {
 		data: { email, password }

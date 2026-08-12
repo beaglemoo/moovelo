@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
-import { canRegister, NEEDS_REGISTRATION } from './support/auth';
+import { registerOrSkip } from './support/auth';
 
 // Two bugs, one cause, pinned together because the fix for the first produced
 // the second.
@@ -40,18 +40,10 @@ function job(id: string, filename: string, status: string, error: string | null 
 	};
 }
 
-async function registerOrSkip(page: import('@playwright/test').Page, label: string) {
-	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), NEEDS_REGISTRATION);
-	const email = `e2e-archive-${label}-${Date.now()}@example.com`;
-	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
-	expect(registered.ok()).toBeTruthy();
-}
-
 test('a second upload failing with a familiar message is reported against its own file', async ({
 	page
 }) => {
-	await registerOrSkip(page, 'banner');
+	await registerOrSkip(page, 'e2e-archive-banner', password);
 
 	let postCount = 0;
 	await page.route('**/api/activities/import/archive', async (route) => {
@@ -98,7 +90,7 @@ test('a second upload failing with a familiar message is reported against its ow
 });
 
 test('an upload in flight always says so', async ({ page }) => {
-	await registerOrSkip(page, 'inflight');
+	await registerOrSkip(page, 'e2e-archive-inflight', password);
 
 	// Held open so the test can observe the window between picking a file and
 	// the POST resolving - the window that previously showed nothing at all.

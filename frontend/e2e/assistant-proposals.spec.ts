@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Accepting what the assistant proposes.
 //
@@ -13,7 +13,7 @@ let accounts = 0;
 
 async function signIn(page: Page) {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 	const email = `e2e-proposal-${Date.now()}-${accounts++}@example.com`;
 	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
 	expect(registered.ok()).toBeTruthy();

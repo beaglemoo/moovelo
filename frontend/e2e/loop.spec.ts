@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Loop generator (services/loop.py): right-click a point, ask for a loop of
 // a chosen distance, and pick one of the returned candidates. The picked
@@ -16,7 +16,7 @@ test('loop from here produces a usable route', async ({ page }) => {
 	test.setTimeout(180_000);
 
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 
 	const registered = await page.request.post('/api/auth/register', {
 		data: { email, password }

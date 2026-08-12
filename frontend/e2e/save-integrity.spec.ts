@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Two ways a save used to persist something the rider never saw, both found
 // by review pass 3 in the fixes review pass 2 had just made.
@@ -8,7 +8,7 @@ const password = 'e2e-save-integrity-1';
 
 async function register(page: import('@playwright/test').Page, email: string) {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
 	expect(registered.ok()).toBeTruthy();
 }

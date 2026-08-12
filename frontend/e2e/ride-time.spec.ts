@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Regression/behaviour test: the displayed time in the planner's stats row
 // is the rider-adjusted ride-time estimate, computed on read from the
@@ -36,7 +36,7 @@ async function planASampleRoute(page: import('@playwright/test').Page) {
 
 test('halving the rider flat speed increases the displayed ride time', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 
 	const registered = await page.request.post('/api/auth/register', {
 		data: { email, password }

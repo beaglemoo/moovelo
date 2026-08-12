@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Route alternates (Valhalla's own `alternates`, only ever valid for an
 // exactly-2-waypoint A-to-B route): plan such a route, ask for alternatives,
@@ -16,7 +16,7 @@ const password = 'e2e-alternates-password-1';
 
 test('alternate routes list, and adopting one is undoable', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 
 	const registered = await page.request.post('/api/auth/register', {
 		data: { email, password }

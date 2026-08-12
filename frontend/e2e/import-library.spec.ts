@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
 // Imports a real GPX through the UI and exercises the library around it.
 // Runs against the dev compose stack and needs password registration to be
@@ -12,7 +12,7 @@ const fixture = fileURLToPath(new URL('./fixtures/tring.gpx', import.meta.url));
 
 test('import a GPX, then organise it in the library', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
 
 	const registered = await page.request.post('/api/auth/register', {
 		data: { email, password }
