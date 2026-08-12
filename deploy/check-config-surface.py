@@ -113,11 +113,36 @@ def _fields_in_block(body: list[ast.stmt], fields: set[str]) -> None:
         _collect_fields(item, fields)
 
 
+def _is_type_checking(test: ast.expr) -> bool:
+    """`if TYPE_CHECKING:` / `if typing.TYPE_CHECKING:`, the one branch that
+    is guaranteed never to run."""
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+
+
 def _collect_fields(node: ast.AST, fields: set[str]) -> None:
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         return
     if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
         fields.add(node.target.id)
+        return
+    # A TYPE_CHECKING body never executes, so nothing declared in it is a
+    # runtime attribute and pydantic never makes it a field. Counting one
+    # would have the guard demand an .env.example entry and two compose
+    # entries for a name that does not exist - the cry-wolf failure that
+    # makes a guard get deleted. Its `else` branch DOES run, so that is still
+    # descended into.
+    #
+    # This is the one dead branch worth special-casing, because it is the
+    # only one that is idiomatic. A general "is this branch reachable"
+    # question cannot be answered from the AST, and a guard that tried would
+    # be guessing; anything more exotic than TYPE_CHECKING is out of scope
+    # and will be over-reported rather than silently missed - the safe
+    # direction for a guard to be wrong in.
+    if isinstance(node, ast.If) and _is_type_checking(node.test):
+        for child in node.orelse:
+            _collect_fields(child, fields)
         return
     for child in ast.iter_child_nodes(node):
         _collect_fields(child, fields)
