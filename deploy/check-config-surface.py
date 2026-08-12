@@ -89,7 +89,7 @@ ENV_EXAMPLE_NON_SETTINGS_KEYS = {
 
 
 def _fields_in_block(body: list[ast.stmt], fields: set[str]) -> None:
-    """Annotated assignments in a class body, descending into nested blocks.
+    """Annotated assignments anywhere in a class body except inside a def.
 
     A field declared inside an `if` or a `try` is a perfectly ordinary
     pydantic-settings field at runtime, so a scan that only looked at the
@@ -97,18 +97,30 @@ def _fields_in_block(body: list[ast.stmt], fields: set[str]) -> None:
     cannot enumerate is a field it silently never checks, which is worse than
     no guard at all because the green tick claims otherwise.
 
-    Deliberately does NOT descend into a def or a nested class: a name bound
-    inside a method is a local, and counting it would demand an .env.example
-    entry for something no environment variable ever reaches.
+    The first version of this fix listed the block types to descend into
+    (if/try/with/for/while) and so reproduced that bug one construct over:
+    `match` was not in the list, and a field inside a `case` was still
+    invisible. Enumerating syntax is the wrong shape - the list is never
+    finished, and each gap is silent. So the rule is inverted: descend into
+    everything, and name only what must be skipped.
+
+    What must be skipped is a def or a nested class. A name bound inside a
+    method is a local, and demanding an .env.example entry for one would make
+    the guard cry wolf. Descending through expression nodes is harmless - an
+    annotated assignment is a statement and cannot appear inside one.
     """
     for item in body:
-        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
-            fields.add(item.target.id)
-        elif isinstance(item, (ast.If, ast.Try, ast.With, ast.For, ast.While)):
-            for attr in ("body", "orelse", "finalbody"):
-                _fields_in_block(getattr(item, attr, []) or [], fields)
-            for handler in getattr(item, "handlers", []):
-                _fields_in_block(handler.body, fields)
+        _collect_fields(item, fields)
+
+
+def _collect_fields(node: ast.AST, fields: set[str]) -> None:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        fields.add(node.target.id)
+        return
+    for child in ast.iter_child_nodes(node):
+        _collect_fields(child, fields)
 
 
 def settings_fields(config_path: Path) -> set[str]:
