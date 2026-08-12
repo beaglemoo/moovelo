@@ -1067,7 +1067,11 @@ handles it was given, so the server keeps no session.
 
 `POST /api/routes/import` takes a GPX, TCX or FIT upload.
 `services/importer.py` parses it (namespace-agnostic, tracks or route
-points, dropping implausible fixes). It also reads per-point timestamps
+points, dropping implausible fixes - Null Island, an unparseable
+lat/lon, or an elevation that parses as `NaN`/`inf`, which a real device
+can write and which Postgres refuses outright in a JSONB elevation
+profile; the point itself is kept, only its elevation is dropped). It
+also reads per-point timestamps
 where the file carries them, and records whether the file *declares*
 itself a course or an activity - FIT says so in its `file_id` message and
 TCX in its element structure, while GPX has no equivalent and stays
@@ -1442,6 +1446,8 @@ frontend/src/
     ├── pois.ts                   # POI category -> filter-chip grouping
     ├── unsaved.svelte.ts        # $state singleton: unsaved-edits flag for the layout's file drop
     ├── history.svelte.ts        # $state singleton: undo/redo stack over planner inputs
+    ├── latest.ts                # Latest (ownership token) + Poller (settle-on-every-exit poll loop),
+    │                            #   the one "latest wins" mechanism every async-state call site uses
     ├── import.svelte.ts         # $state ImportQueue: sequential upload, shared by library import,
     │                            #   the window-wide drop target and the activities page
     ├── map/MapView.svelte       # MapLibre init, layers, interactions, basemap/cycle-network/heatmap toggles
