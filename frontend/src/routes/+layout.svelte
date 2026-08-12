@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, auth, type UserInfo } from '$lib/api';
-	import { activityImportQueue, importQueue } from '$lib/import.svelte';
+	import { activityImportQueue, importQueue, pendingArchives } from '$lib/import.svelte';
 	import { unsaved } from '$lib/unsaved.svelte';
 	import type { Snippet } from 'svelte';
 
@@ -43,7 +43,15 @@
 		// else defaults to a planned route, including the planner itself,
 		// which is what most dropped files actually are.
 		if (page.url.pathname.startsWith('/activities')) {
-			await activityImportQueue.add(files);
+			// Split the same way the page's own Import button does. A Strava
+			// export is a .zip and goes to the archive endpoint; dropping one
+			// used to be sent to the single-ride endpoint, which answers 400 -
+			// so the flagship bulk import failed by drag and worked by button,
+			// for the one file type that page advertises accepting.
+			const zips = files.filter((file) => file.name.toLowerCase().endsWith('.zip'));
+			const singles = files.filter((file) => !file.name.toLowerCase().endsWith('.zip'));
+			if (singles.length) await activityImportQueue.add(singles);
+			if (zips.length) pendingArchives.add(zips);
 			return;
 		}
 

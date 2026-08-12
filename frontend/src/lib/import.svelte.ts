@@ -111,6 +111,33 @@ export const importQueue = new ImportQueue<SavedRoute>((file, preset) =>
 	routes.importFile(file, preset)
 );
 
+/**
+ * Archives dropped somewhere that cannot import them itself.
+ *
+ * The window-wide drop handler lives in the layout and has no archive
+ * machinery - that is page-local to /activities, which is the only place
+ * that can show a job's progress. Rather than give the layout a second
+ * implementation, it leaves the file here and the page drains it. The
+ * alternative, sending a .zip to the single-ride endpoint, is what used to
+ * happen: a 400, for the one file type that page advertises accepting.
+ */
+class PendingArchives {
+	files = $state<File[]>([]);
+
+	add(files: File[]) {
+		this.files = [...this.files, ...files];
+	}
+
+	/** Takes everything waiting, leaving the queue empty. */
+	drain(): File[] {
+		const taken = this.files;
+		this.files = [];
+		return taken;
+	}
+}
+
+export const pendingArchives = new PendingArchives();
+
 /** Rides, not plans. No preset: an activity is never routed, so there is
  * nothing for a costing bundle to influence. */
 export const activityImportQueue = new ImportQueue<ActivityDetail>((file) =>
