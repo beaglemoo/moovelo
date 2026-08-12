@@ -147,22 +147,35 @@ carries this signal (`search_index_meta.cycle_way_member_count`, null on an
 untouched pre-existing row, a real number the moment a rebuild finishes) -
 so the fix, again, is just re-running the indexer.
 
-An index built without `INDEX_ROADS` - which includes every index built
-before all-roads coverage existed - has no road ways
-(`search_index_meta.osm_way_count` is null, migration 0015). The two cases
-are deliberately indistinguishable, because the answer is the same in
-both: set the variable and re-run. `/api/coverage/roads` degrades to "needs a re-index" the same way;
-search, POIs, the network overlay and cycle-network coverage are all
+An index that has **never** been built with `INDEX_ROADS` has no road ways
+(`search_index_meta.osm_way_count` is null, migration 0015), and
+`/api/coverage/roads` degrades to "needs a re-index" the same way
+`/api/coverage/cycle-network` does above: set the variable and re-run.
+Search, POIs, the network overlay and cycle-network coverage are all
 unaffected. This is the biggest re-index yet in wall-clock time - see the
 table above - and worth planning around rather than running unattended
 alongside other load on a small host.
+
+An index that **has** been built with `INDEX_ROADS` at some point behaves
+differently on a later run that omits the flag: `publish()` treats
+`osm_ways` as the one table it does not blindly replace on every run, so a
+refresh without `INDEX_ROADS` leaves the existing road table - and the
+count describing it - exactly as they were, rather than truncating it back
+to empty. Road coverage keeps working off whatever the last roads-on build
+indexed; it just does not pick up anything OSM has changed since, until a
+run with the flag set again refreshes it. "Never indexed" and "was
+indexed, then a later refresh forgot the flag" are deliberately distinct
+outcomes now - only the first one degrades to "needs a re-index".
 
 ## Refreshing data (monthly)
 
 OSM data changes constantly; Geofabrik extracts are updated daily. To
 refresh, run the same wipe-and-rebuild as above, then rebuild the place
-index if you use it - wiping the volume deletes the extract it reads. A
-scheduled refresh sidecar (compose cron, off by default) is planned.
+index if you use it - wiping the volume deletes the extract it reads. If
+you run with all-roads coverage enabled, pass `INDEX_ROADS=true` on every
+refresh, not just the first: as above, omitting it on a later run does not
+delete the road table, but it does leave it un-refreshed. A scheduled
+refresh sidecar (compose cron, off by default) is planned.
 
 ## Disk and memory expectations
 

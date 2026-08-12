@@ -79,18 +79,25 @@ the "Match older rides" button on /activities to backfill those.
 ## All-roads coverage says "needs a re-index"
 
 Usually because you have not asked for it. Road ways are **off by
-default** - `/api/coverage/roads` says "needs a re-index" both for an
-index built before the feature existed and for one built without the
-switch, because the fix is the same either way:
+default**, so `/api/coverage/roads` says "needs a re-index" - rather than
+a dishonest 0% - for any install that has never run the indexer with the
+switch on:
 
 ```sh
 INDEX_ROADS=true docker compose --profile index run --rm indexer
 ```
 
-`/api/coverage/roads` says so rather than reporting 0%. As with
-cycle-network coverage, matching does not depend on the index, so
+As with cycle-network coverage, matching does not depend on the index, so
 activities matched before the re-index show their coverage the moment it
 catches up.
+
+This message is specifically "never built with the switch on" - it is not
+shown just because your most recent refresh happened to omit
+`INDEX_ROADS`. A refresh that omits it leaves a previously built road
+table alone rather than deleting it, so coverage keeps answering off
+whatever roads were indexed last time; it just will not reflect anything
+OSM has changed since. See [docs/data.md](data.md#refreshing-data-monthly)
+if you run all-roads coverage and want to keep it current.
 
 **This re-index takes much longer than the ones before it - about
 8 minutes on England, against ~37 seconds before.** Keeping every
