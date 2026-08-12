@@ -652,7 +652,15 @@ this feature shipped have never been attempted.
 
 ### `GET /api/coverage/cycle-network`
 
-Ridden vs total metres per network tier (icn/ncn/rcn/lcn), within a bbox:
+Ridden vs total metres per network tier (icn/ncn/rcn/lcn), within a bbox.
+
+`ridden_m` is **ways touched, not metres pedalled**: the `CASE WHEN ridden`
+sums a way's whole clipped length as soon as `activity_ways` has a single
+row for it, so riding 10 m of a 500 m lane contributes all 500 m. That is
+the intended measure - the question is "have I been down this road" - but
+it means `ridden_m` routinely exceeds the rider's actual distance, and a
+reader who takes it for a total will think it is broken. A 2.7 km staging
+ride reported 3.9 km ridden. `docs/guide.md` says so in the rider's words.
 
 ```sql
 SELECT network,
@@ -719,9 +727,13 @@ happen to carry a National/Regional/Local Cycle Network relation.
 
 **`osm_ways`** is published by the indexer, one row per OSM highway way
 kept by `categories.py:road_highway` - every `highway=*` value except
-`motorway`, `motorway_link`, `proposed`, `construction` and `raceway`.
-Footways, paths, bridleways and tracks are kept on purpose - people ride
-them, and dropping them would make the denominator lie by omission.
+`motorway`, `motorway_link`, `proposed`, `construction`, `raceway`,
+`steps` and `no`. Footways, paths, bridleways and tracks are kept on
+purpose - people ride them, and dropping them would make the denominator
+lie by omission. Steps fail that same test in the other direction (a bike
+goes up them carried, not ridden), and `highway=no` is the tag for a way
+that is explicitly not a highway; both were measured in a real staging
+denominator before being excluded.
 `access=private`/`no` is not filtered either: a locked gate does not erase
 a road from the map, and the question is "how much of the network near
 you", not "how much you were allowed on". Unlike `cycle_way_members`, a

@@ -465,6 +465,14 @@ NCN route *and* a local one counts towards both, because it genuinely is
 part of both networks - the tiers are reported separately and never added
 together, so nothing is double counted.
 
+**A way counts once you have ridden any of it.** Coverage is measured in
+ways touched, not metres pedalled: ride 10 m of a 500 m lane and the whole
+lane counts as ridden. That is deliberate - it answers "have I been down
+this road", which is the question a coverage map is for - but it does mean
+the ridden figure is not your distance cycled and will usually exceed it.
+A 2.7 km test ride reported 3.9 km ridden, which is correct for what is
+being measured and surprising if you expect a total.
+
 Coverage needs two things that ordinary route planning does not:
 
 - **A place index that includes route members.** If you built your index
@@ -498,7 +506,12 @@ is blunter and wider: it counts a quiet residential street the same as a
 gravel bridleway, and it is the honest answer to "how much of the roads
 around here have I actually ridden". Footways, paths, bridleways and
 tracks are all counted - people ride them - but motorways and a handful of
-other classes a bicycle cannot legally or physically use are not.
+other classes a bicycle cannot legally or physically use are not. Steps are
+excluded on the same test: you carry a bike up them rather than ride it, so
+counting them would make your coverage read lower than it really is.
+
+The ways-touched rule above applies here too, and bites harder, because
+ordinary streets are longer than signed route segments.
 
 It needs the same two things the signed-network percentage does: a place
 index that includes every bikeable way (an index built before this

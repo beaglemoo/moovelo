@@ -110,7 +110,24 @@ KEPT_POI_TAGS = (
 # you ridden", not "how much of it were you allowed to ride" - the same
 # reasoning that keeps unsigned bridleways and farm tracks in rather than
 # guessing at legal access from a tag that is inconsistently mapped anyway.
-ROAD_HIGHWAY_EXCLUDE = ("construction", "motorway", "motorway_link", "proposed", "raceway")
+#
+# `steps` and `no` were added after staging measurement showed them in a real
+# denominator (0.7 km and 2.0 km in one rider's box). Both fail the test this
+# list applies. You carry a bike up steps rather than riding them, which is
+# the distinction between steps and the footways and paths kept above -
+# those are ridable, if sometimes rudely. And `highway=no` is not a road at
+# all: it is the tag mappers use to say a way is explicitly not a highway.
+# Counting either makes the percentage read lower than the rider's real
+# coverage, which is the same kind of lie as leaving footways out.
+ROAD_HIGHWAY_EXCLUDE = (
+    "construction",
+    "motorway",
+    "motorway_link",
+    "no",
+    "proposed",
+    "raceway",
+    "steps",
+)
 
 
 def filter_expressions(include_roads: bool = True) -> list[str]:

@@ -221,6 +221,11 @@ def test_a_motorway_is_not_a_road_way(rows: list[object]) -> None:
         ({"highway": "proposed"}, None),
         ({"highway": "construction"}, None),
         ({"highway": "raceway"}, None),
+        # Measured in a real staging denominator: 0.7 km of steps and 2.0 km
+        # of highway=no. You carry a bike up steps rather than ride them, and
+        # highway=no is the tag for "this is explicitly not a highway".
+        ({"highway": "steps"}, None),
+        ({"highway": "no"}, None),
         ({}, None),
         # access=private/no is deliberately not filtered - see
         # ROAD_HIGHWAY_EXCLUDE's own docstring for why.
@@ -241,6 +246,8 @@ def test_road_highway_exclude_list_is_exactly_whats_documented() -> None:
         "proposed",
         "construction",
         "raceway",
+        "steps",
+        "no",
     }
 
 
