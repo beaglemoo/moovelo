@@ -16,11 +16,11 @@ import pytest
 TEST_DB_HOST = "127.0.0.1:5433"
 ADMIN_URL = f"postgresql://bikegps:bikegps@{TEST_DB_HOST}/bikegps"
 
-# A hand-written mirror of the columns backend migrations 0006 and 0014
-# actually define for the tables db.py touches - not a full copy. Indexes
-# beyond what db.py's own queries rely on (the natural-key uniqueness
-# publish() dedupes against) are left out, the same way the indexer's own
-# staging clones leave them out.
+# A hand-written mirror of the columns backend migrations 0006, 0014, 0015
+# and 0016 actually define for the tables db.py touches - not a full copy.
+# Indexes beyond what db.py's own queries rely on (the natural-key
+# uniqueness publish() dedupes against) are left out, the same way the
+# indexer's own staging clones leave them out.
 _SCHEMA = """
 CREATE EXTENSION IF NOT EXISTS postgis;
 
@@ -88,7 +88,8 @@ CREATE TABLE search_index_meta (
     poi_count integer NOT NULL,
     cycle_way_count integer NOT NULL,
     cycle_way_member_count integer,
-    osm_way_count integer
+    osm_way_count integer,
+    osm_ways_source_files text[]
 );
 """
 

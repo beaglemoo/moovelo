@@ -362,7 +362,13 @@ def publish(
     constructing - "never indexed" and "was indexed, then wiped by an
     unrelated refresh" must not look alike, so a run that did not rebuild
     roads leaves the live table, and the metadata describing it, exactly as
-    they were.
+    they were. "Exactly as they were" includes osm_ways_source_files, not
+    only osm_way_count: `source_files` (the parameter) always describes
+    *this* run, roads-rebuilt or not, so without a column recording what
+    osm_ways itself was last built from, a roads-off run against a
+    different extract to the one that last built osm_ways would leave
+    search_index_meta claiming the new extract while the road table quietly
+    kept describing the old one - see migration 0016.
     """
     roads_rebuilt = "osm_ways" in counts
     tables = (
@@ -400,22 +406,31 @@ def publish(
             )
 
         osm_way_count = counts.get("osm_ways")
+        osm_ways_source_files = source_files if roads_rebuilt else None
         if not roads_rebuilt:
-            # The live table was left untouched above, so the count
-            # describing it has to be too - otherwise the metadata would
-            # claim "never indexed" (NULL) or "empty" (0) about a table
-            # that may still hold real rows from an earlier build.
-            cursor.execute("SELECT osm_way_count FROM search_index_meta")
+            # The live table was left untouched above, so everything that
+            # describes it has to be too - otherwise the metadata would
+            # claim "never indexed" (NULL), "empty" (0), or "built from
+            # today's extract" about a table that may still hold real rows,
+            # and a real provenance, from an earlier build. See migration
+            # 0016 for why osm_ways_source_files exists at all: without it,
+            # source_files below is unconditionally overwritten with this
+            # run's files even when osm_ways itself was not touched, so nothing
+            # would tell /api/coverage/roads that a rebuild against a
+            # different extract has left the road table describing somewhere
+            # else entirely.
+            cursor.execute("SELECT osm_way_count, osm_ways_source_files FROM search_index_meta")
             previous = cursor.fetchone()
-            osm_way_count = previous[0] if previous is not None else None
+            if previous is not None:
+                osm_way_count, osm_ways_source_files = previous
 
         cursor.execute("DELETE FROM search_index_meta")
         cursor.execute(
             """
             INSERT INTO search_index_meta
                 (built_at, source_files, place_count, poi_count, cycle_way_count,
-                 cycle_way_member_count, osm_way_count)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                 cycle_way_member_count, osm_way_count, osm_ways_source_files)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 datetime.now(UTC),
@@ -429,6 +444,7 @@ def publish(
                 # than reporting a dishonest 0%.
                 counts["cycle_members"],
                 osm_way_count,
+                osm_ways_source_files,
             ),
         )
     connection.commit()

@@ -142,6 +142,31 @@ async def roads(
                 "(see docs/troubleshooting.md)."
             ),
         )
+    if meta.osm_ways_source_files is not None and meta.osm_ways_source_files != meta.source_files:
+        # A rebuild with INDEX_ROADS off leaves osm_ways untouched but still
+        # overwrites source_files with whatever extract that run used
+        # (indexer/db.py:publish) - so a real mismatch here means "osm_ways
+        # was last built from a different extract than the rest of the
+        # index", not a transient glitch. Reporting coverage against it would
+        # silently mix two different countries' worth of roads and rides;
+        # see migration 0016.
+        #
+        # NULL is treated as "unknown, not mismatched" rather than a second
+        # reason to refuse: an install upgrading from before this column
+        # existed has real rows in osm_ways and a real osm_way_count, but
+        # nothing yet recorded about which extract built them, until its own
+        # next roads-on rebuild fills the column in for the first time.
+        # Blocking that transitional state would regress every existing
+        # install's coverage the moment this migration lands, to guard
+        # against a mismatch nothing has actually observed yet.
+        return RoadCoverageResponse(
+            available=False,
+            reason=(
+                "The road index was last built from a different extract than the rest "
+                "of the place index and needs a re-index with roads enabled "
+                "(see docs/troubleshooting.md)."
+            ),
+        )
 
     bbox = await _resolve_bbox(db, user, explicit)
     if bbox is None:

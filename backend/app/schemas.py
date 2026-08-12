@@ -506,10 +506,15 @@ class RoadCoverageResponse(BaseModel):
     on.
 
     `available` is False whenever the answer would be misleading rather
-    than merely absent, the same three reasons CoverageResponse's own
-    docstring gives: no place index built yet, one built before this
-    feature added osm_ways (search_index_meta.osm_way_count is null), or
-    the rider has imported nothing to centre a default bbox on.
+    than merely absent: the same three reasons CoverageResponse's own
+    docstring gives (no place index built yet, one built before this
+    feature added osm_ways - search_index_meta.osm_way_count is null - or
+    the rider has imported nothing to centre a default bbox on), plus one
+    more specific to this table: osm_ways was last (re)built from a
+    different extract than the rest of the index
+    (search_index_meta.osm_ways_source_files != source_files - see
+    migration 0016), which a roads-off rebuild against a new extract leaves
+    behind without anything else recording it happened.
     """
 
     available: bool
