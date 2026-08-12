@@ -116,3 +116,55 @@ test('the panel is absent when the assistant is not configured', async ({ page }
 	await expect(page.getByRole('button', { name: 'Ask for a route' })).toHaveCount(0);
 	await expect(page.getByLabel('Ask the route assistant')).toHaveCount(0);
 });
+
+test('narration from earlier rounds stays out of the answer', async ({ page }) => {
+	await signIn(page);
+
+	await page.route('**/api/config', async (route) => {
+		const response = await route.fetch();
+		const config = await response.json();
+		await route.fulfill({ json: { ...config, assistant_enabled: true } });
+	});
+
+	// A real multi-round turn: the model narrates before each tool call and
+	// only answers at the end. Every one of these frames used to append to the
+	// same bubble, so the rider read four sentences of "let me..." ahead of
+	// the one that answered them.
+	await page.route('**/api/assistant/chat/stream', async (route) => {
+		await route.fulfill({
+			status: 200,
+			headers: { 'content-type': 'text/event-stream' },
+			body: sse([
+				['token', { text: "I'll plan that. Let me search for the trail first." }],
+				['tool_call', { name: 'search_place' }],
+				['tool_result', { name: 'search_place', error: null }],
+				['token', { text: 'My search finds the woodland near Aspley Heath.' }],
+				['tool_call', { name: 'plan_route' }],
+				['tool_result', { name: 'plan_route', error: null }],
+				['token', { text: 'Woburn Sands trail, 13.0 km with 188 m of climbing.' }],
+				['done', { stopped_early: null, tools_called: ['search_place', 'plan_route'] }]
+			])
+		});
+	});
+
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Ask for a route' }).click();
+	const ask = page.getByLabel('Ask the route assistant');
+	await ask.fill('a route to the Woburn Sands bike trail');
+	await page.getByRole('button', { name: 'Ask' }).click();
+
+	const log = page.getByRole('log', { name: 'Assistant conversation' });
+	await expect(log).toContainText('Woburn Sands trail, 13.0 km with 188 m of climbing.');
+	// The turn is over, so this is the settled log, not a mid-stream snapshot.
+	await expect(page.getByRole('button', { name: 'Ask' })).toBeVisible();
+
+	// The narration is gone from the panel entirely - the status line already
+	// said "Searching places" and "Planning the route" while they ran.
+	await expect(log).not.toContainText('Let me search');
+	await expect(log).not.toContainText('My search finds');
+
+	// And the answer stands alone in its own bubble rather than being the
+	// tail of a paragraph that began three rounds earlier.
+	const reply = log.locator('.assistant-entry:not(.mine)').last();
+	await expect(reply).toHaveText('Woburn Sands trail, 13.0 km with 188 m of climbing.');
+});
