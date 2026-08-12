@@ -30,20 +30,33 @@ test('multi-step undo and redo over waypoint edits', async ({ page }) => {
 	const undoBtn = page.getByRole('button', { name: 'Undo', exact: true });
 	const redoBtn = page.getByRole('button', { name: 'Redo', exact: true });
 
+	// Every click below is a FRACTION of the live canvas box, never a fixed
+	// pixel offset from its centre. The map area shrinks as the panel beside
+	// it fills - and the panel's height depends on whether climbs and POIs
+	// have finished loading, so it differs from run to run. A fixed offset
+	// like `cy - 70` therefore lands on open map on a tall map and on the
+	// toolbar or search bar (both overlays ON the canvas, at 10px and 52px)
+	// on a short one, failing about 40% of the time with what looks exactly
+	// like a broken redo. Same lesson avoids.spec.ts learned at (150, -150).
+	//
+	// The band is kept clear of both edges: the toolbar and search bar own the
+	// top, and the basemap/cycle/heatmap toggles, the assistant pill and
+	// MapLibre's attribution own the bottom.
+	const clickAt = async (fx: number, fy: number) => {
+		const live = (await canvas.boundingBox())!;
+		await page.mouse.click(live.x + live.width * fx, live.y + live.height * fy);
+	};
+
 	// The first click retries until it actually lands: MapView only attaches
 	// its interaction handlers on the map's `load` event, so an early click
 	// silently no-ops when tiles are still arriving.
 	await expect(async () => {
-		const box = (await canvas.boundingBox())!;
-		await page.mouse.click(box.x + box.width / 2 - 60, box.y + box.height / 2 - 40);
+		await clickAt(0.35, 0.5);
 		await expect(markers).toHaveCount(1, { timeout: 1_000 });
 	}).toPass({ timeout: 30_000 });
 
-	const box = (await canvas.boundingBox())!;
-	const cx = box.x + box.width / 2;
-	const cy = box.y + box.height / 2;
-	await page.mouse.click(cx, cy);
-	await page.mouse.click(cx + 60, cy + 40);
+	await clickAt(0.5, 0.6);
+	await clickAt(0.62, 0.7);
 	await expect(markers).toHaveCount(3);
 	await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled({
 		timeout: 30_000
@@ -68,7 +81,7 @@ test('multi-step undo and redo over waypoint edits', async ({ page }) => {
 	// A fresh edit after undo clears redo.
 	await undoBtn.click();
 	await expect(markers).toHaveCount(2);
-	await page.mouse.click(cx + 90, cy - 70);
+	await clickAt(0.72, 0.45);
 	await expect(markers).toHaveCount(3);
 	await expect(redoBtn).toBeDisabled();
 
