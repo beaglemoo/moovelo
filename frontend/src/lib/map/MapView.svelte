@@ -934,8 +934,21 @@
 	// already in progress. Reads `waypoints` only to track-and-rerun after a
 	// rebuild replaces `markers` with fresh elements - it does nothing with
 	// the value itself.
+	//
+	// The read has to touch every element, not just name the array: `void
+	// waypoints` only subscribes to *reassignment* of the prop, and
+	// +page.svelte never reassigns it - every edit is push/splice/an index
+	// write in place. Proved live with a minimal repro of this exact shape:
+	// with a bare `void` read, this effect fires once on mount and then
+	// never again for a push, so hovering a row in the waypoint list and then
+	// adding or removing a waypoint left the OLD marker glowing (or nothing
+	// glowing at all) on the freshly rebuilt set, even though the row itself
+	// still showed as hovered - stashing this fix and rerunning the repro
+	// without it reproduced exactly that. `.forEach` touches `.length` and
+	// every index, which is what actually registers push, splice AND a
+	// same-length index write (setStart/setEnd) as dependencies.
 	$effect(() => {
-		void waypoints;
+		waypoints.forEach(() => {});
 		const hovered = hoveredWaypointIndex;
 		markers.forEach((marker, i) => {
 			marker.getElement().classList.toggle('marker-hovered', i === hovered);
@@ -1249,6 +1262,7 @@
 	<button
 		type="button"
 		class="overlay-toggle heatmap-toggle"
+		class:heatmap-toggle-solo={!cycleNetworkAvailable}
 		class:active={heatmap}
 		aria-pressed={heatmap}
 		title="Show where you've ridden before"
@@ -1310,11 +1324,18 @@
 		border-color: #268bd2;
 		color: #fff;
 	}
-	/* Offset past "Cycle routes", which the toggle before it may or may not
-	 * render - fixed rather than flow-based, matching how .overlay-toggle
-	 * itself is positioned relative to .basemap-switch. */
+	/* Offset past "Cycle routes" - fixed rather than flow-based, matching how
+	 * .overlay-toggle itself is positioned relative to .basemap-switch.
+	 * cycleNetworkAvailable and heatmapAvailable are independent (search_enabled
+	 * vs. this rider having any activities), so the network toggle before this
+	 * one is not guaranteed to render - .heatmap-toggle-solo drops straight
+	 * into .overlay-toggle's own 132px slot instead of leaving a bare gap
+	 * where a toggle that never rendered would have been. */
 	.heatmap-toggle {
 		left: 232px;
+	}
+	.heatmap-toggle.heatmap-toggle-solo {
+		left: 132px;
 	}
 	.heatmap-toggle.active {
 		background: #dc322f;
