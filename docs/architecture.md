@@ -407,6 +407,27 @@ imported/failed/skipped/duplicate counts and up to 20 per-file problem
 strings). A job is process memory only, so a restart mid-import reports
 "interrupted", not a silent resume against bytes that are gone.
 
+The archive itself is capped at `MAX_ARCHIVE_BYTES` (500 MB), and the
+queue behind the one worker is bounded to `MAX_QUEUED_ARCHIVES` (5) -
+`submit` refuses outright with a 429 once it is full, rather than an
+unbounded burst of submissions holding gigabytes of archive bytes resident
+with nothing to show for it but a longer queue. 5 * 500 MB is already a
+generous 2.5 GB of ride data waiting its turn.
+
+That cap is enforced twice: `_read_capped` here bounds what actually gets
+read, but `main.py`'s `reject_oversized_uploads` middleware rejects an
+oversized `Content-Length` before FastAPI ever spools the body into a temp
+file, which is the only check early enough to matter for a genuinely huge
+upload. Its per-path cap is an explicit table
+(`/api/routes/import`, `/api/activities/import`,
+`/api/activities/import/archive`, each with its own byte limit) rather
+than a `path.endswith("/import")` heuristic - that heuristic used to miss
+this endpoint entirely (its path doesn't end in `/import`) and, separately,
+matched the single-ride `/api/activities/import` against the much larger
+archive ceiling purely because both paths start with `/api/activities`. A
+route added to the table with no entry gets no pre-read guard rather than
+silently inheriting the wrong one.
+
 **Reading the archive never trusts the archive.** `list_entries` bounds
 entry count (`MAX_ENTRIES`, 20,000) and claimed total size before opening
 anything, and `_read_entry`/`_decompress_member` read every member -
@@ -438,20 +459,32 @@ collide on the same Strava id. Files with no derivable id (a hand-built
 zip) are imported unconditionally; there is nothing to deduplicate them
 against.
 
-**One failed file costs that file, not the archive.** Each entry is
-parsed inside its own `try`/`except`, and a `RouteImportError` or
-`ArchiveError` increments `failed` and appends a `path: reason` string to
-`problems` rather than aborting the loop - the same "degrade per unit of
-work, not the whole request" shape as `trace_route`'s chunking. The
-manifest's own activity name wins over whatever the file calls itself,
-since it is the name the rider actually gave the ride.
+**One failed file costs that file, not the archive - literally, not just
+by intent.** Each entry is parsed *and committed* inside its own
+`try`/`except`: a `RouteImportError`, `ArchiveError` or a raw
+`SQLAlchemyError` rolls back that one entry, increments `failed`, and
+appends a problem string to `problems` rather than aborting the loop - the
+same "degrade per unit of work, not the whole request" shape as
+`trace_route`'s chunking. The commit has to sit *inside* the loop, not
+once at the end: SQLAlchemy batches pending inserts that share a table
+into one multi-row `INSERT`, so without a commit between entries, a
+single row Postgres refuses (a stray `NaN` that slipped past the
+importer's own guard, say) took every row queued alongside it down in the
+same statement - including rides already counted as imported earlier in
+the same batch. A `SQLAlchemyError`'s own message carries the query and
+its bound parameters, which is neither readable nor safe to hand back
+verbatim, so that case collapses to a generic "could not be saved" in
+`problems`; a `RouteImportError`/`ArchiveError` still shows its
+rider-facing reason unchanged. The manifest's own activity name wins over
+whatever the file calls itself, since it is the name the rider actually
+gave the ride.
 
-Newly created activities are handed to `way_matching.py`'s queue **after
-the whole archive commits**, the same "off the request path" reasoning
-`POST /api/activities/import` uses for a single file: matching hundreds
-of rides is itself minutes of Valhalla round trips, so coverage lags a
-bulk import by however long that queue takes to drain, rather than
-holding the archive job open for it.
+Newly created activities are handed to `way_matching.py`'s queue once
+every entry in the archive has been read and individually committed, the
+same "off the request path" reasoning `POST /api/activities/import` uses
+for a single file: matching hundreds of rides is itself minutes of
+Valhalla round trips, so coverage lags a bulk import by however long that
+queue takes to drain, rather than holding the archive job open for it.
 
 ## Personal heatmap
 
@@ -577,13 +610,24 @@ generated, never true of a raw GPS recording. Coverage instead uses
 `shape_match: map_snap` (`ValhallaClient.match_ways`), the same mode
 `trace_route` already uses to recover maneuvers for an imported file:
 downsampled to ~15 m spacing, chunked at 1000 points with no shared
-boundary point (only aggregate metres per way matter, not continuous
-geometry), requesting `edge.way_id` and `edge.length`. Costing is the
+boundary point, requesting `edge.way_id` and `edge.length`. Costing is the
 gravel bundle regardless of anything the rider might plan with - an
 activity carries no preset, it is a recording - and unlike edge_walk,
 map_snap genuinely uses costing to decide what a trace can snap to, so the
 most surface-tolerant bundle is what keeps a real towpath or bridleway
 ride from under-matching.
+
+Not sharing a boundary point was believed to be free - nothing needs a
+continuous shape back, only aggregate metres per way - but measured
+against real traces it is not: without a shared point, each chunk's own
+`map_snap` independently decides where its trace starts and ends near the
+cut, and a way straddling the boundary can come up 20-56 m short of its
+true matched length rather than the two chunks summing correctly. Left as
+a known, one-directional source of undercounting (never over-counting)
+rather than "fixed" by sharing a point instead - that would very likely
+trade it for double-counting, since a shared point can land mid-edge and
+both chunks would then report a length for it, with no lookup from way id
+back to that edge to deduplicate it (`ValhallaClient.match_ways`).
 
 A way credited from a sub-5-metre sliver (a chunk boundary can contribute
 one) is dropped as noise (`MIN_MATCHED_WAY_LENGTH_M`) rather than counted -
@@ -611,15 +655,44 @@ this feature shipped have never been attempted.
 Ridden vs total metres per network tier (icn/ncn/rcn/lcn), within a bbox:
 
 ```sql
-SELECT cw.network,
-       SUM(cwm.length_m) AS total_m,
-       SUM(CASE WHEN aw.way_id IS NOT NULL THEN cwm.length_m ELSE 0 END) AS ridden_m
-FROM cycle_ways cw
-JOIN cycle_way_members cwm ON cwm.relation_id = cw.id
-LEFT JOIN activity_ways aw ON aw.way_id = cwm.way_id AND aw.user_id = :user_id
-WHERE cw.geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
-GROUP BY cw.network
+SELECT network,
+       SUM(length_m) AS total_m,
+       SUM(CASE WHEN ridden THEN length_m ELSE 0 END) AS ridden_m
+FROM (
+    SELECT DISTINCT ON (cw.network, cwm.way_id)
+           cw.network AS network,
+           ST_Length(ST_Intersection(cwm.geom, envelope)::geography) AS length_m,
+           (aw.way_id IS NOT NULL) AS ridden
+    FROM cycle_way_members cwm
+    JOIN cycle_ways cw ON cw.id = cwm.relation_id
+    LEFT JOIN activity_ways aw ON aw.way_id = cwm.way_id AND aw.user_id = :user_id
+    WHERE cwm.geom && envelope
+    ORDER BY cw.network, cwm.way_id, ridden DESC
+) member
+GROUP BY network
 ```
+
+(`envelope` above is `ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)`,
+inlined twice in the real query.) Filtering `cwm.geom` rather than
+`cycle_ways.geom`, and the `DISTINCT ON (cw.network, cwm.way_id)` dedup,
+are the two fixes described under [Cycle-network
+coverage](#cycle-network-coverage) above - both already visible in this
+shape. A third, the same family again, was found later and is not yet
+described there:
+
+- **Clipped before summed.** `cwm.geom && envelope` is a bounding-box
+  test, true the moment a way's *box* merely touches the query area, and
+  the unclipped `cwm.length_m` is the way's whole stored length regardless
+  of how much of it actually falls inside. A box near Dover pulled in
+  EuroVelo 2's 213.7 km cross-Channel ferry link - whose line never enters
+  the box at all, only its bounding box does - inflating that box's icn
+  figure 3.87x; an ordinary inland box still inflated ~6.5%.
+  `ST_Intersection` clips each way to the envelope before `ST_Length` is
+  asked about it (cast to `geography`, the same metres-on-a-spheroid unit
+  the indexer used to write `length_m` in the first place -
+  `indexer/indexer/db.py`), and it has to happen inside the `DISTINCT ON`
+  subquery rather than after it, so the row the dedup keeps is the one
+  whose clipped length is actually reported.
 
 The `user_id` filter lives in the `LEFT JOIN`'s own `ON` clause, not a
 `WHERE` added after it - moving it to `WHERE` would turn the join into an
@@ -703,16 +776,24 @@ a bounding-box test.
 
 **`GET /api/coverage/roads`** is `/cycle-network`'s SQL with the relation
 join and per-tier `DISTINCT ON` removed - `osm_ways` already has one row
-per way, so there is nothing to deduplicate:
+per way, so there is nothing to deduplicate - but the same clip-before-sum
+fix applies, for the same reason: `ow.geom && envelope` is a bounding-box
+test, and a way that only touches the box was being counted at its whole
+stored length rather than the length actually inside it.
 
 ```sql
-SELECT ow.highway,
-       SUM(ow.length_m) AS total_m,
-       SUM(CASE WHEN aw.way_id IS NOT NULL THEN ow.length_m ELSE 0 END) AS ridden_m
-FROM osm_ways ow
-LEFT JOIN activity_ways aw ON aw.way_id = ow.way_id AND aw.user_id = :user_id
-WHERE ow.geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
-GROUP BY ow.highway
+SELECT highway,
+       SUM(clipped_m) AS total_m,
+       SUM(CASE WHEN ridden THEN clipped_m ELSE 0 END) AS ridden_m
+FROM (
+    SELECT ow.highway AS highway,
+           ST_Length(ST_Intersection(ow.geom, envelope)::geography) AS clipped_m,
+           (aw.way_id IS NOT NULL) AS ridden
+    FROM osm_ways ow
+    LEFT JOIN activity_ways aw ON aw.way_id = ow.way_id AND aw.user_id = :user_id
+    WHERE ow.geom && envelope
+) clipped
+GROUP BY highway
 ```
 
 Bbox handling, `available: false` degradation and the default-bbox helper
@@ -986,7 +1067,11 @@ handles it was given, so the server keeps no session.
 
 `POST /api/routes/import` takes a GPX, TCX or FIT upload.
 `services/importer.py` parses it (namespace-agnostic, tracks or route
-points, dropping implausible fixes). It also reads per-point timestamps
+points, dropping implausible fixes - Null Island, an unparseable
+lat/lon, or an elevation that parses as `NaN`/`inf`, which a real device
+can write and which Postgres refuses outright in a JSONB elevation
+profile; the point itself is kept, only its elevation is dropped). It
+also reads per-point timestamps
 where the file carries them, and records whether the file *declares*
 itself a course or an activity - FIT says so in its `file_id` message and
 TCX in its element structure, while GPX has no equivalent and stays
@@ -1361,6 +1446,8 @@ frontend/src/
     ├── pois.ts                   # POI category -> filter-chip grouping
     ├── unsaved.svelte.ts        # $state singleton: unsaved-edits flag for the layout's file drop
     ├── history.svelte.ts        # $state singleton: undo/redo stack over planner inputs
+    ├── latest.ts                # Latest (ownership token) + Poller (settle-on-every-exit poll loop),
+    │                            #   the one "latest wins" mechanism every async-state call site uses
     ├── import.svelte.ts         # $state ImportQueue: sequential upload, shared by library import,
     │                            #   the window-wide drop target and the activities page
     ├── map/MapView.svelte       # MapLibre init, layers, interactions, basemap/cycle-network/heatmap toggles

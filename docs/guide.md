@@ -382,6 +382,9 @@ and its cues. Moovelo asks before letting that happen.
 Rides you actually did live under **Activities**, separately from the
 routes you planned. Import a GPX, TCX or FIT file straight off a head
 unit and it lands there, with its date, distance, moving time and ascent.
+Dropping files anywhere on this page - including a Strava export .zip -
+imports them here rather than treating them as a route to plan, which is
+what dropping a file elsewhere in the app does.
 
 The distinction is deliberate. A route is a plan: it has a preset, it can
 be re-routed, it can be pushed to your head unit. An activity is a
@@ -412,6 +415,12 @@ archive adds only the rides you did since, so keeping the history current
 costs nothing. A file that will not parse costs that one ride and says
 which, rather than failing the import.
 
+The archive itself is capped at 500 MB, which comfortably covers a full
+Strava export. Only a handful of archives can be queued at once - if
+you've just uploaded several and the import worker hasn't caught up yet,
+a further upload is turned away with a message asking you to try again in
+a few minutes, rather than piling up unprocessed in memory.
+
 There is no Strava *sync*, and that is deliberate - see
 [the FAQ](faq.md#why-is-there-no-strava-sync) for the clause numbers.
 
@@ -440,10 +449,16 @@ international routes each get their own percentage. The heatmap above
 shows you *where* you have been; this puts a number on it.
 
 **What the percentage means.** The area is a box around your own rides,
-not the whole country. The denominator is every signed way inside that
-box; the numerator is the ones your rides have been matched onto. Rides
-are matched to real OSM ways, not measured by proximity, so riding the
-carriageway does not credit you for the cycleway running alongside it.
+not the whole country. The denominator is the length of every signed way
+that actually falls *inside* that box, not a way's whole length the
+moment it merely comes near - a way is clipped to the box before it's
+measured, so a route that only brushes the edge of your box with a long
+way elsewhere isn't counted as if all of it were there (one cross-Channel
+ferry link was measured inflating a nearby box's figure almost 4x before
+this was fixed). The numerator is the ones your rides have been matched
+onto. Rides are matched to real OSM ways, not measured by proximity, so
+riding the carriageway does not credit you for the cycleway running
+alongside it.
 
 A way carrying two routes of the same tier counts once. A way carrying an
 NCN route *and* a local one counts towards both, because it genuinely is
