@@ -185,6 +185,47 @@ def test_a_correctly_wired_field_is_reported_clean(guard: Any, tmp_path: Path) -
     assert guard.check("test", config, ["api"], set(), set()) == []
 
 
+def test_a_type_checking_only_declaration_is_not_a_field(guard: Any, tmp_path: Path) -> None:
+    """The cost of descending into everything, paid back.
+
+    `if TYPE_CHECKING:` never executes, so a name declared under it is not a
+    runtime attribute and pydantic never makes it a field - verified directly
+    below, not assumed. Counting it would have the guard demand an
+    .env.example entry and two compose entries for something that does not
+    exist, which is how a guard earns its own deletion.
+
+    Its `else` branch does run, so that half must still be seen.
+    """
+    config = _write_settings(
+        tmp_path,
+        '    real: str = "a"\n'
+        "    if TYPE_CHECKING:\n"
+        "        phantom: str\n"
+        "    else:\n"
+        '        at_runtime: str = "b"\n'
+        "    if typing.TYPE_CHECKING:\n"
+        "        qualified_phantom: str\n",
+    )
+    assert guard.settings_fields(config) == {"real", "at_runtime"}
+
+
+def test_pydantic_agrees_type_checking_names_are_not_fields(guard: Any) -> None:
+    """The guard's premise, checked against pydantic itself rather than
+    against my belief about it. If this ever fails, the test above is wrong
+    and the guard should go back to counting them."""
+    from typing import TYPE_CHECKING
+
+    from pydantic_settings import BaseSettings
+
+    class Probe(BaseSettings):
+        real: str = "a"
+        if TYPE_CHECKING:
+            phantom: str
+
+    assert "phantom" not in Probe.model_fields
+    assert "real" in Probe.model_fields
+
+
 def test_the_real_repo_passes(guard: Any) -> None:
     """The guard is only useful if it is green on a correct tree - a guard
     that fails constantly gets its CI job deleted."""

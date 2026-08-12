@@ -1,20 +1,26 @@
 import { expect, test } from '@playwright/test';
-import { fileURLToPath } from 'node:url';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
-// `archive` and `pollTimer` in activities/+page.svelte used to be single,
-// unkeyed variables shared by every startArchive() call. The Import button
-// only disables once `archive` is set from the initial POST's response -
-// not from the click itself - so a user whose first zip's upload is slow can
-// still submit a second zip while the first has no tracked job yet. When the
-// first's delayed response finally lands, it used to overwrite whatever the
-// second (later-started, already-finished) job had put on screen, with
-// nothing to say the display had gone stale.
+// Two archive imports started before the first has reported anything: whoever
+// started LAST must own the card, and the earlier one's late response must be
+// discarded rather than reverting the display to a job that was superseded
+// before it ever said a word.
+//
+// The route into that race has moved. It used to be the Import button, which
+// stayed live during an upload because the busy state was read from a job
+// object that did not exist yet - so a user with a slow first upload could
+// simply click again. That window is now closed at the source ('uploading' is
+// an explicit phase, set synchronously), and the first test here pins it shut.
+//
+// The race is still reachable, because the button is not the only way in: a
+// dropped .zip goes through the window-level drop handler in +layout.svelte
+// straight to pendingArchives, never consulting the button's disabled state.
+// So the ownership guard is still load-bearing, and the second test drives it
+// the way that can still happen.
 
 const password = 'e2e-archive-ownership-password-1';
-const zipA = fileURLToPath(new URL('./fixtures/archive-a.zip', import.meta.url));
-const zipB = fileURLToPath(new URL('./fixtures/archive-b.zip', import.meta.url));
 
-function statusPayload(id: string, filename: string, status: 'running' | 'done') {
+function job(id: string, filename: string, status: 'running' | 'done') {
 	return {
 		id,
 		filename,
@@ -29,20 +35,66 @@ function statusPayload(id: string, filename: string, status: 'running' | 'done')
 	};
 }
 
-test('a second archive import is not clobbered by the first, slower one', async ({ page }) => {
+async function registerOrSkip(page: import('@playwright/test').Page, label: string) {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(
-		!(status.setup_required || (status.signups_enabled && status.password_login)),
-		'needs a fresh DB or SIGNUPS_ENABLED=true with password login'
-	);
-	const email = `e2e-archive-ownership-${Date.now()}@example.com`;
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
+	const email = `e2e-archive-own-${label}-${Date.now()}@example.com`;
 	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
 	expect(registered.ok()).toBeTruthy();
+}
 
-	// Controls exactly when job A's initial POST resolves, so the test can
-	// submit job B while A is still in flight - the real, reachable window:
-	// the Import button only disables once `archive` is set, which does not
-	// happen until the initial POST resolves.
+/** Drops a .zip on the window, the way +layout.svelte actually receives one.
+ * The bytes are an empty zip's End Of Central Directory record; the upload is
+ * mocked, so nothing ever parses them. */
+async function dropZip(page: import('@playwright/test').Page, name: string) {
+	await page.evaluate((filename) => {
+		const eocd = new Uint8Array(22);
+		eocd.set([0x50, 0x4b, 0x05, 0x06]);
+		const transfer = new DataTransfer();
+		transfer.items.add(new File([eocd], filename, { type: 'application/zip' }));
+		window.dispatchEvent(
+			new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true })
+		);
+	}, name);
+}
+
+test('the Import button cannot start a second archive while one is uploading', async ({ page }) => {
+	await registerOrSkip(page, 'button');
+
+	let release: () => void = () => {};
+	const gate = new Promise<void>((resolve) => (release = resolve));
+	await page.route('**/api/activities/import/archive', async (route) => {
+		await gate;
+		await route.fulfill({ json: job('job-a', 'archive-a.zip', 'done') });
+	});
+	await page.route('**/api/activities/import/archive/job-a', async (route) => {
+		await route.fulfill({ json: job('job-a', 'archive-a.zip', 'done') });
+	});
+
+	await page.goto('/activities');
+	const importButton = page.getByRole('button', { name: /Import rides|Importing/ });
+	// The drop goes to a window listener, so it is silently lost if it lands
+	// before the page has hydrated.
+	await expect(importButton).toBeVisible();
+
+	await dropZip(page, 'archive-a.zip');
+
+	// The upload is in flight and the button says so. This is the assertion
+	// that used to be its exact opposite: the spec relied on the button
+	// staying enabled here to reach the race at all.
+	await expect(page.locator('.archive')).toContainText('archive-a.zip', { timeout: 10_000 });
+	await expect(importButton).toBeDisabled();
+
+	release();
+	await expect(page.locator('.archive.done')).toBeVisible({ timeout: 10_000 });
+});
+
+test('a second dropped archive is not clobbered by the first, slower one', async ({ page }) => {
+	await registerOrSkip(page, 'drop');
+
+	// A's POST is held open so B can be started while A has no tracked job -
+	// the real window, reachable by drop because a drop never looks at the
+	// button.
 	let releaseA: () => void = () => {};
 	const aGate = new Promise<void>((resolve) => (releaseA = resolve));
 	let postCount = 0;
@@ -51,46 +103,33 @@ test('a second archive import is not clobbered by the first, slower one', async 
 		postCount += 1;
 		if (postCount === 1) {
 			await aGate;
-			await route.fulfill({ json: statusPayload('job-a', 'archive-a.zip', 'running') });
+			await route.fulfill({ json: job('job-a', 'archive-a.zip', 'running') });
 		} else {
-			await route.fulfill({ json: statusPayload('job-b', 'archive-b.zip', 'running') });
+			await route.fulfill({ json: job('job-b', 'archive-b.zip', 'running') });
 		}
 	});
 	await page.route('**/api/activities/import/archive/job-a', async (route) => {
-		await route.fulfill({ json: statusPayload('job-a', 'archive-a.zip', 'running') });
+		await route.fulfill({ json: job('job-a', 'archive-a.zip', 'running') });
 	});
 	await page.route('**/api/activities/import/archive/job-b', async (route) => {
-		await route.fulfill({ json: statusPayload('job-b', 'archive-b.zip', 'done') });
+		await route.fulfill({ json: job('job-b', 'archive-b.zip', 'done') });
 	});
 
 	await page.goto('/activities');
-	const importButton = page.getByRole('button', { name: /Import rides/ });
+	await expect(page.getByRole('button', { name: /Import rides/ })).toBeVisible();
 
-	const chooser1 = page.waitForEvent('filechooser');
-	await importButton.click();
-	(await chooser1).setFiles(zipA);
+	await dropZip(page, 'archive-a.zip');
+	await expect(page.locator('.archive')).toContainText('archive-a.zip', { timeout: 10_000 });
 
-	// The button must still be enabled - job A's initial POST has not
-	// resolved yet, so the app has no idea a job is running. This is a
-	// positive control: if this ever fails, the race below is no longer
-	// reachable and the rest of the test proves nothing.
-	await expect(importButton).toBeEnabled();
-
-	const chooser2 = page.waitForEvent('filechooser');
-	await importButton.click();
-	(await chooser2).setFiles(zipB);
-
-	// Let B's card appear and finish.
+	// B starts while A's POST is still open.
+	await dropZip(page, 'archive-b.zip');
 	await expect(page.locator('.archive')).toContainText('archive-b.zip', { timeout: 10_000 });
 	await expect(page.locator('.archive.done')).toBeVisible({ timeout: 10_000 });
 
-	// Now release A's long-delayed initial response.
+	// Now release A's long-delayed response. It must be discarded.
 	releaseA();
 	await page.waitForTimeout(1000);
 
-	// The archive card must still show B - the most recently *initiated*
-	// import - not have reverted to A, which was superseded before it ever
-	// got its first response.
 	await expect(page.locator('.archive')).toContainText('archive-b.zip');
 	await expect(page.locator('.archive.done')).toBeVisible();
 });

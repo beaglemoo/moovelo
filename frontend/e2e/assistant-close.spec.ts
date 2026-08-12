@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { canRegister } from './support/auth';
 
 // The close button sits inside the draggable header. onHeaderPointerDown used
 // to setPointerCapture on every pointerdown in that header, including one
@@ -11,10 +12,7 @@ const password = 'e2e-assistant-close-password-1';
 
 async function signIn(page: import('@playwright/test').Page) {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(
-		!(status.setup_required || (status.signups_enabled && status.password_login)),
-		'needs a fresh DB or SIGNUPS_ENABLED=true with password login'
-	);
+	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
 	const email = `e2e-assistant-close-${Date.now()}@example.com`;
 	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
 	expect(registered.ok()).toBeTruthy();

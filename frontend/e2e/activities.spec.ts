@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
+import { canRegister } from './support/auth';
 
 // Imports a recorded ride through the UI and exercises the activities page
 // around it. Runs against the dev compose stack and needs password
@@ -13,10 +14,7 @@ const undated = fileURLToPath(new URL('./fixtures/tring.gpx', import.meta.url));
 
 test('import a ride, see it listed, delete it', async ({ page }) => {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(
-		!(status.setup_required || (status.signups_enabled && status.password_login)),
-		'needs a fresh DB or SIGNUPS_ENABLED=true with password login'
-	);
+	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
 
 	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
 	expect(registered.ok()).toBeTruthy();
