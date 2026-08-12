@@ -165,6 +165,16 @@
 					{/each}
 				</div>
 			</section>
+		{:else if networkData}
+			<!-- available is true but every network's total_m is 0 - a real,
+			     reachable answer (no signed cycle route within the bbox at all),
+			     not the loading state. Without this branch the section silently
+			     rendered nothing, which reads as broken rather than "there isn't
+			     one here yet". -->
+			<section class="muted">
+				<h4>Cycle network</h4>
+				<p>No signed cycle routes near your rides yet.</p>
+			</section>
 		{/if}
 
 		{#if roadError}
@@ -185,6 +195,13 @@
 						</div>
 					{/each}
 				</div>
+			</section>
+		{:else if roadData}
+			<!-- Same reasoning as the network section's own empty branch above:
+			     available with nothing over 0 m is a real answer, not loading. -->
+			<section class="muted">
+				<h4>All roads</h4>
+				<p>No bikeable roads mapped near your rides yet.</p>
 			</section>
 		{/if}
 
