@@ -23,8 +23,27 @@
 	// different path from a single upload: submit, then poll a job. Kept apart
 	// from the per-file queue rather than folded into it, because the two
 	// report progress in genuinely different units.
-	let archive: ArchiveImportStatus | null = $state(null);
-	let archiveError: string | null = $state(null);
+	// ONE value describing the current attempt for its whole life, rather
+	// than a job object and an error string that each cover part of it.
+	//
+	// This is the sixth change to this corner (#89, #90, #91, #96, #97) and
+	// the first four all had the same shape: two loosely-related variables,
+	// a rule relating them, and a state the rule did not anticipate. Text
+	// comparison hid a real error; nulling the job to fix that left a window
+	// with no card, no error and an enabled Import button while an upload was
+	// genuinely in flight. Each fix was correct about the bug in front of it
+	// and produced the next one.
+	//
+	// A phase that always exists removes the gap by construction: there is no
+	// "between" to fall into, nothing to relate, and the busy state is read
+	// off the same value the card renders. The upload itself is a phase, not
+	// the absence of one.
+	type Attempt =
+		| { phase: 'uploading'; filename: string }
+		| { phase: 'tracking'; job: ArchiveImportStatus }
+		| { phase: 'failed'; filename: string; message: string };
+
+	let attempt: Attempt | null = $state(null);
 	// Stops for good on unmount, including a status request already in
 	// flight at that moment - clearing only the scheduled timer would let
 	// that request's own callback arm a fresh one nothing is left to clear,
@@ -32,12 +51,13 @@
 	// Replaced per run rather than reused: stop() is permanent, and starting a
 	// second import must end the first one's polling for good.
 	let archivePoll = new Poller();
-	// The Import button only disables once `archive` is set from the POST's
-	// response, not from the click - so a slow first upload leaves a window
-	// where a second can start while the first has no tracked job yet. Whoever
-	// claimed last owns the card; an earlier upload's response landing
-	// afterwards is discarded rather than reverting the display to a job that
-	// was superseded before it ever reported anything.
+	// The button now disables from the click, because the 'uploading' phase is
+	// set synchronously - so the window this was written for is closed at the
+	// source. Ownership stays, because the button is not the only way in: a
+	// dropped .zip reaches startArchive through pendingArchives without
+	// touching it. Whoever claimed last owns the card; an earlier upload's
+	// response landing afterwards is discarded rather than reverting the
+	// display to an attempt that was superseded before it ever reported.
 	const archiveOwner = new Latest();
 	// Five independent things call refresh(): mount, the year filter, a
 	// delete, an import batch finishing, and an archive finishing. Without an
@@ -56,9 +76,16 @@
 	// finishing, so only the last one's status was ever actually tracked -
 	// startArchive now awaits the whole job before chooseFiles moves to the
 	// next file.
-	let archiveBusy = $derived.by(
-		() => archive?.status === 'queued' || archive?.status === 'running'
-	);
+	// Read off the same value the card renders, so the button and the card can
+	// never disagree about whether an import is happening. Uploading counts:
+	// a 500 MB export takes real time to send, and leaving the button live
+	// through it invited a second submission that silently superseded the
+	// first.
+	let archiveBusy = $derived.by(() => {
+		if (attempt?.phase === 'uploading') return true;
+		if (attempt?.phase !== 'tracking') return false;
+		return attempt.job.status === 'queued' || attempt.job.status === 'running';
+	});
 
 	async function chooseFiles(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
@@ -78,22 +105,21 @@
 		const token = archiveOwner.claim();
 		archivePoll.stop();
 		archivePoll = new Poller();
-		archiveError = null;
-		// The card is a single slot describing THE CURRENT attempt, so a new
-		// attempt clears it rather than leaving an earlier job's result beside
-		// this one's. Without this the two could describe different uploads at
-		// once - an undismissed failure from ride1.zip still on screen while
-		// ride2.zip is being sent - and any rule relating them has to guess
-		// which upload the card belongs to. It cannot be made to guess wrong
-		// if it can only ever hold one.
-		archive = null;
+		// Straight from whatever was there to this attempt's own first phase.
+		// The previous result is replaced rather than cleared, so there is no
+		// instant where the page shows nothing while an upload is in flight.
+		attempt = { phase: 'uploading', filename: file.name };
 		try {
 			const started = await activities.importArchive(file);
 			if (!archiveOwner.isCurrent(token)) return;
-			archive = started;
+			attempt = { phase: 'tracking', job: started };
 		} catch (err) {
 			if (!archiveOwner.isCurrent(token)) return;
-			archiveError = err instanceof Error ? err.message : 'Could not read that archive';
+			attempt = {
+				phase: 'failed',
+				filename: file.name,
+				message: err instanceof Error ? err.message : 'Could not read that archive'
+			};
 			return;
 		}
 		await pollArchiveUntilDone(token);
@@ -106,13 +132,14 @@
 	async function pollArchiveUntilDone(token: number): Promise<void> {
 		const poller = archivePoll;
 		await poller.run(async () => {
-			if (!archiveOwner.isCurrent(token) || !archive) return false;
-			if (archive.status !== 'queued' && archive.status !== 'running') return false;
-			const jobId = archive.id;
+			if (!archiveOwner.isCurrent(token)) return false;
+			if (attempt?.phase !== 'tracking') return false;
+			const job = attempt.job;
+			if (job.status !== 'queued' && job.status !== 'running') return false;
 			try {
-				const next = await activities.archiveStatus(jobId);
+				const next = await activities.archiveStatus(job.id);
 				if (!archiveOwner.isCurrent(token)) return false;
-				archive = next;
+				attempt = { phase: 'tracking', job: next };
 			} catch (err) {
 				if (!archiveOwner.isCurrent(token)) return false;
 				// Only a 404 means the job is genuinely gone - a restart, or
@@ -122,16 +149,18 @@
 				// mid-import with nothing said, which for a multi-minute import
 				// of hundreds of files reads as "it lost my rides".
 				if (err instanceof ApiError && err.status === 404) {
-					archive = null;
+					attempt = null;
 				} else {
-					archiveError = err instanceof Error ? err.message : 'Lost track of that import';
-					// The card must stop claiming to be running. Leaving it on
-					// its last "reading... 3 of 10" would be a lie, and worse,
-					// archiveBusy derives from this status - a frozen 'running'
-					// locks the Import button with no way back except leaving
-					// the page. That is worse than the bug this catch was
-					// written to fix, which at least re-enabled the button.
-					archive = { ...archive, status: 'error', error: archiveError };
+					// 'failed' rather than a job still claiming to be running:
+					// leaving the card on its last "reading... 3 of 10" would be
+					// a lie, and archiveBusy reads from this, so a frozen
+					// 'running' would lock the Import button with no way back
+					// except leaving the page.
+					attempt = {
+						phase: 'failed',
+						filename: job.filename,
+						message: err instanceof Error ? err.message : 'Lost track of that import'
+					};
 				}
 				return false;
 			}
@@ -257,50 +286,42 @@
 		<p class="error">{error}</p>
 	{/if}
 
-	<!-- Suppressed while the card is itself reporting a failure: polling's own
-	     catch sets archiveError and the card's error together, and rendering
-	     both put the same failure on screen twice, reproduced live.
-	     Deliberately NOT a comparison of the two message strings. That version
-	     hid a brand-new upload's error whenever its text happened to match an
-	     older, undismissed card's - and generic texts ("Failed to fetch") match
-	     constantly. Since startArchive() clears the card, it can only ever
-	     describe the current attempt, so "the card is showing an error" is
-	     enough to know the banner would be a duplicate. -->
-	{#if archiveError && archive?.status !== 'error'}
-		<p class="error">{archiveError}</p>
-	{/if}
-
-	{#if archive}
-		<div class="archive" class:done={archive.status === 'done'}>
-			<strong>{archive.filename}</strong>
-			{#if archive.status === 'error'}
-				<span class="error">{archive.error}</span>
-				<button
-					type="button"
-					onclick={() => {
-						archive = null;
-						archiveError = null;
-					}}
-				>
-					Dismiss
-				</button>
-			{:else if archive.status === 'done'}
+	<!-- There is no page-level archive error any more, and that is the fix
+	     rather than an omission. An error beside the card was a second place
+	     the same failure could appear, which needed a rule to decide when to
+	     show it - first a comparison of message text (which hid a real,
+	     different failure whose text happened to match), then a check on the
+	     card's status. The failure belongs to an attempt, so it renders as
+	     that attempt's phase, in the one place the attempt is shown. Nothing
+	     left to relate, so nothing left to relate wrongly. -->
+	{#if attempt}
+		<div class="archive" class:done={attempt.phase === 'tracking' && attempt.job.status === 'done'}>
+			<strong>{attempt.phase === 'tracking' ? attempt.job.filename : attempt.filename}</strong>
+			{#if attempt.phase === 'uploading'}
+				<span>uploading…</span>
+			{:else if attempt.phase === 'failed'}
+				<span class="error">{attempt.message}</span>
+				<button type="button" onclick={() => (attempt = null)}>Dismiss</button>
+			{:else if attempt.job.status === 'error'}
+				<span class="error">{attempt.job.error}</span>
+				<button type="button" onclick={() => (attempt = null)}>Dismiss</button>
+			{:else if attempt.job.status === 'done'}
 				<span>
-					{archive.imported} imported
-					{#if archive.duplicates}· {archive.duplicates} already had{/if}
-					{#if archive.skipped}· {archive.skipped} not rides{/if}
-					{#if archive.failed}· {archive.failed} failed{/if}
+					{attempt.job.imported} imported
+					{#if attempt.job.duplicates}· {attempt.job.duplicates} already had{/if}
+					{#if attempt.job.skipped}· {attempt.job.skipped} not rides{/if}
+					{#if attempt.job.failed}· {attempt.job.failed} failed{/if}
 				</span>
-				<button type="button" onclick={() => (archive = null)}>Dismiss</button>
+				<button type="button" onclick={() => (attempt = null)}>Dismiss</button>
 			{:else}
 				<span>
-					reading… {archive.imported + archive.failed} of {archive.total || '?'}
+					reading… {attempt.job.imported + attempt.job.failed} of {attempt.job.total || '?'}
 				</span>
 			{/if}
 		</div>
-		{#if archive.problems.length}
+		{#if attempt.phase === 'tracking' && attempt.job.problems.length}
 			<ul class="problems">
-				{#each archive.problems as problem (problem)}
+				{#each attempt.job.problems as problem (problem)}
 					<li>{problem}</li>
 				{/each}
 			</ul>

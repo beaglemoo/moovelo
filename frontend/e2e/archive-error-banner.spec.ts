@@ -1,76 +1,71 @@
 import { expect, test } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
-import { canRegister } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION } from './support/auth';
 
-// The archive card and the page-level error banner used to be related by
-// comparing their MESSAGE TEXT: the banner hid itself whenever the card
-// happened to be showing the same string. Two different uploads failing with
-// the same message is not unusual - "Failed to fetch" is what every dropped
-// connection produces - so a brand-new upload's failure could be swallowed by
-// an older, undismissed card that was still on screen attributing it to a
-// different file entirely.
+// Two bugs, one cause, pinned together because the fix for the first produced
+// the second.
 //
-// The fix is not a better comparison. startArchive() now clears the card, so
-// the card can only ever describe the current attempt, and the two can no
-// longer disagree about which upload they mean.
+// The archive card and a page-level error banner were two places the same
+// failure could appear, so something had to decide when to show each. First
+// that rule compared message TEXT, which hid a genuinely different upload's
+// failure whenever the strings matched ("Failed to fetch" always matches).
+// Clearing the card at the start of each attempt fixed that and opened a
+// window with no card, no error and an enabled Import button while an upload
+// was actually in flight.
+//
+// There is now one `attempt` value with an explicit phase, and no banner at
+// all - so neither state is reachable. These two tests are what that claim
+// means in practice.
 
 const password = 'e2e-archive-error-banner-password-1';
 const zipA = fileURLToPath(new URL('./fixtures/archive-a.zip', import.meta.url));
 const zipB = fileURLToPath(new URL('./fixtures/archive-b.zip', import.meta.url));
 
-// The one message both failures carry. Any shared text reproduces this; a
-// generic one is simply the likeliest in the wild.
+// The one message both failures carry. Any shared text reproduces the
+// original bug; a generic one is simply the likeliest in the wild.
 const SHARED_ERROR = 'Could not read that archive';
 
-test('a second upload failing with a familiar message is still reported', async ({ page }) => {
+function job(id: string, filename: string, status: string, error: string | null = null) {
+	return {
+		id,
+		filename,
+		status,
+		total: 10,
+		imported: status === 'done' ? 10 : 3,
+		failed: status === 'error' ? 7 : 0,
+		skipped: 0,
+		duplicates: 0,
+		error,
+		problems: []
+	};
+}
+
+async function registerOrSkip(page: import('@playwright/test').Page, label: string) {
 	const status = await page.request.get('/api/auth/status').then((r) => r.json());
-	test.skip(!canRegister(status), 'needs a fresh DB or SIGNUPS_ENABLED=true with password login');
-	const email = `e2e-archive-error-banner-${Date.now()}@example.com`;
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
+	const email = `e2e-archive-${label}-${Date.now()}@example.com`;
 	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
 	expect(registered.ok()).toBeTruthy();
+}
+
+test('a second upload failing with a familiar message is reported against its own file', async ({
+	page
+}) => {
+	await registerOrSkip(page, 'banner');
 
 	let postCount = 0;
 	await page.route('**/api/activities/import/archive', async (route) => {
 		postCount += 1;
 		if (postCount === 1) {
-			// Accepted, so a job exists and the card starts polling.
-			await route.fulfill({
-				json: {
-					id: 'job-a',
-					filename: 'archive-a.zip',
-					status: 'running',
-					total: 10,
-					imported: 3,
-					failed: 0,
-					skipped: 0,
-					duplicates: 0,
-					error: null,
-					problems: []
-				}
-			});
+			await route.fulfill({ json: job('job-a', 'archive-a.zip', 'running') });
 		} else {
-			// Rejected outright - no job is ever created, so only the banner
-			// can carry this failure.
+			// Rejected outright - no job is ever created, so only the attempt
+			// itself can carry this failure.
 			await route.fulfill({ status: 400, json: { detail: SHARED_ERROR } });
 		}
 	});
-
-	// Job A ends in exactly the same message the second POST will fail with.
 	await page.route('**/api/activities/import/archive/job-a', async (route) => {
-		await route.fulfill({
-			json: {
-				id: 'job-a',
-				filename: 'archive-a.zip',
-				status: 'error',
-				total: 10,
-				imported: 3,
-				failed: 7,
-				skipped: 0,
-				duplicates: 0,
-				error: SHARED_ERROR,
-				problems: []
-			}
-		});
+		await route.fulfill({ json: job('job-a', 'archive-a.zip', 'error', SHARED_ERROR) });
 	});
 
 	await page.goto('/activities');
@@ -89,11 +84,49 @@ test('a second upload failing with a familiar message is still reported', async 
 	await importButton.click();
 	(await chooser2).setFiles(zipB);
 
-	// The failure must be visible. Before the fix the banner was suppressed
-	// because the stale card's text matched, and the only thing on screen was
-	// that card - still naming archive-a.zip.
-	await expect(page.locator('p.error')).toContainText(SHARED_ERROR, { timeout: 10_000 });
+	// The failure must be visible AND attributed to the file that actually
+	// failed. The old text-comparison rule left archive-a.zip on screen owning
+	// archive-b.zip's error.
+	await expect(page.locator('.archive')).toContainText('archive-b.zip', { timeout: 10_000 });
+	await expect(page.locator('.archive .error')).toContainText(SHARED_ERROR);
+	await expect(page.locator('.archive')).not.toContainText('archive-a.zip');
 
-	// And nothing may still be attributing this to the first file.
-	await expect(page.locator('.archive')).toHaveCount(0);
+	// Exactly one place says it. A page-level banner saying the same thing is
+	// what needed a rule to suppress it, and rules are what got this wrong
+	// twice.
+	await expect(page.locator('p.error')).toHaveCount(0);
+});
+
+test('an upload in flight always says so', async ({ page }) => {
+	await registerOrSkip(page, 'inflight');
+
+	// Held open so the test can observe the window between picking a file and
+	// the POST resolving - the window that previously showed nothing at all.
+	let release: () => void = () => {};
+	const gate = new Promise<void>((resolve) => (release = resolve));
+
+	await page.route('**/api/activities/import/archive', async (route) => {
+		await gate;
+		await route.fulfill({ json: job('job-c', 'archive-a.zip', 'done') });
+	});
+	await page.route('**/api/activities/import/archive/job-c', async (route) => {
+		await route.fulfill({ json: job('job-c', 'archive-a.zip', 'done') });
+	});
+
+	await page.goto('/activities');
+	const importButton = page.getByRole('button', { name: /Import rides|Importing/ });
+
+	const chooser = page.waitForEvent('filechooser');
+	await importButton.click();
+	(await chooser).setFiles(zipA);
+
+	// While the upload is genuinely in flight: the card exists, names the
+	// file, and the button is disabled. Previously all three were false - no
+	// card, and a live button reading "Import rides".
+	await expect(page.locator('.archive')).toContainText('archive-a.zip', { timeout: 10_000 });
+	await expect(importButton).toBeDisabled();
+
+	release();
+	await expect(page.locator('.archive.done')).toBeVisible({ timeout: 10_000 });
+	await expect(importButton).toBeEnabled();
 });
