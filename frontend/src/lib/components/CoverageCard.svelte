@@ -9,7 +9,7 @@
 		type RoadCoverageResponse
 	} from '$lib/api';
 	import { onDestroy } from 'svelte';
-	import { Poller } from '$lib/latest';
+	import { Latest, Poller } from '$lib/latest';
 
 	// icn/ncn/rcn/lcn, in the order a rider would expect to read them - widest
 	// network first - and only shown when the bbox actually has one.
@@ -57,6 +57,19 @@
 	// this one did not, which is how a second overlapping poll was reachable
 	// from a double click.
 	let jobPoll = new Poller();
+	// The archive card's other half of that same fix, missing here until now:
+	// a fresh Poller per click stops the OLD poller from continuing, but does
+	// nothing about the shared `job` variable itself. The backfill button was
+	// only ever disabled for 'running', not 'queued' - the state a job is
+	// actually in for a beat after the POST returns, before the one shared
+	// worker (services/way_matching.py) has picked it up - so a second click
+	// in that window starts a second job. Whichever POST's response lands
+	// LAST then wins `job`, even if it was the FIRST click's job that lands
+	// second (nothing about network timing is FIFO) - silently discarding
+	// the newer job's progress and tracking a stale one instead. `jobOwner`
+	// closes it exactly like `archiveOwner` does for the archive card: only
+	// the click that is still current when its response lands may apply it.
+	const jobOwner = new Latest();
 
 	onDestroy(() => jobPoll.stop());
 
@@ -75,24 +88,31 @@
 	load();
 
 	async function runBackfill() {
+		const token = jobOwner.claim();
 		jobError = null;
 		jobPoll.stop();
 		jobPoll = new Poller();
 		try {
-			job = await coverage.backfill();
-			void pollJob();
+			const started = await coverage.backfill();
+			if (!jobOwner.isCurrent(token)) return;
+			job = started;
+			void pollJob(token);
 		} catch (err) {
+			if (!jobOwner.isCurrent(token)) return;
 			jobError = err instanceof Error ? err.message : 'Could not start matching';
 		}
 	}
 
-	async function pollJob() {
+	async function pollJob(token: number) {
 		const poller = jobPoll;
 		await poller.run(async () => {
-			if (!job) return false;
+			if (!jobOwner.isCurrent(token) || !job) return false;
 			try {
-				job = await coverage.backfillStatus(job.id);
+				const next = await coverage.backfillStatus(job.id);
+				if (!jobOwner.isCurrent(token)) return false;
+				job = next;
 			} catch (err) {
+				if (!jobOwner.isCurrent(token)) return false;
 				if (err instanceof ApiError && err.status === 404) {
 					job = null;
 				} else {
@@ -106,6 +126,7 @@
 			}
 			return job.status === 'queued' || job.status === 'running';
 		}, 1500);
+		if (!jobOwner.isCurrent(token)) return;
 		// A finished backfill is exactly what changed the numbers below, for
 		// both denominators - reload them both. Reached however polling ended,
 		// including a job that errored, so the card never sits on figures the
@@ -206,7 +227,11 @@
 		{/if}
 
 		{#if showBackfill}
-			<button type="button" onclick={runBackfill} disabled={job?.status === 'running'}>
+			<button
+				type="button"
+				onclick={runBackfill}
+				disabled={job?.status === 'running' || job?.status === 'queued'}
+			>
 				{job?.status === 'running' || job?.status === 'queued'
 					? `Matching… ${job.matched + job.unmatched} of ${job.total || '?'}`
 					: 'Match older rides'}
