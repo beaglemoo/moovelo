@@ -88,17 +88,38 @@ ENV_EXAMPLE_NON_SETTINGS_KEYS = {
 }
 
 
+def _fields_in_block(body: list[ast.stmt], fields: set[str]) -> None:
+    """Annotated assignments in a class body, descending into nested blocks.
+
+    A field declared inside an `if` or a `try` is a perfectly ordinary
+    pydantic-settings field at runtime, so a scan that only looked at the
+    class body's direct statements would not see it - and a field this guard
+    cannot enumerate is a field it silently never checks, which is worse than
+    no guard at all because the green tick claims otherwise.
+
+    Deliberately does NOT descend into a def or a nested class: a name bound
+    inside a method is a local, and counting it would demand an .env.example
+    entry for something no environment variable ever reaches.
+    """
+    for item in body:
+        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+            fields.add(item.target.id)
+        elif isinstance(item, (ast.If, ast.Try, ast.With, ast.For, ast.While)):
+            for attr in ("body", "orelse", "finalbody"):
+                _fields_in_block(getattr(item, attr, []) or [], fields)
+            for handler in getattr(item, "handlers", []):
+                _fields_in_block(handler.body, fields)
+
+
 def settings_fields(config_path: Path) -> set[str]:
-    """Top-level annotated assignments in the Settings class, i.e. actual
+    """Annotated assignments in the Settings class, i.e. actual
     pydantic-settings fields - not @property computed values, which read
     other fields rather than the environment."""
     tree = ast.parse(config_path.read_text(), filename=str(config_path))
     fields: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == "Settings":
-            for item in node.body:
-                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
-                    fields.add(item.target.id)
+            _fields_in_block(node.body, fields)
             break
     else:
         raise SystemExit(f"no `class Settings` found in {config_path}")
