@@ -466,6 +466,16 @@ class SearchIndexMeta(Base):
     # tell an index that predates osm_ways apart from one that has simply
     # never been built.
     osm_way_count: Mapped[int | None] = mapped_column(Integer, default=None)
+    # Which extract osm_ways itself was last (re)built from - not always the
+    # same as source_files above. A rebuild with INDEX_ROADS off leaves the
+    # live osm_ways table untouched (indexer/db.py:publish) but still
+    # overwrites source_files/built_at with the run that just finished, so
+    # without a column of its own there is nothing distinguishing "osm_ways
+    # matches the rest of this index" from "osm_ways is a leftover from a
+    # previous extract that no longer matches source_files at all". NULL
+    # alongside osm_way_count NULL means "never built"; once set, it is only
+    # ever rewritten by a rebuild that actually ran with roads on.
+    osm_ways_source_files: Mapped[list[str] | None] = mapped_column(ARRAY(Text), default=None)
 
     __table_args__ = (CheckConstraint("id", name="ck_search_index_meta_singleton"),)
 
