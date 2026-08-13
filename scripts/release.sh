@@ -34,10 +34,17 @@ fi
 
 # Refuse to build a release whose version manifests disagree with the tag -
 # a stale backend/pyproject.toml or frontend/package.json must never reach
-# an image tagged $VERSION.
+# an image tagged $VERSION. The lockfile carries the version twice
+# (top-level and packages[""]) and the two can drift independently; it sat
+# at 0.1.0 for six releases before this check. Regenerate it with
+# `npm install --package-lock-only` after bumping package.json.
 PY_V=$(grep -m1 '^version = ' backend/pyproject.toml | cut -d'"' -f2)
 FE_V=$(node -p "require('./frontend/package.json').version")
-for pair in "backend/pyproject.toml:$PY_V" "frontend/package.json:$FE_V"; do
+LOCK_TOP_V=$(node -p "require('./frontend/package-lock.json').version")
+LOCK_PKG_V=$(node -p "require('./frontend/package-lock.json').packages[''].version")
+for pair in "backend/pyproject.toml:$PY_V" "frontend/package.json:$FE_V" \
+	"frontend/package-lock.json (version):$LOCK_TOP_V" \
+	"frontend/package-lock.json (packages[\"\"].version):$LOCK_PKG_V"; do
 	f="${pair%%:*}"
 	v="${pair##*:}"
 	[ "$v" = "$V" ] || {
