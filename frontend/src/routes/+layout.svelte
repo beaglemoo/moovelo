@@ -75,12 +75,28 @@
 			.then((me) => (user = me))
 			.catch((err) => {
 				if (err instanceof ApiError && err.status === 401 && path !== '/login') {
+					// The session is already gone, so there is nothing left to
+					// save and the planner's beforeNavigate guard must not block
+					// the bounce to login.
+					unsaved.dirty = false;
 					void goto('/login');
 				}
 			});
 	});
 
 	async function logout() {
+		// Confirm here, before destroying the session, rather than leaving it to
+		// the planner's beforeNavigate guard. That guard can cancel the
+		// navigation but cannot un-destroy the session, so dismissing it stranded
+		// a logged-out session with a dead nav bar and edits that silently 401.
+		// Clearing unsaved.dirty on the way out stops the guard prompting again.
+		if (
+			unsaved.dirty &&
+			!confirm('You have unsaved changes to the route you are planning.\n\nLog out and lose them?')
+		) {
+			return;
+		}
+		unsaved.dirty = false;
 		await auth.logout();
 		user = null;
 		await goto('/login');
