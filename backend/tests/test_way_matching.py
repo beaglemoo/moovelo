@@ -256,6 +256,29 @@ def test_jobs_cannot_grow_past_the_tracked_cap() -> None:
     assert len(queue._jobs) == MAX_TRACKED_JOBS  # noqa: SLF001
 
 
+def test_a_rederive_always_schedules_even_when_the_tracker_is_full() -> None:
+    """A re-derive (a delete's clear_first job) is correctness-critical: it
+    must schedule even when the tracker is full of queued match jobs,
+    displacing one rather than raising. Dropping it would strand a deleted
+    ride's coverage credit with no recovery, since the backfill button only
+    matches unmatched rides and cannot remove a credit whose activity is gone
+    - which was the false claim in delete_activity's own comment."""
+    import uuid
+
+    from app.services.way_matching import MAX_TRACKED_JOBS
+
+    queue = WayMatchQueue()
+    user = uuid.uuid4()
+    for _ in range(MAX_TRACKED_JOBS):
+        queue.submit(user)  # fill the tracker with queued match jobs
+    assert len(queue._jobs) == MAX_TRACKED_JOBS  # noqa: SLF001
+
+    # Does not raise - a queued match is displaced to make room.
+    rederive = queue.submit(user, clear_first=True)
+    assert len(queue._jobs) == MAX_TRACKED_JOBS  # noqa: SLF001 - cap still holds
+    assert rederive.id in queue._jobs  # noqa: SLF001 - and the re-derive is tracked
+
+
 @respx.mock
 async def test_two_jobs_cannot_double_credit_the_same_activity(db: AsyncSession) -> None:
     """A fresh import's own explicit match job and a concurrent backfill can
