@@ -7,6 +7,7 @@
 	import { cumulativeDistances, nearestVertexIndex } from '$lib/geo';
 	import { coordsBetween, GRADIENT_BANDS, type GradientSegment } from '$lib/gradient';
 	import { colourExpression } from '$lib/pois';
+	import { theme } from '$lib/theme.svelte';
 
 	interface Props {
 		waypoints: Waypoint[];
@@ -360,10 +361,35 @@
 		return { type: 'FeatureCollection', features: [] };
 	}
 
+	// Mirrors the effective-theme logic in theme.svelte.ts's apply(), but this
+	// needs the boolean rather than the data-theme attribute: MapLibre paint
+	// properties, not CSS, dim the raster basemap. `systemDark` is tracked
+	// separately because matchMedia's own match state is not reactive on its
+	// own - only the 'system' mode needs to follow it live.
+	let systemDark = $state(false);
+	const mapDark = $derived(theme.mode === 'dark' || (theme.mode === 'system' && systemDark));
+
+	/** Dims the raster basemap via paint properties (never a CSS filter, which
+	 * would wash out the route line and markers drawn on top of the same
+	 * canvas). Applied once on load and again whenever `mapDark` changes. */
+	function applyBasemapDimming(m: maplibregl.Map, dark: boolean) {
+		for (const id of ['basemap-cyclosm', 'basemap-osm']) {
+			if (!m.getLayer(id)) continue;
+			m.setPaintProperty(id, 'raster-brightness-max', dark ? 0.7 : 1);
+			m.setPaintProperty(id, 'raster-saturation', dark ? -0.2 : 0);
+		}
+	}
+
 	onMount(() => {
 		basemap = savedBasemap();
 		cycleNetwork = localStorage.getItem(OVERLAY_STORAGE_KEY) === 'on';
 		heatmap = localStorage.getItem(HEATMAP_STORAGE_KEY) === 'on';
+
+		const darkMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+		systemDark = darkMediaQuery.matches;
+		const onSystemDarkChange = (e: MediaQueryListEvent) => (systemDark = e.matches);
+		darkMediaQuery.addEventListener('change', onSystemDarkChange);
+
 		map = new maplibregl.Map({
 			container,
 			style: baseStyle(cyclosmTileUrl ? [cyclosmTileUrl] : PUBLIC_CYCLOSM_TILES),
@@ -666,13 +692,24 @@
 				}
 			});
 			setupInteractions(map);
+			applyBasemapDimming(map, mapDark);
 			mapReady = true;
 		});
 
 		return () => {
+			darkMediaQuery.removeEventListener('change', onSystemDarkChange);
 			map?.remove();
 			map = undefined;
 		};
+	});
+
+	// Re-applied whenever the effective theme changes - a manual toggle while
+	// the map is already loaded, or the OS scheme flipping under 'system'.
+	// Guarded on mapReady rather than just `map`, matching every other paint
+	// call in this file: the style is not ready to accept paint properties
+	// until the 'load' handler above has run.
+	$effect(() => {
+		if (map && mapReady) applyBasemapDimming(map, mapDark);
 	});
 
 	let longPressFired = false;
@@ -1284,44 +1321,45 @@
 		display: flex;
 		border-radius: 8px;
 		overflow: hidden;
-		border: 1px solid #ccc;
-		background: #fff;
-		box-shadow: 0 1px 4px #0002;
+		border: 1px solid var(--input-border);
+		background: var(--surface);
+		box-shadow: 0 1px 4px var(--shadow);
 		z-index: 5;
 	}
 	.basemap-switch button {
 		border: none;
 		background: transparent;
+		color: var(--text);
 		padding: 0.3rem 0.6rem;
 		font: inherit;
 		font-size: 0.8rem;
 		cursor: pointer;
 	}
 	.basemap-switch button + button {
-		border-left: 1px solid #ddd;
+		border-left: 1px solid var(--border);
 	}
 	.basemap-switch button.active {
-		background: #268bd2;
+		background: var(--accent);
 		color: #fff;
 	}
 	.overlay-toggle {
 		position: absolute;
 		bottom: 28px;
 		left: 132px;
-		border: 1px solid #ccc;
+		border: 1px solid var(--input-border);
 		border-radius: 8px;
-		background: #fff;
-		box-shadow: 0 1px 4px #0002;
+		background: var(--surface);
+		box-shadow: 0 1px 4px var(--shadow);
 		padding: 0.3rem 0.6rem;
 		font: inherit;
 		font-size: 0.8rem;
-		color: #586e75;
+		color: var(--text-muted);
 		cursor: pointer;
 		z-index: 5;
 	}
 	.overlay-toggle.active {
-		background: #268bd2;
-		border-color: #268bd2;
+		background: var(--accent);
+		border-color: var(--accent);
 		color: #fff;
 	}
 	/* Offset past "Cycle routes" - fixed rather than flow-based, matching how
@@ -1338,16 +1376,16 @@
 		left: 132px;
 	}
 	.heatmap-toggle.active {
-		background: #dc322f;
-		border-color: #dc322f;
+		background: var(--danger);
+		border-color: var(--danger);
 	}
 	.context-menu {
 		position: absolute;
 		min-width: 160px;
-		background: #fff;
-		border: 1px solid #ccc;
+		background: var(--surface);
+		border: 1px solid var(--input-border);
 		border-radius: 8px;
-		box-shadow: 0 2px 10px #0003;
+		box-shadow: 0 2px 10px var(--shadow);
 		padding: 4px;
 		z-index: 10;
 		display: flex;
@@ -1356,6 +1394,7 @@
 	.context-menu button {
 		border: none;
 		background: transparent;
+		color: var(--text);
 		text-align: left;
 		padding: 0.45rem 0.7rem;
 		font: inherit;
@@ -1364,20 +1403,20 @@
 		cursor: pointer;
 	}
 	.context-menu button:hover {
-		background: #f0f0f0;
+		background: var(--surface-sunken);
 	}
 	.menu-place {
 		padding: 0.35rem 0.7rem 0.4rem;
 		font-size: 0.8rem;
 		font-weight: 600;
-		color: #586e75;
-		border-bottom: 1px solid #e5e5e5;
+		color: var(--text-muted);
+		border-bottom: 1px solid var(--border);
 		margin-bottom: 3px;
 		overflow-wrap: anywhere;
 	}
 	.context-menu hr {
 		border: none;
-		border-top: 1px solid #e5e5e5;
+		border-top: 1px solid var(--border);
 		margin: 3px 0;
 	}
 	/* Applied by the highlight effect above, not by a Svelte class directive
