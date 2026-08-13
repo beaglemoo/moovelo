@@ -71,6 +71,15 @@
 				)} up &middot; {route.preset}
 			</span>
 			<span class="spacer"></span>
+			<button
+				type="button"
+				class="units-toggle"
+				onclick={() => units.toggle()}
+				title="Switch between metric and imperial units"
+				aria-label="Units: {units.system === 'imperial' ? 'imperial' : 'metric'}"
+			>
+				{units.system === 'imperial' ? 'mi' : 'km'}
+			</button>
 			<a class="download" href={shared.gpxUrl(token)}>Download GPX</a>
 		{/if}
 	</header>
@@ -151,6 +160,18 @@
 		font-size: 0.85rem;
 		text-decoration: none;
 		white-space: nowrap;
+	}
+	.units-toggle {
+		color: #eee8d5;
+		background: transparent;
+		border: 1px solid #586e75;
+		border-radius: 6px;
+		padding: 0.25rem 0.6rem;
+		font-size: 0.85rem;
+		cursor: pointer;
+	}
+	.units-toggle:hover {
+		background: #073642;
 	}
 	.summary {
 		flex-shrink: 0;

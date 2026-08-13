@@ -5,8 +5,6 @@
 		type CustomPreset,
 		type Preset
 	} from '$lib/api';
-	import { speed } from '$lib/format';
-	import { units } from '$lib/units.svelte';
 	import { untrack } from 'svelte';
 
 	interface Props {
@@ -157,7 +155,12 @@
 			</select>
 		</label>
 		<label>
-			Cycling speed: {speed(cyclingSpeed, units.system)}
+			<!-- Kept in km/h even in imperial mode: this is the raw costing knob,
+			     and its scale/steps are km/h. Converting only the readout made a
+			     one-notch drag often show the same rounded mph, reading as an
+			     unresponsive slider - the same reason the /settings speed input
+			     stays metric. -->
+			Cycling speed: {cyclingSpeed} km/h
 			<input
 				type="range"
 				min="10"

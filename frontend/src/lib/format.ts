@@ -17,7 +17,11 @@ export function distance(metres: number, units: UnitSystem): string {
 
 /** Signed distance delta, e.g. "+3.2 km" / "-1.0 mi". */
 export function distanceDelta(metres: number, units: UnitSystem): string {
-	return `${metres >= 0 ? '+' : ''}${distance(metres, units)}`;
+	// Sign the rounded magnitude, not the raw metres: toFixed does not collapse
+	// negative zero, so a -60 m delta in miles would otherwise read "-0.0 mi".
+	const body = distance(Math.abs(metres), units);
+	const sign = parseFloat(body) === 0 ? '' : metres < 0 ? '-' : '+';
+	return `${sign}${body}`;
 }
 
 /**
@@ -42,7 +46,9 @@ export function elevation(metres: number, units: UnitSystem): string {
 
 /** Signed elevation delta, e.g. "+40 m" / "-131 ft". */
 export function elevationDelta(metres: number, units: UnitSystem): string {
-	return `${metres >= 0 ? '+' : ''}${elevation(metres, units)}`;
+	const body = elevation(Math.abs(metres), units);
+	const sign = parseInt(body, 10) === 0 ? '' : metres < 0 ? '-' : '+';
+	return `${sign}${body}`;
 }
 
 /** Speed given in km/h, shown as km/h or mph. */
