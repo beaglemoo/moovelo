@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { canRegister, NEEDS_REGISTRATION } from './support/auth';
+import { canRegister, NEEDS_REGISTRATION, windowDropReady } from './support/auth';
 
 // The window-wide drop handler in +layout.svelte used to send every dropped
 // file through importQueue (planned routes) and always navigate to
@@ -42,6 +42,9 @@ test('dropping a ride on /activities imports it as an activity, not a planned ro
 
 	await page.goto('/activities');
 	await expect(page.getByText('No rides yet')).toBeVisible();
+	// The empty-state text proves the page loaded, not that a drop will be
+	// heard - the window handler ignores files until the session resolves.
+	await windowDropReady(page);
 
 	const dataTransfer = await dataTransferFor(page, ride, 'tring-ride.gpx');
 	await page.dispatchEvent('body', 'dragover', { dataTransfer, bubbles: true, cancelable: true });
@@ -89,6 +92,7 @@ test('dropping a file on the planner still imports it as a planned route in /lib
 	await page.goto('/');
 	const canvas = page.locator('.map canvas').first();
 	await expect(canvas).toBeVisible();
+	await windowDropReady(page);
 
 	const dataTransfer = await dataTransferFor(page, ride, 'tring-ride.gpx');
 	await page.dispatchEvent('body', 'dragover', { dataTransfer, bubbles: true, cancelable: true });
