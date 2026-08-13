@@ -38,6 +38,7 @@ from app.services.heatmap import MAX_HEATMAP_ZOOM, MIN_HEATMAP_ZOOM, heatmap_eta
 from app.services.importer import MAX_FILE_BYTES, RouteImportError, parse_route_file
 from app.services.polyline import encode_polyline6
 from app.services.way_matching import queue as match_queue
+from app.services.way_matching import rederive_user_coverage
 
 router = APIRouter(prefix="/api/activities", tags=["activities"])
 logger = logging.getLogger(__name__)
@@ -248,6 +249,18 @@ async def delete_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> N
         delete(Activity).where(Activity.id == activity_id, Activity.user_id == user.id)
     )
     await db.commit()
+    # activity_ways has no per-activity link, so the deleted ride's coverage
+    # credit cannot be decremented - without this, coverage stays inflated
+    # forever, still reporting ridden ways after every contributing activity
+    # is gone. Clear the rider's aggregate and re-derive it from what remains.
+    await rederive_user_coverage(db, user.id)
+    try:
+        match_queue.submit(user.id)
+    except QueueFullError:
+        # The reset has committed, so coverage now reads empty; a rider can
+        # rebuild it with the backfill button. Better than leaving the stale,
+        # over-credited aggregate in place.
+        logger.warning("coverage re-derive queue full after delete; user %s can backfill", user.id)
 
 
 async def _read_capped(file: UploadFile, limit: int) -> bytes:

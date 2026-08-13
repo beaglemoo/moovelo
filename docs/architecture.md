@@ -601,6 +601,16 @@ accumulating across every activity that touched it. The composite primary
 key is the only index it needs - coverage and the matching upsert both
 reach a row by that exact pair, and nothing else queries it.
 
+Because it is a per-`(user, way)` aggregate with no per-activity link,
+deleting a ride cannot decrement its contribution directly. Deleting an
+activity therefore clears the rider's `activity_ways` rows, marks their
+remaining activities unmatched (`ways_matched_at = NULL`) and enqueues a
+backfill, so coverage is re-derived from what is left rather than kept
+inflated by a ride that no longer exists (`rederive_user_coverage`, called
+from `delete_activity`). The cost is that a delete re-matches all the
+rider's remaining rides; the alternative, storing every activity's way
+contributions, was not worth the extra table for an infrequent action.
+
 ### Matching: map_snap, not edge_walk
 
 The surface breakdown (`services/valhalla.py: trace_attributes`) walks a
