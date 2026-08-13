@@ -215,11 +215,19 @@ class WayMatchQueue:
         rather than on the caller's request session, so it can never race the
         worker's own per-activity claim/upsert: doing the clear on a second
         session deadlocked against the worker and left phantom over-credits.
-        It forces activity_ids to None (rebuild everything)."""
+        It forces activity_ids to None (rebuild everything).
+
+        A re-derive is NOT tracked in the bounded _jobs map. A match job is
+        tracked so its status can be polled, and the bound keeps that map from
+        growing without limit. A delete's re-derive is neither polled (the
+        DELETE already returned 204) nor optional: tracking it once let a later
+        burst of deletes force-evict it before the worker ran it, silently
+        stranding a deleted ride's credit. Left off the map it can never be
+        evicted - it is fire-and-forget on the worker, and the unbounded work
+        queue (cheap tuples) always accepts it."""
         job = MatchJob(id=uuid.uuid4(), user_id=user_id)
-        # A re-derive must always be tracked: unlike a match job, a dropped
-        # re-derive has no recovery (below).
-        self._remember(job, force=clear_first)
+        if not clear_first:
+            self._remember(job)
         self._queue.put_nowait(
             (job.id, user_id, None if clear_first else activity_ids, clear_first)
         )
@@ -229,22 +237,12 @@ class WayMatchQueue:
         job = self._jobs.get(job_id)
         return job if job is not None and job.user_id == user_id else None
 
-    def _remember(self, job: MatchJob, force: bool = False) -> None:
+    def _remember(self, job: MatchJob) -> None:
         while len(self._jobs) >= MAX_TRACKED_JOBS:
             finished = next(
                 (i for i, j in self._jobs.items() if j.status in ("done", "error")), None
             )
             if finished is None:
-                if force:
-                    # A re-derive (a delete's clear_first job) is correctness-
-                    # critical and must always schedule: dropping it strands a
-                    # deleted ride's coverage credit with no recovery, since the
-                    # backfill button only matches unmatched rides and cannot
-                    # remove a credit whose activity is gone. Displace the oldest
-                    # tracked job to make room - if it was a queued match, that
-                    # ride just stays unmatched and a backfill recovers it.
-                    del self._jobs[next(iter(self._jobs))]
-                    continue
                 # Mirror ArchiveImportQueue._remember: rather than fall through
                 # and insert anyway - which let _jobs grow past
                 # MAX_TRACKED_JOBS under a submission burst, since this queue's
@@ -281,9 +279,18 @@ class WayMatchQueue:
         activity_ids: list[uuid.UUID] | None,
         clear_first: bool = False,
     ) -> None:
-        job = self._jobs.get(job_id)
-        if job is None or self._valhalla is None:
+        if self._valhalla is None:
             return
+        job = self._jobs.get(job_id)
+        if job is None:
+            # A tracked match job that was evicted (its status was polled while
+            # newer jobs pushed it out) - its ride simply stays unmatched and a
+            # backfill recovers it, so skip. A re-derive is deliberately never
+            # tracked (see submit); it runs on a throwaway job, since nobody
+            # polls it and it must never be skippable.
+            if not clear_first:
+                return
+            job = MatchJob(id=job_id, user_id=user_id)
         job.status = "running"
 
         async with session_factory() as db:
