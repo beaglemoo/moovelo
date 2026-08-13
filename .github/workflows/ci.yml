@@ -100,7 +100,9 @@ jobs:
         run: |
           out=$(bash scripts/refresh-data.sh --dry-run --profile prod)
           echo "$out"
-          ln() { printf '%s\n' "$out" | grep -nF "$1" | head -1 | cut -d: -f1; }
+          # `|| true`: GitHub runs `bash -eo pipefail`, so a grep miss would
+          # otherwise abort the step before the friendly "missing step" report.
+          ln() { printf '%s\n' "$out" | grep -nF "$1" | head -1 | cut -d: -f1 || true; }
           stop=$(ln 'stop valhalla')
           remove=$(ln 'rm -f valhalla')
           vol=$(ln 'docker volume rm')
