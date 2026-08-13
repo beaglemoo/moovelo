@@ -8,6 +8,7 @@ import {
 	type SavedRoute
 } from '$lib/api';
 import { Latest, Poller } from '$lib/latest';
+import { onSessionReset } from '$lib/session';
 
 export interface ImportResult<T> {
 	/** Filenames repeat - two apps both export "route.gpx" - so rows need
@@ -60,6 +61,15 @@ class ImportQueue<T> {
 
 	clear() {
 		this.results = [];
+	}
+
+	/** Everything clear() drops, plus the batch signals - the whole queue back
+	 * to construction state, for a logout that must not carry results (or a
+	 * stuck busy) into the next account. */
+	reset() {
+		this.results = [];
+		this.busy = false;
+		this.completedBatches = 0;
 	}
 
 	async add(files: Iterable<File>, preset: Preset = 'road'): Promise<void> {
@@ -143,6 +153,10 @@ class PendingArchives {
 		this.files = [];
 		return taken;
 	}
+
+	reset() {
+		this.files = [];
+	}
 }
 
 export const pendingArchives = new PendingArchives();
@@ -189,6 +203,17 @@ class ArchiveImport {
 
 	dismiss() {
 		this.attempt = null;
+	}
+
+	/** Back to construction state for a logout. Claim a fresh owner token so any
+	 * in-flight upload or poll started by the previous account is superseded and
+	 * its response discarded, stop and replace the poller, and drop the card. */
+	reset() {
+		this.#owner.claim();
+		this.#poll.stop();
+		this.#poll = new Poller();
+		this.attempt = null;
+		this.completed = 0;
 	}
 
 	async start(file: File): Promise<void> {
@@ -255,6 +280,17 @@ export const archiveImport = new ArchiveImport();
 export const activityImportQueue = new ImportQueue<ActivityDetail>((file) =>
 	activities.importFile(file)
 );
+
+// These four all outlive navigation on purpose; they must not outlive a
+// logout, or the next account on the same tab sees the previous rider's import
+// results (filename, distance, a View link into their route) and any job still
+// being polled. One registration covers the family - see lib/session.ts.
+onSessionReset(() => {
+	importQueue.reset();
+	activityImportQueue.reset();
+	pendingArchives.reset();
+	archiveImport.reset();
+});
 
 /** Routes whose track could not be matched, so they carry no turn cues. */
 export function unmatched(results: ImportResult<SavedRoute>[]): ImportResult<SavedRoute>[] {

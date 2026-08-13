@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { ApiError, auth, type UserInfo } from '$lib/api';
 	import { activityImportQueue, importQueue, pendingArchives } from '$lib/import.svelte';
+	import { resetSession } from '$lib/session';
 	import { unsaved } from '$lib/unsaved.svelte';
 	import type { Snippet } from 'svelte';
 
@@ -76,7 +77,10 @@
 			.catch((err) => {
 				if (err instanceof ApiError && err.status === 401 && path !== '/login') {
 					// The session is gone; bounce to login. Mark the teardown so
-					// the planner's guard does not block this forced navigation.
+					// the planner's guard does not block this forced navigation, and
+					// clear the session-scoped stores so an expired session does not
+					// carry its history and import state into the next login.
+					resetSession();
 					unsaved.leaving = true;
 					void goto('/login');
 				}
@@ -107,6 +111,10 @@
 			return;
 		}
 		user = null;
+		// Clear the planner history and import queues so the next account to log
+		// in on this tab does not inherit this rider's undo stack or import
+		// results - the singletons outlive a client-side logout otherwise.
+		resetSession();
 		unsaved.leaving = true;
 		await goto('/login');
 	}
