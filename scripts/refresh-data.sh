@@ -12,9 +12,17 @@
 # Usage: scripts/refresh-data.sh [--profile dev|prod] [--skip-index] [--dry-run]
 #
 # Honours the same environment as `docker compose` (reads ./.env): INDEX_ROADS,
-# VALHALLA_TILE_URL, OSM_DIR, WORK_DIR all flow through unchanged. Set
-# SMOKE_ROUTE="lat,lon;lat,lon" to point the final route probe at your extract
-# (default is central London, valid for the England default extract).
+# VALHALLA_TILE_URL, OSM_DIR, WORK_DIR all flow through unchanged.
+#
+# Two more knobs are plain shell environment variables, NOT .env keys - this
+# script does not source .env for them, so export them in the calling shell,
+# cron line or systemd unit:
+#   SMOKE_ROUTE="lat,lon;lat,lon"  point the final route probe at your extract
+#                                  (default is central London, valid for the
+#                                  England default extract).
+#   HEALTH_TIMEOUT=<seconds>      cap how long to wait for Valhalla to report
+#                                  healthy before giving up (default 7200 = 2h)
+#                                  so an unattended run cannot hang forever.
 set -euo pipefail
 
 PROFILE=prod
@@ -27,7 +35,7 @@ while [ $# -gt 0 ]; do
 		--profile=*) PROFILE="${1#*=}"; shift ;;
 		--skip-index) SKIP_INDEX=1; shift ;;
 		--dry-run) DRY_RUN=1; shift ;;
-		-h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,25p' "$0"; exit 0 ;;
 		*) echo "error: unknown argument: $1" >&2; exit 2 ;;
 	esac
 done

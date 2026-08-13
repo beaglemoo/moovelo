@@ -1670,6 +1670,29 @@ about extract coverage when no roads are found near a waypoint.
     not exist under `vite dev`, so their Playwright suite (`e2e-pwa/`, run
     with `npm run e2e:pwa`) runs against a real `vite preview` build - not
     the dev-server smoke suite, where it would pass for the wrong reason.
+- **Dark mode is ~20 semantic CSS custom properties on `:root`**
+  (`frontend/src/routes/+layout.svelte`), not a second stylesheet or a CSS
+  filter over the light theme. Three-state resolution, same shape as the
+  units toggle: `prefers-color-scheme` decides it for a rider who has never
+  touched the control, an explicit choice is remembered per-browser in
+  `localStorage` (`moovelo:theme`, `lib/theme.svelte.ts`) as
+  `:root[data-theme]` and wins over the media query in both directions, and
+  a small inline script in `app.html` applies the stored override before
+  first paint - the FOUC guard, since anything later would flash the light
+  theme on a dark-preferring browser. The map raster is dimmed in dark mode
+  via MapLibre paint properties (`raster-brightness-max` and friends) set
+  on the layer, not a CSS `filter` over the canvas - a filter also dims
+  the route line, waypoint markers and POI pins drawn on the same canvas,
+  which must stay legible and colour-accurate. Gradient bands, climb
+  categories and POI marker colours are fixed in both themes for the same
+  reason: they are already chosen for contrast against the map, not the
+  page chrome. **`--accent` and `--danger` stay flat** across both themes
+  because buttons rely on white text over them, but their *text* uses is
+  split into separate tokens, `--link` and `--danger-text`, brightened in
+  dark (`#4ea6e6` / `#ff6b64` against Solarized's `#268bd2` / `#dc322f`) to
+  clear WCAG AA on the dark surface - the flat accent colours fail AA as
+  body text on `--bg`/`--surface` even though they read fine as a button
+  background with white text on top.
 - **Compose profiles over separate files**: `dev` (hot reload, mounted
   source, Vite on 5173) and `prod` (single container on 17777) live in one
   docker-compose.yml.
