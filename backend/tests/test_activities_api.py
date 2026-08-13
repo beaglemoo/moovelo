@@ -162,6 +162,45 @@ async def test_deletes_a_ride(client: AsyncClient) -> None:
     assert (await client.get(f"/api/activities/{body['id']}")).status_code == 404
 
 
+async def test_deleting_a_ride_clears_its_coverage_credit(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """activity_ways has no per-activity link, so a deleted ride's coverage
+    credit cannot be decremented in place. Deleting a ride must instead reset
+    the rider's aggregate so it can be re-derived from what remains - without
+    that, coverage stays inflated forever, still crediting ways after every
+    contributing activity is gone."""
+    from sqlalchemy import select
+
+    from app.models import ActivityWay
+
+    await register(client)
+    body = await _import(client, GPX_RIDE)
+    activity_id = uuid.UUID(body["id"])
+    user_id = await db.scalar(select(Activity.user_id).where(Activity.id == activity_id))
+
+    # Simulate the state after matching: this ride credited way 999, and the
+    # ride is marked attempted.
+    db.add(ActivityWay(user_id=user_id, way_id=999, first_ridden_at=datetime.now(UTC)))
+    await db.execute(
+        update(Activity).where(Activity.id == activity_id).values(ways_matched_at=datetime.now(UTC))
+    )
+    await db.commit()
+
+    assert (await client.delete(f"/api/activities/{activity_id}")).status_code == 204
+
+    # The DELETE ran in the request's own session; drop this session's cached
+    # copy of the row so the query reads the committed state (Postgres READ
+    # COMMITTED gives each statement a fresh snapshot).
+    db.expire_all()
+    remaining = (
+        (await db.execute(select(ActivityWay).where(ActivityWay.user_id == user_id)))
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+
+
 async def test_one_riders_activities_are_invisible_to_another(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

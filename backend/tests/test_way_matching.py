@@ -15,7 +15,7 @@ from app.models import Activity, ActivityWay, User
 from app.services.activities import activity_from_track, name_from_filename
 from app.services.importer import parse_route_file
 from app.services.valhalla import ValhallaClient
-from app.services.way_matching import WayMatchQueue, match_activity
+from app.services.way_matching import WayMatchQueue, match_activity, rederive_user_coverage
 from tests.test_activities_api import GPX_RIDE
 
 BASE = "http://valhalla.test"
@@ -285,3 +285,67 @@ async def test_two_jobs_cannot_double_credit_the_same_activity(db: AsyncSession)
         )
     ).scalar_one()
     assert row.ride_count == 1
+
+
+@respx.mock
+async def test_rederive_rebuilds_coverage_from_the_survivors(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two rides both credit way 999 (ride_count 2). Deleting one and
+    re-deriving must clear the aggregate, mark the survivor unmatched, and -
+    once a backfill re-credits - leave ride_count 1, not the stale 2 that a
+    per-(user, way) aggregate with no per-activity link would otherwise keep."""
+    from sqlalchemy import delete
+
+    from app.models import Activity
+
+    monkeypatch.setattr("app.services.way_matching.session_factory", db_factory)
+    respx.post(f"{BASE}/trace_attributes").respond(
+        json={"units": "kilometers", "edges": [{"way_id": 999, "length": 0.5}]}
+    )
+    user = await _user(db)
+    uid = user.id  # capture before any expire, so later reads never lazy-load
+    valhalla = ValhallaClient(base_url=BASE)
+    ride_a = await _activity(db, user)
+    a_id = ride_a.id
+    ride_b = await _activity(db, user)
+    await match_activity(db, valhalla, ride_a)
+    await db.commit()
+    await match_activity(db, valhalla, ride_b)
+    await db.commit()
+
+    async with db_factory() as fresh:
+        row = (
+            await fresh.execute(
+                select(ActivityWay).where(ActivityWay.user_id == uid, ActivityWay.way_id == 999)
+            )
+        ).scalar_one()
+        assert row.ride_count == 2
+
+    # Delete one ride, then re-derive (clears the aggregate, marks the
+    # survivor unmatched) and rebuild via a backfill.
+    await db.execute(delete(Activity).where(Activity.id == a_id))
+    await db.commit()
+    await rederive_user_coverage(db, uid)
+
+    async with db_factory() as fresh:
+        assert (
+            (await fresh.execute(select(ActivityWay).where(ActivityWay.user_id == uid)))
+            .scalars()
+            .all()
+        ) == []
+
+    queue = WayMatchQueue()
+    queue._valhalla = valhalla  # noqa: SLF001
+    job = queue.submit(uid)
+    await queue._process(job.id, uid, None)  # noqa: SLF001
+
+    async with db_factory() as fresh:
+        rebuilt = (
+            await fresh.execute(
+                select(ActivityWay).where(ActivityWay.user_id == uid, ActivityWay.way_id == 999)
+            )
+        ).scalar_one()
+        assert rebuilt.ride_count == 1

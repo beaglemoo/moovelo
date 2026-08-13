@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from geoalchemy2.functions import ST_AsText
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -112,6 +112,31 @@ async def match_activity(
     if way_ids:
         await _record_ways(db, activity.user_id, way_ids)
     return len(way_ids)
+
+
+async def rederive_user_coverage(db: AsyncSession, user_id: uuid.UUID) -> None:
+    """Reset a rider's coverage so it can be rebuilt from their remaining
+    activities. Commits.
+
+    activity_ways is a per-(user, way) aggregate: ride_count is incremented
+    per matched ride and there is no per-activity record of which rides
+    contributed a given way. So a deleted ride's credit cannot be decremented
+    directly - the honest way to reflect a deletion is to clear the rider's
+    rows and mark every remaining ride unmatched, then let a backfill
+    re-credit from scratch. The caller submits that backfill after this
+    returns; kept separate so a refused submit does not leave the reset
+    half-done, and so it does not fire before this reset has committed (the
+    job's own SELECT reads ways_matched_at).
+
+    This does re-match every one of the rider's remaining rides on each
+    delete, which is the accepted cost of not storing per-activity way
+    contributions.
+    """
+    await db.execute(delete(ActivityWay).where(ActivityWay.user_id == user_id))
+    await db.execute(
+        update(Activity).where(Activity.user_id == user_id).values(ways_matched_at=None)
+    )
+    await db.commit()
 
 
 async def _record_ways(db: AsyncSession, user_id: uuid.UUID, way_ids: set[int]) -> None:
