@@ -122,15 +122,19 @@ async def rederive_user_coverage(db: AsyncSession, user_id: uuid.UUID) -> None:
     per matched ride and there is no per-activity record of which rides
     contributed a given way. So a deleted ride's credit cannot be decremented
     directly - the honest way to reflect a deletion is to clear the rider's
-    rows and mark every remaining ride unmatched, then let a backfill
-    re-credit from scratch. The caller submits that backfill after this
-    returns; kept separate so a refused submit does not leave the reset
-    half-done, and so it does not fire before this reset has committed (the
-    job's own SELECT reads ways_matched_at).
+    rows and mark every remaining ride unmatched, then re-credit from scratch.
 
-    This does re-match every one of the rider's remaining rides on each
-    delete, which is the accepted cost of not storing per-activity way
-    contributions.
+    Called by _process for a clear_first job, on the single match-queue
+    worker's own session, immediately before its match loop re-credits the
+    survivors. It runs there rather than on the deleting request's session for
+    a reason that cost a round of review: on a second session it deadlocked
+    against the worker's concurrent per-activity claim/upsert, and its READ
+    COMMITTED DELETE missed a mid-flight match's not-yet-committed credit,
+    leaving a phantom over-count. On the worker there is no concurrent coverage
+    writer, so neither can happen.
+
+    This re-matches every one of the rider's remaining rides on each delete,
+    the accepted cost of not storing per-activity way contributions.
     """
     await db.execute(delete(ActivityWay).where(ActivityWay.user_id == user_id))
     await db.execute(
@@ -168,7 +172,11 @@ class WayMatchQueue:
     """
 
     def __init__(self) -> None:
-        self._queue: asyncio.Queue[tuple[uuid.UUID, uuid.UUID, list[uuid.UUID] | None]] = (
+        # (job_id, user_id, activity_ids, clear_first). clear_first rebuilds a
+        # rider's whole coverage: it runs on this single worker rather than on
+        # a request session precisely so it cannot race a concurrent match -
+        # see submit(clear_first=True) and rederive_user_coverage.
+        self._queue: asyncio.Queue[tuple[uuid.UUID, uuid.UUID, list[uuid.UUID] | None, bool]] = (
             asyncio.Queue()
         )
         self._jobs: OrderedDict[uuid.UUID, MatchJob] = OrderedDict()
@@ -190,14 +198,29 @@ class WayMatchQueue:
                 job.status = "error"
                 job.error = "Interrupted by a restart - try again."
 
-    def submit(self, user_id: uuid.UUID, activity_ids: list[uuid.UUID] | None = None) -> MatchJob:
+    def submit(
+        self,
+        user_id: uuid.UUID,
+        activity_ids: list[uuid.UUID] | None = None,
+        clear_first: bool = False,
+    ) -> MatchJob:
         """Queue a batch. `activity_ids=None` means every activity for this
         rider that has never been attempted - the backfill button's request;
         an explicit list is a fresh import, which is always worth attempting
-        even though `ways_matched_at` is already null for it."""
+        even though `ways_matched_at` is already null for it.
+
+        `clear_first=True` (a delete's re-derive) additionally clears the
+        rider's whole activity_ways aggregate and marks every ride unmatched
+        before matching - a full rebuild. It runs here, on the one worker,
+        rather than on the caller's request session, so it can never race the
+        worker's own per-activity claim/upsert: doing the clear on a second
+        session deadlocked against the worker and left phantom over-credits.
+        It forces activity_ids to None (rebuild everything)."""
         job = MatchJob(id=uuid.uuid4(), user_id=user_id)
         self._remember(job)
-        self._queue.put_nowait((job.id, user_id, activity_ids))
+        self._queue.put_nowait(
+            (job.id, user_id, None if clear_first else activity_ids, clear_first)
+        )
         return job
 
     def get(self, job_id: uuid.UUID, user_id: uuid.UUID) -> MatchJob | None:
@@ -227,9 +250,9 @@ class WayMatchQueue:
 
     async def _run(self) -> None:
         while True:
-            job_id, user_id, activity_ids = await self._queue.get()
+            job_id, user_id, activity_ids, clear_first = await self._queue.get()
             try:
-                await self._process(job_id, user_id, activity_ids)
+                await self._process(job_id, user_id, activity_ids, clear_first)
             except Exception:  # noqa: BLE001 - the worker must never die
                 logger.exception("Way match job %s crashed", job_id)
                 job = self._jobs.get(job_id)
@@ -240,7 +263,11 @@ class WayMatchQueue:
                 self._queue.task_done()
 
     async def _process(
-        self, job_id: uuid.UUID, user_id: uuid.UUID, activity_ids: list[uuid.UUID] | None
+        self,
+        job_id: uuid.UUID,
+        user_id: uuid.UUID,
+        activity_ids: list[uuid.UUID] | None,
+        clear_first: bool = False,
     ) -> None:
         job = self._jobs.get(job_id)
         if job is None or self._valhalla is None:
@@ -248,6 +275,12 @@ class WayMatchQueue:
         job.status = "running"
 
         async with session_factory() as db:
+            # A re-derive (after a delete) wipes the rider's aggregate and marks
+            # every ride unmatched here, on the worker, so it serialises with
+            # matching instead of racing it on a second session.
+            if clear_first:
+                await rederive_user_coverage(db, user_id)
+
             query = select(Activity).where(Activity.user_id == user_id)
             query = (
                 query.where(Activity.id.in_(activity_ids))

@@ -15,7 +15,7 @@ from app.models import Activity, ActivityWay, User
 from app.services.activities import activity_from_track, name_from_filename
 from app.services.importer import parse_route_file
 from app.services.valhalla import ValhallaClient
-from app.services.way_matching import WayMatchQueue, match_activity, rederive_user_coverage
+from app.services.way_matching import WayMatchQueue, match_activity
 from tests.test_activities_api import GPX_RIDE
 
 BASE = "http://valhalla.test"
@@ -293,10 +293,12 @@ async def test_rederive_rebuilds_coverage_from_the_survivors(
     db_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Two rides both credit way 999 (ride_count 2). Deleting one and
-    re-deriving must clear the aggregate, mark the survivor unmatched, and -
-    once a backfill re-credits - leave ride_count 1, not the stale 2 that a
-    per-(user, way) aggregate with no per-activity link would otherwise keep."""
+    """Two rides both credit way 999 (ride_count 2). Deleting one and running a
+    clear_first re-derive on the worker must clear the aggregate, mark the
+    survivor unmatched, and re-credit it - leaving ride_count 1, not the stale
+    2 a per-(user, way) aggregate with no per-activity link would otherwise
+    keep. The clear runs on this single worker (clear_first), never on a second
+    session, so it cannot deadlock or race concurrent matching."""
     from sqlalchemy import delete
 
     from app.models import Activity
@@ -324,28 +326,22 @@ async def test_rederive_rebuilds_coverage_from_the_survivors(
         ).scalar_one()
         assert row.ride_count == 2
 
-    # Delete one ride, then re-derive (clears the aggregate, marks the
-    # survivor unmatched) and rebuild via a backfill.
+    # Delete one ride, then run the re-derive the way delete_activity schedules
+    # it: a clear_first job on the worker, which clears the aggregate + marks
+    # every survivor unmatched + re-matches, all in the worker's own session.
     await db.execute(delete(Activity).where(Activity.id == a_id))
     await db.commit()
-    await rederive_user_coverage(db, uid)
-
-    async with db_factory() as fresh:
-        assert (
-            (await fresh.execute(select(ActivityWay).where(ActivityWay.user_id == uid)))
-            .scalars()
-            .all()
-        ) == []
 
     queue = WayMatchQueue()
     queue._valhalla = valhalla  # noqa: SLF001
-    job = queue.submit(uid)
-    await queue._process(job.id, uid, None)  # noqa: SLF001
+    job = queue.submit(uid, clear_first=True)
+    await queue._process(job.id, uid, None, clear_first=True)  # noqa: SLF001
 
     async with db_factory() as fresh:
         rebuilt = (
-            await fresh.execute(
-                select(ActivityWay).where(ActivityWay.user_id == uid, ActivityWay.way_id == 999)
-            )
-        ).scalar_one()
-        assert rebuilt.ride_count == 1
+            (await fresh.execute(select(ActivityWay).where(ActivityWay.user_id == uid)))
+            .scalars()
+            .all()
+        )
+        # Only the surviving ride's way, credited exactly once.
+        assert {(r.way_id, r.ride_count) for r in rebuilt} == {(999, 1)}
