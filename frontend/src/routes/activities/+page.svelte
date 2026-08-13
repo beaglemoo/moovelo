@@ -1,17 +1,15 @@
 <script lang="ts">
-	import {
-		activities,
-		ApiError,
-		type ActivityQuery,
-		type ActivitySummary,
-		type ArchiveImportStatus
-	} from '$lib/api';
-	import { Latest, Poller } from '$lib/latest';
-	import { onDestroy } from 'svelte';
+	import { activities, type ActivityQuery, type ActivitySummary } from '$lib/api';
+	import { Latest } from '$lib/latest';
 	import CoverageCard from '$lib/components/CoverageCard.svelte';
 	import ImportResults from '$lib/components/ImportResults.svelte';
 	import { km } from '$lib/format';
-	import { ACCEPTED_FILES, activityImportQueue, pendingArchives } from '$lib/import.svelte';
+	import {
+		ACCEPTED_FILES,
+		activityImportQueue,
+		archiveImport,
+		pendingArchives
+	} from '$lib/import.svelte';
 
 	let fileInput: HTMLInputElement | undefined = $state();
 	let items: ActivitySummary[] = $state([]);
@@ -20,72 +18,21 @@
 	let query: ActivityQuery = $state({});
 
 	// A bulk export is one file that becomes hundreds of rides, so it takes a
-	// different path from a single upload: submit, then poll a job. Kept apart
-	// from the per-file queue rather than folded into it, because the two
-	// report progress in genuinely different units.
-	// ONE value describing the current attempt for its whole life, rather
-	// than a job object and an error string that each cover part of it.
-	//
-	// This is the sixth change to this corner (#89, #90, #91, #96, #97) and
-	// the first four all had the same shape: two loosely-related variables,
-	// a rule relating them, and a state the rule did not anticipate. Text
-	// comparison hid a real error; nulling the job to fix that left a window
-	// with no card, no error and an enabled Import button while an upload was
-	// genuinely in flight. Each fix was correct about the bug in front of it
-	// and produced the next one.
-	//
-	// A phase that always exists removes the gap by construction: there is no
-	// "between" to fall into, nothing to relate, and the busy state is read
-	// off the same value the card renders. The upload itself is a phase, not
-	// the absence of one.
-	type Attempt =
-		| { phase: 'uploading'; filename: string }
-		| { phase: 'tracking'; job: ArchiveImportStatus }
-		| { phase: 'failed'; filename: string; message: string };
+	// different path from a single upload: submit, then poll a job. The whole
+	// attempt/poll/ownership machinery now lives in a module singleton
+	// (archiveImport) rather than component-local state, so it survives
+	// navigation - leaving this page mid-import and coming back used to
+	// destroy the card and re-enable the Import button while the backend job
+	// ran on. These are read-only bridges to it; the phase design and its long
+	// history live where the state does now, in import.svelte.ts.
+	let attempt = $derived(archiveImport.attempt);
+	let archiveBusy = $derived(archiveImport.busy);
 
-	let attempt: Attempt | null = $state(null);
-	// Stops for good on unmount, including a status request already in
-	// flight at that moment - clearing only the scheduled timer would let
-	// that request's own callback arm a fresh one nothing is left to clear,
-	// and the page would go on polling invisibly after it was gone.
-	// Replaced per run rather than reused: stop() is permanent, and starting a
-	// second import must end the first one's polling for good.
-	let archivePoll = new Poller();
-	// The button now disables from the click, because the 'uploading' phase is
-	// set synchronously - so the window this was written for is closed at the
-	// source. Ownership stays, because the button is not the only way in: a
-	// dropped .zip reaches startArchive through pendingArchives without
-	// touching it. Whoever claimed last owns the card; an earlier upload's
-	// response landing afterwards is discarded rather than reverting the
-	// display to an attempt that was superseded before it ever reported.
-	const archiveOwner = new Latest();
 	// Five independent things call refresh(): mount, the year filter, a
 	// delete, an import batch finishing, and an archive finishing. Without an
 	// owner the earlier of two overlapping calls can resolve last and put a
 	// stale list back on screen.
 	const listOwner = new Latest();
-
-	onDestroy(() => archivePoll.stop());
-
-	// Only the single-file queue gated the Import button - an archive still
-	// queued or running left it clickable, and the backend has one worker for
-	// the whole install, so a second archive submitted mid-import either sat
-	// behind the first for no visible reason or, once the queue gained a
-	// bound, could 429. Selecting several .zip files also used to fire them
-	// all in a loop that only awaited the upload's 202, not the import
-	// finishing, so only the last one's status was ever actually tracked -
-	// startArchive now awaits the whole job before chooseFiles moves to the
-	// next file.
-	// Read off the same value the card renders, so the button and the card can
-	// never disagree about whether an import is happening. Uploading counts:
-	// a 500 MB export takes real time to send, and leaving the button live
-	// through it invited a second submission that silently superseded the
-	// first.
-	let archiveBusy = $derived.by(() => {
-		if (attempt?.phase === 'uploading') return true;
-		if (attempt?.phase !== 'tracking') return false;
-		return attempt.job.status === 'queued' || attempt.job.status === 'running';
-	});
 
 	async function chooseFiles(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
@@ -98,75 +45,7 @@
 		const singles = picked.filter((file) => !file.name.toLowerCase().endsWith('.zip'));
 
 		if (singles.length) await activityImportQueue.add(singles);
-		for (const zip of zips) await startArchive(zip);
-	}
-
-	async function startArchive(file: File) {
-		const token = archiveOwner.claim();
-		archivePoll.stop();
-		archivePoll = new Poller();
-		// Straight from whatever was there to this attempt's own first phase.
-		// The previous result is replaced rather than cleared, so there is no
-		// instant where the page shows nothing while an upload is in flight.
-		attempt = { phase: 'uploading', filename: file.name };
-		try {
-			const started = await activities.importArchive(file);
-			if (!archiveOwner.isCurrent(token)) return;
-			attempt = { phase: 'tracking', job: started };
-		} catch (err) {
-			if (!archiveOwner.isCurrent(token)) return;
-			attempt = {
-				phase: 'failed',
-				filename: file.name,
-				message: err instanceof Error ? err.message : 'Could not read that archive'
-			};
-			return;
-		}
-		await pollArchiveUntilDone(token);
-	}
-
-	/** Polls until the job leaves queued/running, then resolves - so a
-	 * caller awaiting this (chooseFiles, serialising several .zip files) only
-	 * moves on once this one has actually finished, not once it was merely
-	 * accepted. */
-	async function pollArchiveUntilDone(token: number): Promise<void> {
-		const poller = archivePoll;
-		await poller.run(async () => {
-			if (!archiveOwner.isCurrent(token)) return false;
-			if (attempt?.phase !== 'tracking') return false;
-			const job = attempt.job;
-			if (job.status !== 'queued' && job.status !== 'running') return false;
-			try {
-				const next = await activities.archiveStatus(job.id);
-				if (!archiveOwner.isCurrent(token)) return false;
-				attempt = { phase: 'tracking', job: next };
-			} catch (err) {
-				if (!archiveOwner.isCurrent(token)) return false;
-				// Only a 404 means the job is genuinely gone - a restart, or
-				// eviction once enough later jobs finished - and only then is
-				// silently dropping the card the right answer. A 500 or a
-				// dropped connection used to look identical: the card vanished
-				// mid-import with nothing said, which for a multi-minute import
-				// of hundreds of files reads as "it lost my rides".
-				if (err instanceof ApiError && err.status === 404) {
-					attempt = null;
-				} else {
-					// 'failed' rather than a job still claiming to be running:
-					// leaving the card on its last "reading... 3 of 10" would be
-					// a lie, and archiveBusy reads from this, so a frozen
-					// 'running' would lock the Import button with no way back
-					// except leaving the page.
-					attempt = {
-						phase: 'failed',
-						filename: job.filename,
-						message: err instanceof Error ? err.message : 'Lost track of that import'
-					};
-				}
-				return false;
-			}
-			return true;
-		}, 1500);
-		if (archiveOwner.isCurrent(token)) void refresh();
+		for (const zip of zips) await archiveImport.start(zip);
 	}
 
 	// A .zip dropped on this page lands here: the layout's drop handler has no
@@ -176,8 +55,21 @@
 		if (!pendingArchives.files.length) return;
 		const waiting = pendingArchives.drain();
 		void (async () => {
-			for (const zip of waiting) await startArchive(zip);
+			for (const zip of waiting) await archiveImport.start(zip);
 		})();
+	});
+
+	// An archive finishing refreshes the list, the same signal shape the
+	// single-file queue gives via completedBatches. The counter lives on the
+	// module singleton, so a completion that lands while this page is unmounted
+	// is caught by the mount-time refresh() below rather than lost.
+	let seenArchive = 0;
+	$effect(() => {
+		const done = archiveImport.completed;
+		if (done !== seenArchive) {
+			seenArchive = done;
+			void refresh();
+		}
 	});
 
 	// Same shape as the library's: the queue finishing is what refreshes the
@@ -301,10 +193,10 @@
 				<span>uploading…</span>
 			{:else if attempt.phase === 'failed'}
 				<span class="error">{attempt.message}</span>
-				<button type="button" onclick={() => (attempt = null)}>Dismiss</button>
+				<button type="button" onclick={() => archiveImport.dismiss()}>Dismiss</button>
 			{:else if attempt.job.status === 'error'}
 				<span class="error">{attempt.job.error}</span>
-				<button type="button" onclick={() => (attempt = null)}>Dismiss</button>
+				<button type="button" onclick={() => archiveImport.dismiss()}>Dismiss</button>
 			{:else if attempt.job.status === 'done'}
 				<span>
 					{attempt.job.imported} imported
@@ -312,7 +204,7 @@
 					{#if attempt.job.skipped}· {attempt.job.skipped} not rides{/if}
 					{#if attempt.job.failed}· {attempt.job.failed} failed{/if}
 				</span>
-				<button type="button" onclick={() => (attempt = null)}>Dismiss</button>
+				<button type="button" onclick={() => archiveImport.dismiss()}>Dismiss</button>
 			{:else}
 				<span>
 					reading… {attempt.job.imported + attempt.job.failed} of {attempt.job.total || '?'}

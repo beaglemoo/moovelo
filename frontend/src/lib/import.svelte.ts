@@ -1,4 +1,13 @@
-import { activities, routes, type ActivityDetail, type Preset, type SavedRoute } from '$lib/api';
+import {
+	activities,
+	ApiError,
+	routes,
+	type ActivityDetail,
+	type ArchiveImportStatus,
+	type Preset,
+	type SavedRoute
+} from '$lib/api';
+import { Latest, Poller } from '$lib/latest';
 
 export interface ImportResult<T> {
 	/** Filenames repeat - two apps both export "route.gpx" - so rows need
@@ -137,6 +146,109 @@ class PendingArchives {
 }
 
 export const pendingArchives = new PendingArchives();
+
+/** One archive attempt described for its whole life by a single phase value,
+ * rather than a job object and an error string that each cover part of it.
+ * The upload itself is a phase, so there is no gap between states to fall
+ * into - see the long history in the ArchiveImport comment below. */
+export type Attempt =
+	| { phase: 'uploading'; filename: string }
+	| { phase: 'tracking'; job: ArchiveImportStatus }
+	| { phase: 'failed'; filename: string; message: string };
+
+/**
+ * A Strava-archive import, tracked at module scope so it survives navigation.
+ *
+ * The single-ride ImportQueue and pendingArchives already live here for the
+ * same reason. The archive attempt used to be component-local $state on
+ * /activities, so leaving the page and coming back mid-import destroyed the
+ * card and re-enabled the Import button while the backend job ran on - a
+ * seventh instance of this corner's recurring shape. The phase design is kept
+ * verbatim; only its lifetime moves from the component to here, and the poll
+ * is no longer stopped on unmount (that teardown was the bug).
+ */
+class ArchiveImport {
+	attempt = $state<Attempt | null>(null);
+	/** Bumped when an attempt reaches a terminal phase, so the page can
+	 * refresh its list - the same signal ImportQueue.completedBatches gives. */
+	completed = $state(0);
+	// Replaced per run rather than reused: Poller.stop() is permanent, and
+	// starting a second import must end the first one's polling for good.
+	#poll = new Poller();
+	// Whoever started last owns the card; an earlier upload's response landing
+	// afterwards is discarded rather than reverting to a superseded attempt.
+	#owner = new Latest();
+
+	/** True while an upload is in flight or its job is queued/running. Read off
+	 * the same value the card renders, so button and card cannot disagree. */
+	get busy(): boolean {
+		if (this.attempt?.phase === 'uploading') return true;
+		if (this.attempt?.phase !== 'tracking') return false;
+		return this.attempt.job.status === 'queued' || this.attempt.job.status === 'running';
+	}
+
+	dismiss() {
+		this.attempt = null;
+	}
+
+	async start(file: File): Promise<void> {
+		const token = this.#owner.claim();
+		this.#poll.stop();
+		this.#poll = new Poller();
+		// Straight from whatever was there to this attempt's own first phase, so
+		// there is no instant where the page shows nothing while an upload runs.
+		this.attempt = { phase: 'uploading', filename: file.name };
+		try {
+			const started = await activities.importArchive(file);
+			if (!this.#owner.isCurrent(token)) return;
+			this.attempt = { phase: 'tracking', job: started };
+		} catch (err) {
+			if (!this.#owner.isCurrent(token)) return;
+			this.attempt = {
+				phase: 'failed',
+				filename: file.name,
+				message: err instanceof Error ? err.message : 'Could not read that archive'
+			};
+			return;
+		}
+		await this.#pollUntilDone(token);
+	}
+
+	async #pollUntilDone(token: number): Promise<void> {
+		const poller = this.#poll;
+		await poller.run(async () => {
+			if (!this.#owner.isCurrent(token)) return false;
+			if (this.attempt?.phase !== 'tracking') return false;
+			const job = this.attempt.job;
+			if (job.status !== 'queued' && job.status !== 'running') return false;
+			try {
+				const next = await activities.archiveStatus(job.id);
+				if (!this.#owner.isCurrent(token)) return false;
+				this.attempt = { phase: 'tracking', job: next };
+			} catch (err) {
+				if (!this.#owner.isCurrent(token)) return false;
+				// Only a 404 means the job is genuinely gone - a restart, or
+				// eviction once enough later jobs finished. A 500 or a dropped
+				// connection used to look identical: the card vanished mid-import
+				// with nothing said, which reads as "it lost my rides".
+				if (err instanceof ApiError && err.status === 404) {
+					this.attempt = null;
+				} else {
+					this.attempt = {
+						phase: 'failed',
+						filename: job.filename,
+						message: err instanceof Error ? err.message : 'Lost track of that import'
+					};
+				}
+				return false;
+			}
+			return true;
+		}, 1500);
+		if (this.#owner.isCurrent(token)) this.completed += 1;
+	}
+}
+
+export const archiveImport = new ArchiveImport();
 
 /** Rides, not plans. No preset: an activity is never routed, so there is
  * nothing for a costing bundle to influence. */
