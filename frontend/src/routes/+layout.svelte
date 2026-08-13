@@ -94,9 +94,20 @@
 		) {
 			return;
 		}
-		unsaved.leaving = true;
-		await auth.logout();
+		// Tear the session down first, and only mark the teardown once it has
+		// actually happened. Setting unsaved.leaving before the awaited call let
+		// a failed logout (a network error) leave the flag stuck true - it is
+		// only ever reset when the planner re-mounts, which never happens
+		// because the navigation to /login never ran - so the planner's guard
+		// then silently skipped the rider's next real exit. On failure, stay put
+		// with the session and guard intact.
+		try {
+			await auth.logout();
+		} catch {
+			return;
+		}
 		user = null;
+		unsaved.leaving = true;
 		await goto('/login');
 	}
 	/** The browser's own "leave site?" prompt when the planner is holding

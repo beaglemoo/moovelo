@@ -144,3 +144,39 @@ test('browser Back to /login while authenticated and dirty still warns', async (
 	await expect(page).toHaveURL(/\/$/);
 	await expect(save).toBeEnabled();
 });
+
+test('a failed logout does not stick the leaving flag and strand the guard', async ({ page }) => {
+	await signIn(page);
+	await page.goto('/');
+	const canvas = page.locator('.map canvas').first();
+	await expect(canvas).toBeVisible();
+	await page.waitForTimeout(2500);
+
+	const save = page.getByRole('button', { name: 'Save', exact: true });
+	await expect(async () => {
+		const box = (await canvas.boundingBox())!;
+		await page.mouse.click(box.x + box.width / 2 - 40, box.y + box.height / 2 - 30);
+		await page.mouse.click(box.x + box.width / 2 + 40, box.y + box.height / 2 + 30);
+		await expect(save).toBeEnabled({ timeout: 8_000 });
+	}).toPass({ timeout: 40_000 });
+
+	// Logout's request fails (a network error). Accept every confirm.
+	await page.route('**/api/auth/logout', (route) => route.abort('failed'));
+	let asked = 0;
+	page.on('dialog', (dialog) => {
+		asked++;
+		void dialog.accept();
+	});
+	await page.getByRole('button', { name: 'Log out' }).click();
+	await expect.poll(() => asked, { timeout: 10_000 }).toBe(1);
+	// Logout failed: stayed on the planner, still logged in.
+	await expect(page).toHaveURL(/\/$/);
+	await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible();
+	await page.unroute('**/api/auth/logout');
+
+	// A real accidental exit must STILL warn - the failed logout must not have
+	// left unsaved.leaving stuck true. Accepting this second confirm navigates.
+	await page.getByRole('link', { name: 'Library' }).click();
+	await expect.poll(() => asked, { timeout: 10_000 }).toBe(2);
+	await expect(page).toHaveURL(/\/library$/);
+});
