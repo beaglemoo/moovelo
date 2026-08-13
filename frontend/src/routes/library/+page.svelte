@@ -485,27 +485,32 @@
 		padding: 0.3rem 0.5rem;
 		font: inherit;
 		font-size: 0.9rem;
+		border: 1px solid var(--input-border);
+		border-radius: 6px;
+		background: var(--input-bg);
+		color: var(--text);
 	}
 	.filters select,
 	.toggle {
 		font: inherit;
 		font-size: 0.85rem;
 		padding: 0.3rem 0.5rem;
-		border: 1px solid #c8c8c8;
+		border: 1px solid var(--input-border);
 		border-radius: 6px;
-		background: #fff;
+		background: var(--surface);
+		color: var(--text);
 		cursor: pointer;
 	}
 	.toggle.on {
-		background: #fff8e1;
-		border-color: #e0a800;
-		color: #7a5b00;
+		background: color-mix(in srgb, var(--warning) 18%, var(--surface));
+		border-color: var(--warning);
+		color: var(--warning);
 	}
 	.link {
 		border: none;
 		background: none;
 		padding: 0;
-		color: #0b6fa4;
+		color: var(--link);
 		cursor: pointer;
 		font: inherit;
 		text-decoration: underline;
@@ -515,12 +520,12 @@
 		background: none;
 		cursor: pointer;
 		font-size: 1.05rem;
-		color: #b8b8b8;
+		color: var(--text-muted);
 		padding: 0 0.2rem 0 0;
 		line-height: 1;
 	}
 	.star.on {
-		color: #e0a800;
+		color: var(--warning);
 	}
 	.tags {
 		display: flex;
@@ -530,18 +535,18 @@
 		margin-top: 0.2rem;
 	}
 	.tag {
-		background: #eef2f4;
+		background: var(--surface-sunken);
 		border-radius: 10px;
 		padding: 0.05rem 0.5rem;
 		font-size: 0.75rem;
-		color: #37474f;
+		color: var(--text);
 	}
 	.tag-edit {
 		border: none;
 		background: none;
 		padding: 0;
 		font-size: 0.75rem;
-		color: #708090;
+		color: var(--text-muted);
 		cursor: pointer;
 	}
 	.tag-input {
@@ -552,14 +557,22 @@
 	}
 	.imported {
 		font-size: 0.7rem;
-		background: #e8f0e8;
-		color: #33691e;
+		background: color-mix(in srgb, var(--success) 18%, var(--surface));
+		color: var(--success);
 		border-radius: 10px;
 		padding: 0.05rem 0.45rem;
 		margin-left: 0.35rem;
 	}
 	.import {
 		margin-left: auto;
+		font: inherit;
+		font-size: 0.85rem;
+		padding: 0.3rem 0.7rem;
+		border: 1px solid var(--input-border);
+		border-radius: 6px;
+		background: var(--surface);
+		color: var(--text);
+		cursor: pointer;
 	}
 
 	.page {
@@ -569,7 +582,7 @@
 	}
 	h1 {
 		font-size: 1.3rem;
-		color: #073642;
+		color: var(--text);
 	}
 	.header {
 		display: flex;
@@ -578,8 +591,8 @@
 		gap: 1rem;
 	}
 	.wahoo-connect {
-		border: 1px solid #268bd2;
-		color: #268bd2;
+		border: 1px solid var(--accent);
+		color: var(--accent);
 		border-radius: 8px;
 		padding: 0.4rem 0.8rem;
 		font-size: 0.9rem;
@@ -587,7 +600,7 @@
 	}
 	.wahoo-connected {
 		font-size: 0.85rem;
-		color: #586e75;
+		color: var(--text-muted);
 		display: flex;
 		gap: 0.6rem;
 		align-items: center;
@@ -598,7 +611,7 @@
 		padding: 0;
 		font: inherit;
 		font-size: 0.85rem;
-		color: #dc322f;
+		color: var(--danger);
 		cursor: pointer;
 	}
 	.badge {
@@ -609,16 +622,17 @@
 		letter-spacing: 0.03em;
 	}
 	.badge.pending {
+		/* Accent alpha-tint highlight fill - deliberately left literal. */
 		background: #b5890033;
-		color: #b58900;
+		color: var(--warning);
 	}
 	.badge.ok {
 		background: #85990033;
-		color: #859900;
+		color: var(--success);
 	}
 	.badge.bad {
 		background: #dc322f33;
-		color: #dc322f;
+		color: var(--danger);
 	}
 	table {
 		width: 100%;
@@ -630,13 +644,13 @@
 		font-size: 0.8rem;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
-		color: #93a1a1;
+		color: var(--text-muted);
 		padding: 0.4rem 0.6rem;
-		border-bottom: 2px solid #eee8d5;
+		border-bottom: 2px solid var(--border);
 	}
 	td {
 		padding: 0.55rem 0.6rem;
-		border-bottom: 1px solid #eee8d5;
+		border-bottom: 1px solid var(--border);
 	}
 	.name {
 		background: none;
@@ -644,11 +658,11 @@
 		padding: 0;
 		font: inherit;
 		font-weight: 600;
-		color: #268bd2;
+		color: var(--accent);
 		cursor: pointer;
 	}
 	.muted {
-		color: #93a1a1;
+		color: var(--text-muted);
 	}
 	.actions {
 		display: flex;
@@ -656,7 +670,7 @@
 		align-items: center;
 	}
 	.actions a {
-		color: #268bd2;
+		color: var(--accent);
 		font-size: 0.85rem;
 		text-decoration: none;
 	}
@@ -666,24 +680,26 @@
 		padding: 0;
 		font: inherit;
 		font-size: 0.85rem;
-		color: #586e75;
+		color: var(--text-muted);
 		cursor: pointer;
 	}
 	.actions button.danger {
-		color: #dc322f;
+		color: var(--danger);
 	}
 	td input {
 		font: inherit;
 		padding: 0.2rem 0.4rem;
-		border: 1px solid #268bd2;
+		border: 1px solid var(--accent);
+		background: var(--input-bg);
+		color: var(--text);
 		border-radius: 4px;
 	}
 	.empty,
 	.error {
-		color: #586e75;
+		color: var(--text-muted);
 	}
 	.error {
-		color: #dc322f;
+		color: var(--danger);
 	}
 	/* Collapse table rows into cards on small screens. */
 	@media (max-width: 640px) {
@@ -699,7 +715,7 @@
 			flex-wrap: wrap;
 			align-items: baseline;
 			gap: 0.2rem 0.8rem;
-			border: 1px solid #eee8d5;
+			border: 1px solid var(--border);
 			border-radius: 10px;
 			padding: 0.6rem 0.8rem;
 			margin-bottom: 0.8rem;

@@ -60,7 +60,7 @@
 		margin: 0;
 		padding: 0.2rem 0.2rem 0.3rem;
 		font-size: 0.85rem;
-		color: #586e75;
+		color: var(--text-muted);
 	}
 	.results {
 		height: 150px;
@@ -86,7 +86,7 @@
 		cursor: default;
 	}
 	li button.hovered {
-		background: #eee8d5;
+		background: var(--surface-sunken);
 	}
 	.badge {
 		flex: none;
@@ -99,13 +99,13 @@
 		color: #fff;
 	}
 	.at {
-		color: #586e75;
+		color: var(--text-muted);
 		font-variant-numeric: tabular-nums;
 		flex: none;
 		width: 3.6em;
 	}
 	.what {
-		color: #073642;
+		color: var(--text);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;

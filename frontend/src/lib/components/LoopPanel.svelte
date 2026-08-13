@@ -105,10 +105,10 @@
 		right: 10px;
 		z-index: 8;
 		width: min(300px, 85vw);
-		background: #fff;
-		border: 1px solid #ddd;
+		background: var(--surface);
+		border: 1px solid var(--border);
 		border-radius: 8px;
-		box-shadow: 0 8px 30px #0003;
+		box-shadow: 0 8px 30px var(--shadow);
 		padding: 0.7rem 0.8rem;
 		display: flex;
 		flex-direction: column;
@@ -123,19 +123,19 @@
 	.header h3 {
 		margin: 0;
 		font-size: 0.95rem;
-		color: #073642;
+		color: var(--text);
 	}
 	.close {
 		border: 0;
 		background: none;
 		font-size: 1.1rem;
 		line-height: 1;
-		color: #93a1a1;
+		color: var(--text-muted);
 		cursor: pointer;
 		padding: 0 4px;
 	}
 	.close:hover {
-		color: #dc322f;
+		color: var(--danger);
 	}
 	.target {
 		display: flex;
@@ -146,19 +146,21 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.2rem;
-		color: #586e75;
+		color: var(--text-muted);
 		font-size: 0.78rem;
 	}
 	.target input {
 		width: 5rem;
 		font: inherit;
 		padding: 0.3rem 0.4rem;
-		border: 1px solid #ccc;
+		border: 1px solid var(--input-border);
+		background: var(--input-bg);
+		color: var(--text);
 		border-radius: 5px;
 	}
 	.target button {
-		border: 1px solid #268bd2;
-		background: #268bd2;
+		border: 1px solid var(--accent);
+		background: var(--accent);
 		color: #fff;
 		border-radius: 5px;
 		padding: 0.35rem 0.7rem;
@@ -172,10 +174,10 @@
 	}
 	.note {
 		margin: 0;
-		color: #93a1a1;
+		color: var(--text-muted);
 	}
 	.note.error {
-		color: #dc322f;
+		color: var(--danger);
 	}
 	.candidates {
 		list-style: none;
@@ -193,7 +195,7 @@
 		border-radius: 5px;
 	}
 	.candidates li.hovered {
-		background: #eee8d5;
+		background: var(--surface-sunken);
 	}
 	.dot {
 		flex: none;
@@ -204,12 +206,13 @@
 	.stats {
 		flex: 1;
 		min-width: 0;
-		color: #073642;
+		color: var(--text);
 	}
 	.candidates button {
 		flex: none;
-		border: 1px solid #ccc;
-		background: #fff;
+		border: 1px solid var(--input-border);
+		background: var(--surface);
+		color: var(--text);
 		border-radius: 5px;
 		padding: 0.25rem 0.55rem;
 		font: inherit;
@@ -217,7 +220,7 @@
 		cursor: pointer;
 	}
 	.candidates button:hover {
-		border-color: #268bd2;
-		color: #268bd2;
+		border-color: var(--accent);
+		color: var(--accent);
 	}
 </style>

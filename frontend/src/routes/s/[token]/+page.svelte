@@ -129,8 +129,10 @@
 		gap: 0.8rem;
 		padding: 0 0.9rem;
 		height: 42px;
-		background: #073642;
-		color: #eee8d5;
+		/* Dark chrome always, matching the app's own nav bar in +layout.svelte -
+		   not swept with the page surface tokens. */
+		background: var(--nav-bg);
+		color: var(--nav-text);
 		flex-shrink: 0;
 		flex-wrap: nowrap;
 		overflow: hidden;
@@ -146,15 +148,15 @@
 	}
 	.stats {
 		font-size: 0.85rem;
-		color: #93a1a1;
+		color: var(--nav-text-muted);
 		white-space: nowrap;
 	}
 	.spacer {
 		flex: 1;
 	}
 	.download {
-		color: #eee8d5;
-		border: 1px solid #586e75;
+		color: var(--nav-text);
+		border: 1px solid var(--border-strong);
 		border-radius: 6px;
 		padding: 0.25rem 0.7rem;
 		font-size: 0.85rem;
@@ -162,23 +164,25 @@
 		white-space: nowrap;
 	}
 	.units-toggle {
-		color: #eee8d5;
+		color: var(--nav-text);
 		background: transparent;
-		border: 1px solid #586e75;
+		border: 1px solid var(--border-strong);
 		border-radius: 6px;
 		padding: 0.25rem 0.6rem;
 		font-size: 0.85rem;
 		cursor: pointer;
 	}
 	.units-toggle:hover {
-		background: #073642;
+		background: var(--nav-bg);
 	}
 	.summary {
 		flex-shrink: 0;
 		margin: 0;
 		padding: 0.55rem 0.9rem;
+		/* Always-dark banner chrome, deliberately a shade darker than --nav-bg -
+		   not one of the swept tokens. */
 		background: #002b36;
-		color: #eee8d5;
+		color: var(--nav-text);
 		font-size: 0.9rem;
 		line-height: 1.4;
 	}
@@ -189,10 +193,10 @@
 	}
 	.profile {
 		flex-shrink: 0;
-		border-top: 1px solid #eee8d5;
+		border-top: 1px solid var(--border);
 	}
 	.error {
 		padding: 2rem;
-		color: #dc322f;
+		color: var(--danger);
 	}
 </style>

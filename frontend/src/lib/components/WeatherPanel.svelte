@@ -104,13 +104,15 @@
 	.controls input {
 		font: inherit;
 		font-size: 0.8rem;
-		border: 1px solid #ddd6c1;
+		border: 1px solid var(--input-border);
+		background: var(--input-bg);
+		color: var(--text);
 		border-radius: 4px;
 		padding: 2px 6px;
 	}
 	.controls button {
-		border: 1px solid #268bd2;
-		background: #268bd2;
+		border: 1px solid var(--accent);
+		background: var(--accent);
 		color: #fff;
 		border-radius: 4px;
 		padding: 2px 10px;
@@ -139,13 +141,13 @@
 		font-size: 0.82rem;
 	}
 	.at {
-		color: #586e75;
+		color: var(--text-muted);
 		font-variant-numeric: tabular-nums;
 		flex: none;
 		width: 4.2em;
 	}
 	.time {
-		color: #073642;
+		color: var(--text);
 		font-variant-numeric: tabular-nums;
 		flex: none;
 		width: 3.4em;
@@ -157,7 +159,7 @@
 		text-align: center;
 	}
 	.speed {
-		color: #073642;
+		color: var(--text);
 		flex: none;
 		width: 4.5em;
 	}
@@ -168,21 +170,21 @@
 		text-overflow: ellipsis;
 	}
 	.label.head {
-		color: #dc322f;
+		color: var(--danger);
 	}
 	.label.tail {
-		color: #859900;
+		color: var(--success);
 	}
 	.label.cross {
-		color: #93a1a1;
+		color: var(--text-muted);
 	}
 	.note {
 		margin: 0;
 		padding: 4px 6px 6px;
-		color: #93a1a1;
+		color: var(--text-muted);
 		font-size: 0.8rem;
 	}
 	.note.error {
-		color: #dc322f;
+		color: var(--danger);
 	}
 </style>

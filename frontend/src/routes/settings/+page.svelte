@@ -107,10 +107,10 @@
 	}
 	h1 {
 		font-size: 1.3rem;
-		color: #073642;
+		color: var(--text);
 	}
 	.hint {
-		color: #586e75;
+		color: var(--text-muted);
 		font-size: 0.9rem;
 		max-width: 40rem;
 	}
@@ -126,16 +126,16 @@
 		flex-direction: column;
 		gap: 0.3rem;
 		font-size: 0.9rem;
-		color: #073642;
+		color: var(--text);
 	}
 	input {
 		font: inherit;
 		font-size: 1rem;
 		padding: 0.45rem 0.6rem;
-		border: 1px solid #eee8d5;
+		border: 1px solid var(--input-border);
 		border-radius: 6px;
-		background: #fdf6e3;
-		color: #073642;
+		background: var(--input-bg);
+		color: var(--text);
 	}
 	.actions {
 		display: flex;
@@ -148,8 +148,12 @@
 		padding: 0.5rem 1.1rem;
 		font: inherit;
 		font-size: 0.95rem;
-		background: #073642;
-		color: #fdf6e3;
+		/* Inverted CTA - always contrasts with the page, so background/colour
+		   are the --text/--bg pair rather than --surface: swapping under
+		   dark mode is the point (dark-on-light becomes light-on-dark), not
+		   an oversight. */
+		background: var(--text);
+		color: var(--bg);
 		cursor: pointer;
 	}
 	button:disabled {
@@ -157,11 +161,11 @@
 		cursor: default;
 	}
 	.saved {
-		color: #859900;
+		color: var(--success);
 		font-size: 0.9rem;
 	}
 	.error {
-		color: #dc322f;
+		color: var(--danger);
 		font-size: 0.9rem;
 	}
 </style>

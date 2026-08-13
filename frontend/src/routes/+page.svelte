@@ -1778,8 +1778,9 @@
 		}
 	}
 	.toolbar > button {
-		border: 1px solid #ccc;
-		background: #fff;
+		border: 1px solid var(--input-border);
+		background: var(--surface);
+		color: var(--text);
 		border-radius: 8px;
 		padding: 0.45rem 0.8rem;
 		font: inherit;
@@ -1790,22 +1791,24 @@
 		cursor: default;
 	}
 	.toolbar > .save {
+		/* Route-brand magenta, same literal MapView uses for the route line -
+		   deliberately not tokenised, see step 3. */
 		background: #d33682;
 		color: #fff;
 		border-color: #d33682;
 	}
 	.toolbar > .wahoo {
-		background: #268bd2;
+		background: var(--accent);
 		color: #fff;
-		border-color: #268bd2;
+		border-color: var(--accent);
 	}
 	.route-name {
-		background: #fffffff0;
+		background: var(--surface);
 		border-radius: 8px;
 		padding: 0.45rem 0.8rem;
 		font-size: 0.9rem;
-		color: #073642;
-		box-shadow: 0 1px 4px #0002;
+		color: var(--text);
+		box-shadow: 0 1px 4px var(--shadow);
 	}
 	/* Below the toolbar, and below the search bar too when it is enabled -
 	   `top` is set inline from avoidsTop (see the script), which stacks on
@@ -1823,18 +1826,18 @@
 		display: flex;
 		align-items: center;
 		gap: 4px;
-		background: #fffffff0;
-		border: 1px solid #dc322f;
+		background: var(--surface);
+		border: 1px solid var(--danger);
 		border-radius: 8px;
 		padding: 0.25rem 0.3rem 0.25rem 0.6rem;
 		font-size: 0.8rem;
-		color: #073642;
-		box-shadow: 0 1px 4px #0002;
+		color: var(--text);
+		box-shadow: 0 1px 4px var(--shadow);
 	}
 	.avoid-remove {
 		border: none;
 		background: transparent;
-		color: #dc322f;
+		color: var(--danger);
 		font-size: 0.95rem;
 		line-height: 1;
 		padding: 0.1rem 0.3rem;
@@ -1843,31 +1846,33 @@
 	.dialog-backdrop {
 		position: absolute;
 		inset: 0;
-		background: #0003;
+		background: var(--overlay-scrim);
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		z-index: 20;
 	}
 	.dialog {
-		background: #fff;
+		background: var(--surface);
 		border-radius: 10px;
 		padding: 1.2rem;
 		width: min(320px, 85vw);
 		display: flex;
 		flex-direction: column;
 		gap: 0.8rem;
-		box-shadow: 0 8px 30px #0004;
+		box-shadow: 0 8px 30px var(--shadow);
 	}
 	.dialog h3 {
 		margin: 0;
 		font-size: 1rem;
-		color: #073642;
+		color: var(--text);
 	}
 	.dialog input {
 		font: inherit;
 		padding: 0.5rem 0.6rem;
-		border: 1px solid #ccc;
+		border: 1px solid var(--input-border);
+		background: var(--input-bg);
+		color: var(--text);
 		border-radius: 6px;
 	}
 	.dialog-name-row {
@@ -1879,8 +1884,9 @@
 		min-width: 0;
 	}
 	.dialog-name-row .suggest-name {
-		border: 1px solid #ccc;
-		background: #fff;
+		border: 1px solid var(--input-border);
+		background: var(--surface);
+		color: var(--text);
 		border-radius: 6px;
 		padding: 0.4rem 0.7rem;
 		font: inherit;
@@ -1896,12 +1902,14 @@
 		flex-direction: column;
 		gap: 0.25rem;
 		font-size: 0.85rem;
-		color: #586e75;
+		color: var(--text-muted);
 	}
 	.dialog-notes textarea {
 		font: inherit;
 		padding: 0.4rem 0.5rem;
-		border: 1px solid #ccc;
+		border: 1px solid var(--input-border);
+		background: var(--input-bg);
+		color: var(--text);
 		border-radius: 6px;
 		resize: vertical;
 	}
@@ -1911,14 +1919,16 @@
 		gap: 0.6rem;
 	}
 	.dialog-buttons button {
-		border: 1px solid #ccc;
-		background: #fff;
+		border: 1px solid var(--input-border);
+		background: var(--surface);
+		color: var(--text);
 		border-radius: 6px;
 		padding: 0.4rem 0.9rem;
 		font: inherit;
 		cursor: pointer;
 	}
 	.dialog-buttons .primary {
+		/* Route-brand magenta - deliberately not tokenised, see step 3. */
 		background: #d33682;
 		border-color: #d33682;
 		color: #fff;
@@ -1933,13 +1943,13 @@
 		position: absolute;
 		top: 52px;
 		right: 10px;
-		background: #fff;
+		background: var(--surface);
 		border-radius: 10px;
 		padding: 0.7rem 0.8rem;
 		display: flex;
 		flex-direction: column;
 		gap: 0.6rem;
-		box-shadow: 0 4px 16px #0003;
+		box-shadow: 0 4px 16px var(--shadow);
 		z-index: 6;
 		font-size: 0.85rem;
 	}
@@ -1953,7 +1963,9 @@
 		font: inherit;
 		width: 4.5rem;
 		padding: 0.3rem 0.4rem;
-		border: 1px solid #ccc;
+		border: 1px solid var(--input-border);
+		background: var(--input-bg);
+		color: var(--text);
 		border-radius: 6px;
 	}
 	.isochrone-prompt-buttons {
@@ -1962,16 +1974,17 @@
 		gap: 0.5rem;
 	}
 	.isochrone-prompt-buttons button {
-		border: 1px solid #ccc;
-		background: #fff;
+		border: 1px solid var(--input-border);
+		background: var(--surface);
+		color: var(--text);
 		border-radius: 6px;
 		padding: 0.35rem 0.8rem;
 		font: inherit;
 		cursor: pointer;
 	}
 	.isochrone-prompt-buttons .primary {
-		background: #268bd2;
-		border-color: #268bd2;
+		background: var(--accent);
+		border-color: var(--accent);
 		color: #fff;
 	}
 	.isochrone-prompt-buttons .primary:disabled {
@@ -1979,7 +1992,7 @@
 	}
 	.isochrone-error {
 		margin: 0;
-		color: #dc322f;
+		color: var(--danger);
 		font-size: 0.8rem;
 	}
 	.hint,
@@ -1988,22 +2001,23 @@
 		left: 50%;
 		transform: translateX(-50%);
 		bottom: 18px;
-		background: #fffffff0;
+		background: var(--surface);
+		color: var(--text);
 		border-radius: 8px;
 		padding: 0.5rem 1rem;
 		font-size: 0.9rem;
-		box-shadow: 0 1px 4px #0002;
+		box-shadow: 0 1px 4px var(--shadow);
 		z-index: 5;
 	}
 	.banner.error {
-		background: #dc322f;
+		background: var(--danger);
 		color: #fff;
 	}
 	/* Paired with .map-area's floor: the panel yields first and scrolls
 	   internally, rather than pushing the map out of the viewport. */
 	.panel {
-		background: #fdf6e3;
-		border-top: 1px solid #eee8d5;
+		background: var(--surface);
+		border-top: 1px solid var(--border);
 		padding: 0.4rem 0.8rem 0.2rem;
 		max-height: 55vh;
 		overflow-y: auto;
@@ -2054,15 +2068,15 @@
 		gap: 1.2rem;
 		font-size: 0.95rem;
 		padding: 0.2rem 0.2rem 0.4rem;
-		color: #586e75;
+		color: var(--text-muted);
 	}
 	.stats strong {
-		color: #073642;
+		color: var(--text);
 		font-size: 1.05rem;
 	}
 	.ride-time-link {
 		font-size: 0.8rem;
-		color: #268bd2;
+		color: var(--accent);
 		align-self: center;
 		margin-left: -0.7rem;
 	}

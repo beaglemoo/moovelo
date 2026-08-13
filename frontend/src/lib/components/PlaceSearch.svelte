@@ -186,15 +186,16 @@
 		width: 100%;
 		box-sizing: border-box;
 		padding: 7px 10px;
-		border: 1px solid #ccc;
+		border: 1px solid var(--input-border);
 		border-radius: 4px;
-		background: #fffffff0;
+		background: var(--surface);
+		color: var(--text);
 		font: inherit;
 		font-size: 0.9rem;
 	}
 
 	input:focus {
-		outline: 2px solid #268bd2;
+		outline: 2px solid var(--accent);
 		outline-offset: -1px;
 	}
 
@@ -202,7 +203,7 @@
 		position: absolute;
 		right: 10px;
 		top: 6px;
-		color: #93a1a1;
+		color: var(--text-muted);
 	}
 
 	.results {
@@ -213,10 +214,10 @@
 		margin: 0;
 		padding: 4px;
 		list-style: none;
-		background: #fff;
-		border: 1px solid #ddd;
+		background: var(--surface);
+		border: 1px solid var(--border);
 		border-radius: 4px;
-		box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+		box-shadow: 0 4px 14px var(--shadow);
 		max-height: 320px;
 		overflow-y: auto;
 	}
@@ -229,12 +230,12 @@
 	}
 
 	.results li.active {
-		background: #eee8d5;
+		background: var(--surface-sunken);
 	}
 
 	.empty {
 		padding: 8px 10px;
-		color: #93a1a1;
+		color: var(--text-muted);
 		font-size: 0.85rem;
 	}
 
@@ -254,12 +255,12 @@
 
 	.label {
 		font-size: 0.9rem;
-		color: #073642;
+		color: var(--text);
 	}
 
 	.meta {
 		font-size: 0.75rem;
-		color: #586e75;
+		color: var(--text-muted);
 	}
 
 	.actions {
@@ -271,15 +272,15 @@
 	.actions button {
 		padding: 3px 7px;
 		font-size: 0.75rem;
-		border: 1px solid #ddd;
+		border: 1px solid var(--border);
 		border-radius: 3px;
-		background: #fff;
-		color: #586e75;
+		background: var(--surface);
+		color: var(--text-muted);
 		cursor: pointer;
 	}
 
 	.actions button:hover {
-		border-color: #268bd2;
-		color: #268bd2;
+		border-color: var(--accent);
+		color: var(--accent);
 	}
 </style>

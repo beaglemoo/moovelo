@@ -200,23 +200,23 @@
 		vector-effect: non-scaling-stroke;
 	}
 	.grid {
-		stroke: #00000018;
+		stroke: var(--border);
 		stroke-width: 1;
 		vector-effect: non-scaling-stroke;
 	}
 	.cursor {
-		stroke: #268bd2;
+		stroke: var(--text-muted);
 		stroke-width: 1.5;
 		vector-effect: non-scaling-stroke;
 	}
 	.axis-label,
 	.hover-label {
 		font-size: 11px;
-		fill: #586e75;
+		fill: var(--text-muted);
 	}
 	.hover-label {
 		font-weight: 600;
-		fill: #268bd2;
+		fill: var(--accent);
 	}
 	.legend {
 		display: flex;
@@ -229,7 +229,7 @@
 		align-items: center;
 		gap: 0.3rem;
 		font-size: 0.75rem;
-		color: #586e75;
+		color: var(--text-muted);
 	}
 	.legend-dot {
 		width: 8px;

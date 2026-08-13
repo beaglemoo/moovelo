@@ -298,35 +298,45 @@
 	}
 	h1 {
 		font-size: 1.3rem;
-		color: #073642;
+		color: var(--text);
 		margin: 0;
 		flex: 1;
+	}
+	button {
+		font: inherit;
+		font-size: 0.85rem;
+		padding: 0.3rem 0.7rem;
+		border: 1px solid var(--input-border);
+		border-radius: 6px;
+		background: var(--surface);
+		color: var(--text);
+		cursor: pointer;
 	}
 	.import {
 		padding: 0.4rem 0.9rem;
 	}
 	.error {
-		color: #dc322f;
+		color: var(--danger);
 	}
 	.archive {
 		display: flex;
 		align-items: center;
 		gap: 0.6rem;
 		flex-wrap: wrap;
-		background: #fdf6e3;
-		border: 1px solid #eee8d5;
+		background: var(--surface);
+		border: 1px solid var(--border);
 		border-radius: 6px;
 		padding: 0.5rem 0.7rem;
 		margin: 0.8rem 0 0.4rem;
 		font-size: 0.9rem;
 	}
 	.archive.done {
-		border-color: #859900;
+		border-color: var(--success);
 	}
 	.problems {
 		margin: 0 0 0.8rem;
 		padding-left: 1.2rem;
-		color: #657b83;
+		color: var(--text-muted);
 		font-size: 0.85rem;
 	}
 	.controls {
@@ -337,7 +347,7 @@
 		flex-wrap: wrap;
 	}
 	.totals {
-		color: #657b83;
+		color: var(--text-muted);
 		font-size: 0.9rem;
 	}
 	table {
@@ -348,19 +358,19 @@
 	th {
 		text-align: left;
 		font-weight: 600;
-		color: #657b83;
-		border-bottom: 1px solid #eee8d5;
+		color: var(--text-muted);
+		border-bottom: 1px solid var(--border);
 		padding: 0.4rem 0.5rem;
 	}
 	td {
 		padding: 0.5rem;
-		border-bottom: 1px solid #f2ede0;
+		border-bottom: 1px solid var(--surface-sunken);
 	}
 	.actions {
 		text-align: right;
 	}
 	.empty {
-		color: #657b83;
+		color: var(--text-muted);
 		max-width: 46ch;
 		line-height: 1.5;
 	}
@@ -378,7 +388,7 @@
 			display: none;
 		}
 		tr {
-			border-bottom: 1px solid #eee8d5;
+			border-bottom: 1px solid var(--border);
 			padding: 0.5rem 0;
 		}
 		td {
@@ -389,7 +399,7 @@
 		}
 		td[data-label]::before {
 			content: attr(data-label);
-			color: #93a1a1;
+			color: var(--text-muted);
 			min-width: 5.5rem;
 		}
 		.actions {

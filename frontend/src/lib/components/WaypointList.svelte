@@ -167,7 +167,7 @@
 		margin: 0;
 		padding: 0.2rem 0.2rem 0.3rem;
 		font-size: 0.85rem;
-		color: #586e75;
+		color: var(--text-muted);
 	}
 	.results {
 		height: 150px;
@@ -187,14 +187,14 @@
 		font-size: 0.82rem;
 	}
 	li.hovered {
-		background: #eee8d5;
+		background: var(--surface-sunken);
 	}
 	li.drag-over {
-		box-shadow: inset 0 2px 0 #268bd2;
+		box-shadow: inset 0 2px 0 var(--accent);
 	}
 	.handle {
 		flex: none;
-		color: #93a1a1;
+		color: var(--text-muted);
 		cursor: grab;
 	}
 	.dot {
@@ -206,7 +206,7 @@
 	.what {
 		flex: 1;
 		min-width: 0;
-		color: #073642;
+		color: var(--text);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -216,16 +216,16 @@
 		border: 0;
 		background: none;
 		font: inherit;
-		color: #586e75;
+		color: var(--text-muted);
 		cursor: pointer;
 		padding: 1px 4px;
 		border-radius: 3px;
 	}
 	li button:hover:not(:disabled) {
-		background: #ddd6c1;
+		background: var(--surface-sunken);
 	}
 	li button:disabled {
-		color: #ccc7b7;
+		color: var(--text-muted);
 		cursor: default;
 	}
 </style>

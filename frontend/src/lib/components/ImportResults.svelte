@@ -67,17 +67,27 @@
 
 <style>
 	.results {
-		border: 1px solid #d5d5d5;
+		border: 1px solid var(--border);
 		border-radius: 6px;
 		padding: 0.6rem 0.8rem;
 		margin-bottom: 1rem;
-		background: #fafafa;
+		background: var(--surface);
 	}
 	.results-head {
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
 		margin-bottom: 0.4rem;
+	}
+	.results-head button {
+		font: inherit;
+		font-size: 0.8rem;
+		padding: 0.2rem 0.6rem;
+		border: 1px solid var(--input-border);
+		border-radius: 6px;
+		background: var(--surface);
+		color: var(--text);
+		cursor: pointer;
 	}
 	ul {
 		list-style: none;
@@ -98,15 +108,15 @@
 		font-weight: 600;
 	}
 	.detail {
-		color: #555;
+		color: var(--text-muted);
 	}
 	.error {
-		color: #b00020;
+		color: var(--danger);
 	}
 	.warn {
-		color: #a05a00;
+		color: var(--warning);
 	}
 	li.failed .file {
-		color: #b00020;
+		color: var(--danger);
 	}
 </style>

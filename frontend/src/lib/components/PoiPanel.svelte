@@ -95,9 +95,9 @@
 		padding: 0.2rem 0.2rem 0.4rem;
 	}
 	.chip {
-		border: 1px solid #ddd6c1;
-		background: #fff;
-		color: #586e75;
+		border: 1px solid var(--input-border);
+		background: var(--surface);
+		color: var(--text-muted);
 		border-radius: 999px;
 		padding: 2px 10px;
 		font: inherit;
@@ -136,7 +136,7 @@
 		cursor: default;
 	}
 	li button.hovered {
-		background: #eee8d5;
+		background: var(--surface-sunken);
 	}
 	.dot {
 		width: 8px;
@@ -146,19 +146,19 @@
 		align-self: center;
 	}
 	.at {
-		color: #586e75;
+		color: var(--text-muted);
 		font-variant-numeric: tabular-nums;
 		flex: none;
 		width: 4.2em;
 	}
 	.what {
-		color: #073642;
+		color: var(--text);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
 	.meta {
-		color: #93a1a1;
+		color: var(--text-muted);
 		font-size: 0.75rem;
 		white-space: nowrap;
 		overflow: hidden;
@@ -169,14 +169,14 @@
 		margin-left: 6px;
 	}
 	.off {
-		color: #93a1a1;
+		color: var(--text-muted);
 		font-size: 0.75rem;
 		flex: none;
 	}
 	.note {
 		margin: 0;
 		padding: 4px 6px 6px;
-		color: #93a1a1;
+		color: var(--text-muted);
 		font-size: 0.8rem;
 	}
 </style>

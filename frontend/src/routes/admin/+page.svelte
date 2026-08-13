@@ -110,11 +110,11 @@
 	}
 	h1 {
 		font-size: 1.3rem;
-		color: #073642;
+		color: var(--text);
 	}
 	h2 {
 		font-size: 1.05rem;
-		color: #073642;
+		color: var(--text);
 		margin-top: 1.6rem;
 	}
 	.cards {
@@ -123,10 +123,10 @@
 		flex-wrap: wrap;
 	}
 	.card {
-		border: 1px solid #eee8d5;
+		border: 1px solid var(--border);
 		border-radius: 10px;
 		padding: 0.9rem 1.2rem;
-		background: #fdf6e3;
+		background: var(--surface);
 		display: flex;
 		flex-direction: column;
 		gap: 0.2rem;
@@ -135,20 +135,20 @@
 	.card .num {
 		font-size: 1.6rem;
 		font-weight: 700;
-		color: #073642;
+		color: var(--text);
 	}
 	.card .label {
 		font-size: 0.75rem;
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
-		color: #93a1a1;
+		color: var(--text-muted);
 	}
 	.card.config ul {
 		margin: 0.2rem 0 0;
 		padding: 0;
 		list-style: none;
 		font-size: 0.85rem;
-		color: #586e75;
+		color: var(--text-muted);
 	}
 	table {
 		width: 100%;
@@ -160,20 +160,20 @@
 		font-size: 0.8rem;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
-		color: #93a1a1;
+		color: var(--text-muted);
 		padding: 0.4rem 0.6rem;
-		border-bottom: 2px solid #eee8d5;
+		border-bottom: 2px solid var(--border);
 	}
 	td {
 		padding: 0.55rem 0.6rem;
-		border-bottom: 1px solid #eee8d5;
+		border-bottom: 1px solid var(--border);
 	}
 	.email {
 		font-weight: 600;
-		color: #073642;
+		color: var(--text);
 	}
 	.muted {
-		color: #93a1a1;
+		color: var(--text-muted);
 	}
 	.danger {
 		background: none;
@@ -181,10 +181,10 @@
 		padding: 0;
 		font: inherit;
 		font-size: 0.85rem;
-		color: #dc322f;
+		color: var(--danger);
 		cursor: pointer;
 	}
 	.error {
-		color: #dc322f;
+		color: var(--danger);
 	}
 </style>
