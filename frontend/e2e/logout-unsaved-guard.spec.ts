@@ -92,3 +92,55 @@ test('confirming the log-out prompts exactly once and lands on /login', async ({
 	await page.waitForTimeout(500);
 	expect(asked).toBe(1);
 });
+
+test('browser Back to /login while authenticated and dirty still warns', async ({ page }) => {
+	const status = await page.request.get('/api/auth/status').then((r) => r.json());
+	test.skip(!canRegister(status), NEEDS_REGISTRATION);
+	const email = `e2e-logout-guard-back-${Date.now()}-${accounts++}@example.com`;
+	expect((await page.request.post('/api/auth/register', { data: { email, password } })).ok()).toBe(
+		true
+	);
+
+	// Reach /login the way a real visitor does - the layout's own client-side
+	// redirect when unauthenticated - so /login is a beforeNavigate destination
+	// (the exact history shape the /login-skip caught). A direct page.goto does
+	// not reproduce it. Log the browser out, hit /, get bounced, then log back
+	// in through the form (a client-side goto('/')).
+	await page.context().clearCookies();
+	await page.goto('/');
+	await expect(page).toHaveURL(/\/login$/);
+	await page.locator('input[type="email"]').fill(email);
+	await page.locator('input[type="password"]').fill(password);
+	await page.getByRole('button', { name: 'Log in', exact: true }).click();
+	await expect(page).toHaveURL(/\/$/);
+
+	const canvas = page.locator('.map canvas').first();
+	await expect(canvas).toBeVisible();
+	await page.waitForTimeout(2500);
+
+	// Dirty the planner with unsaved waypoints (no save needed).
+	const save = page.getByRole('button', { name: 'Save', exact: true });
+	await expect(async () => {
+		const box = (await canvas.boundingBox())!;
+		await page.mouse.click(box.x + box.width / 2 - 40, box.y + box.height / 2 - 30);
+		await page.mouse.click(box.x + box.width / 2 + 40, box.y + box.height / 2 + 30);
+		await expect(save).toBeEnabled({ timeout: 8_000 });
+	}).toPass({ timeout: 40_000 });
+
+	// Back to /login is an accidental exit, not a log-out (the session is live
+	// and unsaved.leaving is false), so it must warn rather than silently
+	// discard the edit the way an unconditional /login skip did.
+	let asked = 0;
+	page.on('dialog', (dialog) => {
+		asked++;
+		void dialog.dismiss();
+	});
+	// Not awaited: dismissing the confirm cancels the navigation, so goBack
+	// never resolves its "load" - the cancellation is the point.
+	void page.goBack().catch(() => {});
+
+	await expect.poll(() => asked, { timeout: 10_000 }).toBe(1);
+	// Dismissed - stayed on the planner with the edit intact.
+	await expect(page).toHaveURL(/\/$/);
+	await expect(save).toBeEnabled();
+});
