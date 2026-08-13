@@ -66,16 +66,41 @@ class MatchJob:
     error: str | None = None
 
 
-async def match_activity(db: AsyncSession, valhalla: ValhallaClient, activity: Activity) -> int:
+async def match_activity(
+    db: AsyncSession, valhalla: ValhallaClient, activity: Activity
+) -> int | None:
     """Match one activity's recorded trace, record what it touched, and mark
-    the attempt. Returns how many ways were credited.
+    the attempt. Returns how many ways were credited, or None if another job
+    had already claimed this activity and we skipped it.
+
+    Claims the activity atomically before crediting anything. Two jobs can
+    target the same activity - a fresh import's own explicit match job and a
+    concurrent backfill that enumerated it while `ways_matched_at` was still
+    null - and each independently upserts into activity_ways, which
+    double-increments ride_count on a durable coverage table (measured: 42
+    activities, ride_count 43). The conditional UPDATE makes matching
+    exactly-once: whoever's `WHERE ways_matched_at IS NULL` lands first sets
+    the timestamp and proceeds; the loser's WHERE no longer matches, returns
+    no row, and skips. Both run inside `_process`'s per-activity transaction,
+    so the row lock serialises the two and the claim is committed before the
+    other re-evaluates.
 
     A matching failure - the track sits outside the loaded map extract,
     Valhalla is still building tiles, or it is simply unreachable - must
-    never touch the activity itself: the ride stays exactly as imported, and
-    only `ways_matched_at` records that an attempt happened, so coverage for
-    this ride reads as honestly unknown rather than wrongly zero.
+    never touch the ride itself: it stays exactly as imported, and the claim
+    that already marked `ways_matched_at` records that an attempt happened,
+    so coverage for this ride reads as honestly unknown rather than wrongly
+    zero.
     """
+    claimed = await db.scalar(
+        update(Activity)
+        .where(Activity.id == activity.id, Activity.ways_matched_at.is_(None))
+        .values(ways_matched_at=datetime.now(UTC))
+        .returning(Activity.id)
+    )
+    if claimed is None:
+        return None
+
     wkt = await db.scalar(select(ST_AsText(Activity.geom)).where(Activity.id == activity.id))
     shape: list[Point] = coords_from_wkt(wkt)
     lengths = await valhalla.match_ways(shape) if len(shape) >= 2 else None
@@ -86,9 +111,6 @@ async def match_activity(db: AsyncSession, valhalla: ValhallaClient, activity: A
     }
     if way_ids:
         await _record_ways(db, activity.user_id, way_ids)
-    await db.execute(
-        update(Activity).where(Activity.id == activity.id).values(ways_matched_at=datetime.now(UTC))
-    )
     return len(way_ids)
 
 
@@ -215,7 +237,11 @@ class WayMatchQueue:
             # place, rather than losing the whole batch to a rollback.
             for activity in activities:
                 credited = await match_activity(db, self._valhalla, activity)
-                if credited:
+                # None means another job claimed it in the gap between this
+                # job's SELECT and now - not ours to count either way.
+                if credited is None:
+                    job.total -= 1
+                elif credited:
                     job.matched += 1
                 else:
                     job.unmatched += 1

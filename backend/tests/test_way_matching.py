@@ -254,3 +254,34 @@ def test_jobs_cannot_grow_past_the_tracked_cap() -> None:
         queue.submit(user)
     # And it did not sneak in past the cap.
     assert len(queue._jobs) == MAX_TRACKED_JOBS  # noqa: SLF001
+
+
+@respx.mock
+async def test_two_jobs_cannot_double_credit_the_same_activity(db: AsyncSession) -> None:
+    """A fresh import's own explicit match job and a concurrent backfill can
+    both target the same activity while ways_matched_at is still null. Each
+    upserts into activity_ways, so before the atomic claim the shared way's
+    ride_count was incremented twice for a single ride. match_activity now
+    claims the activity first: the second call finds it already claimed,
+    returns None, and credits nothing."""
+    respx.post(f"{BASE}/trace_attributes").respond(
+        json={"units": "kilometers", "edges": [{"way_id": 999, "length": 0.5}]}
+    )
+    user = await _user(db)
+    activity = await _activity(db, user)
+    valhalla = ValhallaClient(base_url=BASE)
+
+    first = await match_activity(db, valhalla, activity)
+    await db.commit()
+    second = await match_activity(db, valhalla, activity)
+    await db.commit()
+
+    assert first == 1  # claimed and credited
+    assert second is None  # already claimed - skipped, not re-credited
+
+    row = (
+        await db.execute(
+            select(ActivityWay).where(ActivityWay.user_id == user.id, ActivityWay.way_id == 999)
+        )
+    ).scalar_one()
+    assert row.ride_count == 1
