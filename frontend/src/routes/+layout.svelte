@@ -4,6 +4,7 @@
 	import { ApiError, auth, type UserInfo } from '$lib/api';
 	import { activityImportQueue, importQueue, pendingArchives } from '$lib/import.svelte';
 	import { resetSession } from '$lib/session';
+	import { theme } from '$lib/theme.svelte';
 	import { units } from '$lib/units.svelte';
 	import { unsaved } from '$lib/unsaved.svelte';
 	import { onMount, type Snippet } from 'svelte';
@@ -19,9 +20,20 @@
 	// button below.
 	let loggingOut = $state(false);
 
-	// Load the rider's metric/imperial preference once on the client. onMount
-	// never runs during SSR, matching the other moovelo:* localStorage reads.
-	onMount(() => units.load());
+	// Load the rider's metric/imperial and light/dark preferences once on the
+	// client. onMount never runs during SSR, matching the other moovelo:*
+	// localStorage reads. app.html's inline script already applied the theme
+	// pre-hydration; this just brings the store's `mode` in sync with it.
+	onMount(() => {
+		units.load();
+		theme.load();
+	});
+
+	function themeLabel(mode: 'system' | 'light' | 'dark'): string {
+		if (mode === 'light') return 'Light';
+		if (mode === 'dark') return 'Dark';
+		return 'Auto';
+	}
 
 	// Files get dragged at the window, not at a particular drop target, so the
 	// whole app accepts them once you are logged in.
@@ -171,6 +183,15 @@
 			<span class="spacer"></span>
 			<button
 				type="button"
+				class="theme-toggle"
+				onclick={() => theme.cycle()}
+				title="Cycle theme: auto, light, dark"
+				aria-label="Theme: {themeLabel(theme.mode)}"
+			>
+				{themeLabel(theme.mode)}
+			</button>
+			<button
+				type="button"
 				class="units-toggle"
 				onclick={() => units.toggle()}
 				title="Switch between metric and imperial units"
@@ -193,9 +214,93 @@
 </div>
 
 <style>
+	/* Semantic theme tokens. Light values are the app's original literals,
+	   declared unconditionally on :root so a token always has a value even
+	   before JS runs. Dark values are layered on in two ways that must stay
+	   in sync: prefers-color-scheme for a rider who never touched the
+	   toggle, and :root[data-theme] for a manual override - which has to
+	   win over the media query in both directions, hence the
+	   `:not([data-theme='light'])` guard on the media-query block. Nav
+	   colours are NOT tokenised as light/dark - the nav is dark chrome in
+	   both themes, so --nav-* is a single flat value, not swept.
+	   Accent colours (--accent/--danger/--success/--warning/--link) are
+	   Solarized's own accents and read correctly on both grounds, so they
+	   too are a single flat value. */
+	:global(:root) {
+		/* Render native form controls (inputs, selects, scrollbars) and any
+		   unstyled control in the theme's own palette - the belt-and-braces for
+		   anything the tokens below do not explicitly paint. */
+		color-scheme: light;
+		--bg: #fdf6e3;
+		--surface: #ffffff;
+		--surface-sunken: #f2ede0;
+		--nav-bg: #073642;
+		--nav-text: #eee8d5;
+		--nav-text-muted: #93a1a1;
+		--nav-text-active: #fdf6e3;
+		--text: #073642;
+		--text-muted: #586e75;
+		--border: #ddd;
+		--border-strong: #586e75;
+		--input-bg: #ffffff;
+		--input-border: #ccc;
+		--shadow: rgba(0, 0, 0, 0.12);
+		--overlay-scrim: rgba(7, 54, 66, 0.75);
+		--accent: #268bd2;
+		--danger: #dc322f;
+		--success: #859900;
+		--warning: #b58900;
+		--link: #268bd2;
+	}
+	@media (prefers-color-scheme: dark) {
+		:global(:root:not([data-theme='light'])) {
+			color-scheme: dark;
+			--bg: #002b36;
+			--surface: #073642;
+			--surface-sunken: #00212b;
+			--text: #eee8d5;
+			--text-muted: #93a1a1;
+			--border: #0d4a5a;
+			--border-strong: #204a58;
+			--input-bg: #00212b;
+			--input-border: #204a58;
+			--shadow: rgba(0, 0, 0, 0.45);
+			--overlay-scrim: rgba(0, 0, 0, 0.62);
+		}
+	}
+	:global(:root[data-theme='dark']) {
+		color-scheme: dark;
+		--bg: #002b36;
+		--surface: #073642;
+		--surface-sunken: #00212b;
+		--text: #eee8d5;
+		--text-muted: #93a1a1;
+		--border: #0d4a5a;
+		--border-strong: #204a58;
+		--input-bg: #00212b;
+		--input-border: #204a58;
+		--shadow: rgba(0, 0, 0, 0.45);
+		--overlay-scrim: rgba(0, 0, 0, 0.62);
+	}
+	:global(:root[data-theme='light']) {
+		color-scheme: light;
+		--bg: #fdf6e3;
+		--surface: #ffffff;
+		--surface-sunken: #f2ede0;
+		--text: #073642;
+		--text-muted: #586e75;
+		--border: #ddd;
+		--border-strong: #586e75;
+		--input-bg: #ffffff;
+		--input-border: #ccc;
+		--shadow: rgba(0, 0, 0, 0.12);
+		--overlay-scrim: rgba(7, 54, 66, 0.75);
+	}
 	:global(html, body) {
 		margin: 0;
 		height: 100%;
+		background: var(--bg);
+		color: var(--text);
 	}
 	.shell {
 		display: flex;
@@ -213,8 +318,8 @@
 		gap: 1rem;
 		padding: 0 0.9rem;
 		height: 42px;
-		background: #073642;
-		color: #eee8d5;
+		background: var(--nav-bg);
+		color: var(--nav-text);
 		flex-shrink: 0;
 	}
 	.brand {
@@ -222,30 +327,33 @@
 		margin-right: 0.5rem;
 	}
 	nav a {
-		color: #93a1a1;
+		color: var(--nav-text-muted);
 		text-decoration: none;
 		font-size: 0.95rem;
 	}
 	nav a.active,
 	nav a:hover {
-		color: #fdf6e3;
+		color: var(--nav-text-active);
 	}
 	.spacer {
 		flex: 1;
 	}
 	.email {
 		font-size: 0.85rem;
-		color: #93a1a1;
+		color: var(--nav-text-muted);
 	}
 	nav button {
-		border: 1px solid #586e75;
+		border: 1px solid var(--border-strong);
 		background: transparent;
-		color: #eee8d5;
+		color: var(--nav-text);
 		border-radius: 6px;
 		padding: 0.25rem 0.7rem;
 		font: inherit;
 		font-size: 0.85rem;
 		cursor: pointer;
+	}
+	.theme-toggle {
+		min-width: 3.2rem;
 	}
 	main {
 		flex: 1;
@@ -257,7 +365,9 @@
 		z-index: 50;
 		display: grid;
 		place-items: center;
-		background: rgba(7, 54, 66, 0.75);
+		background: var(--overlay-scrim);
+		/* Always-light text/border on the always-dark scrim, same reasoning as
+		   the nav - not swept with the page's light/dark surface tokens. */
 		color: #fdf6e3;
 		font-size: 1.2rem;
 		pointer-events: none;
