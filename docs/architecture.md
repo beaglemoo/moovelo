@@ -1625,6 +1625,22 @@ about extract coverage when no roads are found near a waypoint.
   infrastructure.
 - **Static SPA served by the backend** in prod: single container, single
   port, no SSR complexity - the app is a map tool, not a content site.
+- **Metric/imperial is a client-side display transform**, held in
+  `localStorage` (`moovelo:units`), not in `user_settings`. Every API
+  response and stored value is metric; `lib/format.ts` converts at render
+  time and the `units` store (`lib/units.svelte.ts`) re-renders live on a
+  toggle. It is deliberately not a server preference: share pages are
+  anonymous so a DB preference could never reach them, and a display unit
+  has no business round-tripping through the routing or export contracts,
+  which stay metric (FIT/GPX and the Wahoo push are unchanged). A few
+  inputs stay metric on purpose too - the rider-settings weight/speed
+  fields, the loop target-distance, and the custom-costing speed slider
+  (a raw km/h knob whose steps are km/h; converting only its readout made
+  a one-notch drag read as unresponsive). **Known gap**: the assistant and
+  the backend-generated strings (route names,
+  share summaries, the assistant's tool results and prose) stay metric,
+  because the model reasons over metric figures - threading a per-request
+  unit preference through the LLM is a separate cross-cutting change.
 - **PWA cache is version-keyed, network-first, and never written at
   runtime**: the service worker (`frontend/src/service-worker.ts`)
   precaches the build's hashed assets plus the SPA shell (`/`) into

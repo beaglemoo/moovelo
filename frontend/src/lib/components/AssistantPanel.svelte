@@ -8,6 +8,8 @@
 		type Preset,
 		type Waypoint
 	} from '$lib/api';
+	import { distance, elevation } from '$lib/format';
+	import { units } from '$lib/units.svelte';
 
 	interface Props {
 		/** What the planner is showing, so "from here" and "the current
@@ -407,9 +409,10 @@
 				     numbers, but this is what makes it structurally impossible for
 				     an invented one to reach the rider as a measurement. -->
 				<p class="assistant-proposal-stats">
-					{(proposal.snapshot.distance_m / 1000).toFixed(1)} km, ↗ {Math.round(
-						proposal.snapshot.ascent_m
-					)} m
+					{distance(proposal.snapshot.distance_m, units.system)}, ↗ {elevation(
+						proposal.snapshot.ascent_m,
+						units.system
+					)}
 				</p>
 				<div class="assistant-proposal-buttons">
 					<button type="button" class="primary" onclick={() => onAccept?.()}>Use this route</button>

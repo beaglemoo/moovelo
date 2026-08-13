@@ -1,5 +1,7 @@
 <script lang="ts">
 	import type { RouteResponse } from '$lib/api';
+	import { distanceDelta, elevationDelta } from '$lib/format';
+	import { units } from '$lib/units.svelte';
 
 	interface Props {
 		/** The route currently on screen - deltas are shown against this, not
@@ -24,15 +26,11 @@
 	/** "+3.2 km" / "-1.0 km" - sign-aware, since a shorter alternate is just
 	 * as useful a fact as a longer one. */
 	function deltaKm(alt: RouteResponse): string {
-		const deltaM = alt.distance_m - current.distance_m;
-		const sign = deltaM >= 0 ? '+' : '';
-		return `${sign}${(deltaM / 1000).toFixed(1)} km`;
+		return distanceDelta(alt.distance_m - current.distance_m, units.system);
 	}
 
 	function deltaAscent(alt: RouteResponse): string {
-		const delta = Math.round(alt.ascent_m - current.ascent_m);
-		const sign = delta >= 0 ? '+' : '';
-		return `${sign}${delta} m`;
+		return elevationDelta(alt.ascent_m - current.ascent_m, units.system);
 	}
 </script>
 

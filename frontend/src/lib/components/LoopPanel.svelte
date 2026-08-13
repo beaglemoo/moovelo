@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { PAVED_SURFACES } from '$lib/surface';
 	import type { LoopCandidate } from '$lib/api';
-	import { km } from '$lib/format';
+	import { distance, elevation } from '$lib/format';
+	import { units } from '$lib/units.svelte';
 
 	interface Props {
 		targetKm: number;
@@ -82,7 +83,10 @@
 				>
 					<span class="dot" style="background: {COLOURS[i % COLOURS.length]}"></span>
 					<span class="stats">
-						{km(candidate.snapshot.distance_m)} · ↗ {Math.round(candidate.snapshot.ascent_m)} m
+						{distance(candidate.snapshot.distance_m, units.system)} · ↗ {elevation(
+							candidate.snapshot.ascent_m,
+							units.system
+						)}
 						{#if pavedPercent(candidate) !== null}
 							· {pavedPercent(candidate)}% paved
 						{/if}

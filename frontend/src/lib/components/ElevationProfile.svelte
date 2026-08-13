@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { ElevationPoint } from '$lib/api';
+	import { distance, elevation as fmtElevation, METRES_PER_FOOT } from '$lib/format';
 	import { elevationRuns, GRADIENT_BANDS } from '$lib/gradient';
+	import { units } from '$lib/units.svelte';
 
 	interface Props {
 		elevation: ElevationPoint[];
@@ -69,9 +71,32 @@
 	const gridLines = $derived.by(() => {
 		const lines: { yPos: number; label: string }[] = [];
 		if (!elevation.length) return lines;
-		const step = elevSpan > 400 ? 200 : elevSpan > 150 ? 100 : elevSpan > 60 ? 50 : 20;
-		for (let e = Math.ceil(minElev / step) * step; e <= maxElev; e += step) {
-			lines.push({ yPos: y(e), label: `${e} m` });
+		// Work in the display unit so ticks land on round numbers (500 ft / 100 m),
+		// then convert each back to metres for the y() plot position.
+		const imperial = units.system === 'imperial';
+		const unit = imperial ? 'ft' : 'm';
+		const toDisplay = (m: number) => (imperial ? m / METRES_PER_FOOT : m);
+		const fromDisplay = (d: number) => (imperial ? d * METRES_PER_FOOT : d);
+		const spanD = toDisplay(elevSpan);
+		const step = imperial
+			? spanD > 1300
+				? 500
+				: spanD > 500
+					? 200
+					: spanD > 200
+						? 100
+						: 50
+			: spanD > 400
+				? 200
+				: spanD > 150
+					? 100
+					: spanD > 60
+						? 50
+						: 20;
+		const minD = toDisplay(minElev);
+		const maxD = toDisplay(maxElev);
+		for (let e = Math.ceil(minD / step) * step; e <= maxD; e += step) {
+			lines.push({ yPos: y(fromDisplay(e)), label: `${e} ${unit}` });
 		}
 		return lines;
 	});
@@ -93,10 +118,6 @@
 	function handleLeave() {
 		hover = null;
 		onHover(null);
-	}
-
-	function km(meters: number): string {
-		return `${(meters / 1000).toFixed(1)} km`;
 	}
 </script>
 
@@ -142,11 +163,13 @@
 				class="hover-label"
 				text-anchor="middle"
 			>
-				{km(hover.dist_m)} · {Math.round(hover.elev_m)} m
+				{distance(hover.dist_m, units.system)} · {fmtElevation(hover.elev_m, units.system)}
 			</text>
 		{/if}
-		<text x={PAD_LEFT} y={H - 6} class="axis-label">0 km</text>
-		<text x={W - PAD_RIGHT} y={H - 6} class="axis-label" text-anchor="end">{km(totalDist)}</text>
+		<text x={PAD_LEFT} y={H - 6} class="axis-label">{distance(0, units.system)}</text>
+		<text x={W - PAD_RIGHT} y={H - 6} class="axis-label" text-anchor="end"
+			>{distance(totalDist, units.system)}</text
+		>
 	</svg>
 	<div class="legend">
 		{#each legendBands as band (band.label)}

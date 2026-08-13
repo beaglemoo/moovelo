@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { WindSegment } from '$lib/api';
-	import { km } from '$lib/format';
+	import { distance, speed } from '$lib/format';
+	import { units } from '$lib/units.svelte';
 
 	interface Props {
 		startTime: string;
@@ -20,7 +21,7 @@
 	}
 
 	function kmh(metresPerSecond: number): number {
-		return Math.round(metresPerSecond * 3.6);
+		return metresPerSecond * 3.6;
 	}
 
 	// Wind direction is where it blows FROM; the arrow points where it blows
@@ -37,8 +38,9 @@
 	function windLabel(headwindMs: number): { text: string; class: string } {
 		const speedKmh = Math.abs(kmh(headwindMs));
 		if (speedKmh < CROSSWIND_THRESHOLD_KMH) return { text: 'crosswind', class: 'cross' };
-		if (headwindMs > 0) return { text: `${speedKmh} km/h headwind`, class: 'head' };
-		return { text: `${speedKmh} km/h tailwind`, class: 'tail' };
+		const shown = speed(speedKmh, units.system);
+		if (headwindMs > 0) return { text: `${shown} headwind`, class: 'head' };
+		return { text: `${shown} tailwind`, class: 'tail' };
 	}
 </script>
 
@@ -68,7 +70,7 @@
 				{#each segments as segment, i (i)}
 					{@const label = windLabel(segment.headwind_ms)}
 					<li>
-						<span class="at">{km(segment.dist_along_m)}</span>
+						<span class="at">{distance(segment.dist_along_m, units.system)}</span>
 						<span class="time">{hhmm(segment.arrival_iso)}</span>
 						<span
 							class="arrow"
@@ -79,7 +81,7 @@
 						>
 							↑
 						</span>
-						<span class="speed">{kmh(segment.wind_speed_ms)} km/h</span>
+						<span class="speed">{speed(kmh(segment.wind_speed_ms), units.system)}</span>
 						<span class="label {label.class}">{label.text}</span>
 					</li>
 				{/each}

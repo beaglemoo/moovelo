@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { places, type PlaceResult } from '$lib/api';
+	import { shortLength } from '$lib/format';
+	import { units } from '$lib/units.svelte';
 
 	interface Props {
 		/** Map centre, so a search for "Newport" prefers the one you are
@@ -102,11 +104,6 @@
 			choose(results[active], 'add');
 		}
 	}
-
-	function km(metres: number | null): string {
-		if (metres === null) return '';
-		return metres < 1000 ? `${Math.round(metres)} m` : `${Math.round(metres / 1000)} km`;
-	}
 </script>
 
 <div class="search">
@@ -154,7 +151,7 @@
 							<span class="label">{place.name}</span>
 							<span class="meta"
 								>{place.place_type}{place.distance_m !== null
-									? ` · ${km(place.distance_m)}`
+									? ` · ${shortLength(place.distance_m, units.system)}`
 									: ''}</span
 							>
 						</button>

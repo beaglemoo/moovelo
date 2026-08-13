@@ -2,7 +2,8 @@
 	import { goto } from '$app/navigation';
 	import { routes, wahoo, type RouteQuery, type RouteSummary, type WahooStatus } from '$lib/api';
 	import ImportResults from '$lib/components/ImportResults.svelte';
-	import { km } from '$lib/format';
+	import { distance, elevation } from '$lib/format';
+	import { units } from '$lib/units.svelte';
 	import { ACCEPTED_FILES, importQueue } from '$lib/import.svelte';
 	import { onDestroy } from 'svelte';
 
@@ -413,8 +414,8 @@
 							</div>
 						</td>
 						<td class="muted">{item.preset}</td>
-						<td>{km(item.distance_m)}</td>
-						<td>{Math.round(item.ascent_m)} m</td>
+						<td>{distance(item.distance_m, units.system)}</td>
+						<td>{elevation(item.ascent_m, units.system)}</td>
 						<td class="muted">{formatDate(item.updated_at)}</td>
 						<td class="actions">
 							<a href={routes.gpxUrl(item.id)} download>GPX</a>

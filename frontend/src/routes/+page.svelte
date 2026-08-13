@@ -29,6 +29,7 @@
 		type Waypoint,
 		type WindSegment
 	} from '$lib/api';
+	import { distance, elevation } from '$lib/format';
 	import { cumulativeDistances, pointAtDistance } from '$lib/geo';
 	import { gradientSegments as computeGradientSegments } from '$lib/gradient';
 	import { decodePolyline6 } from '$lib/polyline';
@@ -48,6 +49,7 @@
 	import WeatherPanel from '$lib/components/WeatherPanel.svelte';
 	import MapView from '$lib/map/MapView.svelte';
 	import { beforeNavigate } from '$app/navigation';
+	import { units } from '$lib/units.svelte';
 	import { unsaved } from '$lib/unsaved.svelte';
 	import { onDestroy } from 'svelte';
 
@@ -1331,10 +1333,6 @@
 		hoverPoint = distM === null ? null : pointAtDistance(routeLine, routeDists, distM);
 	}
 
-	function formatDistance(m: number): string {
-		return `${(m / 1000).toFixed(1)} km`;
-	}
-
 	function formatDuration(s: number): string {
 		const h = Math.floor(s / 3600);
 		const min = Math.round((s % 3600) / 60);
@@ -1661,7 +1659,7 @@
 	{#if route}
 		<div class="panel">
 			<div class="stats">
-				<span><strong>{formatDistance(route.distance_m)}</strong></span>
+				<span><strong>{distance(route.distance_m, units.system)}</strong></span>
 				<span title={route.ride_time.length ? 'Estimated for your rider profile' : undefined}>
 					{formatDuration(
 						route.ride_time.length
@@ -1672,8 +1670,8 @@
 				{#if route.ride_time.length}
 					<a class="ride-time-link" href="/settings">rider profile</a>
 				{/if}
-				<span>↗ {Math.round(route.ascent_m)} m</span>
-				<span>↘ {Math.round(route.descent_m)} m</span>
+				<span>↗ {elevation(route.ascent_m, units.system)}</span>
+				<span>↘ {elevation(route.descent_m, units.system)}</span>
 			</div>
 			{#if route.surface && route.surface.total_m > 0}
 				<SurfaceBar surface={route.surface} />

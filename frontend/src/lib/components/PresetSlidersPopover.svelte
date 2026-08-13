@@ -155,6 +155,11 @@
 			</select>
 		</label>
 		<label>
+			<!-- Kept in km/h even in imperial mode: this is the raw costing knob,
+			     and its scale/steps are km/h. Converting only the readout made a
+			     one-notch drag often show the same rounded mph, reading as an
+			     unresponsive slider - the same reason the /settings speed input
+			     stays metric. -->
 			Cycling speed: {cyclingSpeed} km/h
 			<input
 				type="range"
