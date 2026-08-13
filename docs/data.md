@@ -174,8 +174,88 @@ refresh, run the same wipe-and-rebuild as above, then rebuild the place
 index if you use it - wiping the volume deletes the extract it reads. If
 you run with all-roads coverage enabled, pass `INDEX_ROADS=true` on every
 refresh, not just the first: as above, omitting it on a later run does not
-delete the road table, but it does leave it un-refreshed. A scheduled
-refresh sidecar (compose cron, off by default) is planned.
+delete the road table, but it does leave it un-refreshed.
+
+### The refresh script
+
+`scripts/refresh-data.sh` performs the whole sequence - stop Valhalla,
+wipe the tiles volume, bring the stack back, wait for the tile build to
+finish, rebuild the place index, and smoke-test one route:
+
+```sh
+scripts/refresh-data.sh --profile prod      # or --profile dev
+```
+
+Flags:
+
+- `--profile dev|prod` - which compose profile to bring back up (default
+  `prod`).
+- `--skip-index` - refresh the routing tiles only, leave the place index
+  alone.
+- `--dry-run` - print the exact command sequence without running anything.
+  Use this to see what it will do before scheduling it.
+
+It reads the same `./.env` as `docker compose`, so `INDEX_ROADS`,
+`VALHALLA_TILE_URL`, `OSM_DIR` and `WORK_DIR` all carry through unchanged -
+if all-roads coverage is on in your `.env`, the refresh rebuilds it too,
+with no extra flag. The tiles volume name is derived from `docker compose
+config` rather than hardcoded, a lockfile prevents two runs colliding, and
+the script refuses to run unless the stack is already up. Routing 502s
+during the ~30-minute England rebuild; the library and everything that
+does not touch Valhalla stay up.
+
+**Why a host script and not a compose sidecar:** a container cannot delete
+the `valhalla_tiles` volume while another container has it mounted, and the
+docker-socket alternative would hand the host to a container - see the
+design-decisions note in [architecture.md](architecture.md#design-decisions).
+
+**On a file-copy deployment** (prod is deployed by rsync, not a checkout),
+`scripts/` is not in the image, so the script must be copied to the host
+alongside the compose file - e.g. `rsync scripts/refresh-data.sh
+host:/opt/bikegps/scripts/` - or it will not exist there to schedule.
+
+### Scheduling it (off by default)
+
+Nothing schedules the refresh unless you set it up. Two common ways, both
+running on the host as the user that owns the compose project:
+
+**cron** - the first of each month at 03:00:
+
+```cron
+0 3 1 * * cd /opt/bikegps && /opt/bikegps/scripts/refresh-data.sh --profile prod >> /var/log/moovelo-refresh.log 2>&1
+```
+
+**systemd timer** - `/etc/systemd/system/moovelo-refresh.service`:
+
+```ini
+[Unit]
+Description=Moovelo OSM data refresh
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/bikegps
+ExecStart=/opt/bikegps/scripts/refresh-data.sh --profile prod
+```
+
+and `/etc/systemd/system/moovelo-refresh.timer`:
+
+```ini
+[Unit]
+Description=Monthly Moovelo OSM data refresh
+
+[Timer]
+OnCalendar=*-*-01 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+then `sudo systemctl enable --now moovelo-refresh.timer`.
+
+On macOS (a Mac Mini staging host, say) the launchd equivalent is a
+`StartCalendarInterval` job in `~/Library/LaunchAgents` calling the same
+script; the mechanics are the same, off unless you load it.
 
 ## Disk and memory expectations
 

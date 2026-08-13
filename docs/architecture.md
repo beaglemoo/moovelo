@@ -1628,6 +1628,17 @@ about extract coverage when no roads are found near a waypoint.
 - **Compose profiles over separate files**: `dev` (hot reload, mounted
   source, Vite on 5173) and `prod` (single container on 17777) live in one
   docker-compose.yml.
+- **Data refresh is a host script, not an in-compose cron sidecar**:
+  refreshing the routing data means deleting the in-use `valhalla_tiles`
+  named volume, and a container cannot remove a volume that is mounted into
+  another running container - so a sidecar physically cannot do the job. The
+  socket-mounted alternative (bind-mounting `/var/run/docker.sock`) can, but
+  it hands the container root-equivalent control of the host, which is the
+  wrong trade for a monthly maintenance job in a self-hostable app.
+  `scripts/refresh-data.sh` runs on the host beside `docker compose` and is
+  scheduled with cron or a systemd timer (both off by default; see
+  docs/data.md). It is not in the image, so on a file-copy deployment it
+  must be rsynced to the host alongside the compose file.
 - **A loop is an out-and-back through one via point**, not a hand-built
   closed shape: Valhalla routes `origin -> via -> origin` as two ordinary
   legs and, on real road topology, very often picks different streets for
