@@ -302,6 +302,17 @@
 		background: var(--bg);
 		color: var(--text);
 	}
+	/* Unstyled native <select>s (filter dropdowns, the costing popover's bike
+	   type) never had a colour literal to tokenise, so they fell back to the UA
+	   palette - which color-scheme darkens but does not recolour to match the
+	   surface. Theme them here; any component rule that styles its own select
+	   still wins on specificity. */
+	:global(select) {
+		background: var(--surface);
+		color: var(--text);
+		border: 1px solid var(--input-border);
+		border-radius: 6px;
+	}
 	.shell {
 		display: flex;
 		flex-direction: column;

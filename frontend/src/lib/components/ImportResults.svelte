@@ -79,6 +79,16 @@
 		align-items: center;
 		margin-bottom: 0.4rem;
 	}
+	.results-head button {
+		font: inherit;
+		font-size: 0.8rem;
+		padding: 0.2rem 0.6rem;
+		border: 1px solid var(--input-border);
+		border-radius: 6px;
+		background: var(--surface);
+		color: var(--text);
+		cursor: pointer;
+	}
 	ul {
 		list-style: none;
 		margin: 0;

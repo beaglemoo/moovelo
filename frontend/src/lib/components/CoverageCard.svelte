@@ -292,5 +292,10 @@
 	button {
 		font-size: 0.85rem;
 		padding: 0.3rem 0.7rem;
+		border: 1px solid var(--input-border);
+		border-radius: 6px;
+		background: var(--surface);
+		color: var(--text);
+		cursor: pointer;
 	}
 </style>
