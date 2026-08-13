@@ -53,25 +53,38 @@ def config_from_env() -> LLMConfig:
     )
 
 
+async def select_llm_settings(db: AsyncSession) -> LLMSettings | None:
+    """The stored singleton, or None if the `llm_settings` table is absent -
+    the state of an install downgraded past migration 0011.
+
+    The SELECT runs inside a SAVEPOINT so a missing table - which aborts the
+    statement at the Postgres level - is contained: only the savepoint rolls
+    back, and the caller's surrounding transaction stays intact and
+    committable. The earlier fix rolled the whole transaction back instead,
+    which silently discarded a caller's uncommitted work (share_route assigns
+    route.share_token two lines before it asks for a summary) and then blew up
+    on the next ORM attribute access with MissingGreenlet. A savepoint touches
+    nothing but the failed read.
+    """
+    try:
+        async with db.begin_nested():
+            return (await db.execute(select(LLMSettings))).scalar_one_or_none()
+    except ProgrammingError:
+        return None
+
+
 async def resolve_llm_config(db: AsyncSession) -> LLMConfig:
     """The effective configuration: the stored row over the environment.
 
-    Falls back to env-only config if `llm_settings` is absent - the state of
-    an install downgraded past migration 0011. Without this the unhandled
+    Falls back to env-only config if `llm_settings` is absent (an install
+    downgraded past migration 0011). Without this the unhandled
     UndefinedTableError is not just an /api/admin/llm 500: resolve_llm_config
     is also called from the unauthenticated GET /api/config on every page
     load, so the whole app 500s for every visitor, and 0011's promised
-    recovery (set the LLM_* env vars) never runs because the query throws
-    before the env fallback is reached.
+    recovery (set the LLM_* env vars) never runs.
     """
     env = config_from_env()
-    try:
-        row = (await db.execute(select(LLMSettings))).scalar_one_or_none()
-    except ProgrammingError:
-        # The table is gone. The failed statement aborts this transaction, so
-        # roll it back before the caller reuses the session for anything else.
-        await db.rollback()
-        return env
+    row = await select_llm_settings(db)
     if row is None:
         return env
     # `or` is the right operator here rather than an `is not None` check:
