@@ -27,13 +27,14 @@ while [ $# -gt 0 ]; do
 		--profile=*) PROFILE="${1#*=}"; shift ;;
 		--skip-index) SKIP_INDEX=1; shift ;;
 		--dry-run) DRY_RUN=1; shift ;;
-		-h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,17p' "$0"; exit 0 ;;
 		*) echo "error: unknown argument: $1" >&2; exit 2 ;;
 	esac
 done
 
 case "$PROFILE" in
-	dev|prod) ;;
+	dev)  APP_SERVICE=backend-dev ;;
+	prod) APP_SERVICE=backend ;;
 	*) echo "error: --profile must be dev or prod (got: $PROFILE)" >&2; exit 2 ;;
 esac
 
@@ -72,18 +73,26 @@ if [ -z "$VOLUME" ]; then
 	fi
 fi
 
-# Guard: refuse to operate on a project that isn't actually up. Deleting the
-# tiles volume of a stopped or foreign stack is destructive and pointless -
-# there is nothing to refresh. Skipped in dry-run, which has no stack.
-if [ "$DRY_RUN" != 1 ] && [ -z "$("${COMPOSE[@]}" ps -q 2>/dev/null)" ]; then
-	echo "error: no running containers for this compose project - start the stack first" >&2
+# Guard: refuse unless the TARGET profile's own app container is up. The
+# `valhalla` service and its tiles volume are shared by both profiles, so a
+# project-wide "is anything running" check would happily let `--profile prod`
+# (the default) wipe the tiles of a running *dev* stack and then fail to bind
+# its port on the way back up. Checking the profile's app service ($backend /
+# $backend-dev) means we only ever refresh the stack the caller actually named,
+# and refuse when a different profile - or nothing - is up. Skipped in dry-run.
+if [ "$DRY_RUN" != 1 ] && [ -z "$("${COMPOSE[@]}" ps -q "$APP_SERVICE" 2>/dev/null)" ]; then
+	echo "error: the '$PROFILE' stack is not running ($APP_SERVICE is not up)." >&2
+	echo "       Refusing to wipe tiles for a stack you did not name; if a" >&2
+	echo "       different profile is running, re-run with that --profile." >&2
 	exit 1
 fi
 
 # Single-instance lock. mkdir is atomic on every platform (flock is absent on
-# macOS); two concurrent cron runs would each try to delete the volume
-# mid-rebuild.
-LOCK="${TMPDIR:-/tmp}/moovelo-refresh-data.lock"
+# macOS); two concurrent runs would each try to delete the volume mid-rebuild.
+# A fixed path, not ${TMPDIR}: a manual run (TMPDIR set on macOS) and a cron run
+# (TMPDIR unset -> /tmp) must resolve to the same lock, or they would not
+# exclude each other.
+LOCK="/tmp/moovelo-refresh-data.lock"
 if [ "$DRY_RUN" != 1 ]; then
 	if ! mkdir "$LOCK" 2>/dev/null; then
 		echo "error: another refresh is running (lock: $LOCK); remove it if stale" >&2
@@ -92,7 +101,13 @@ if [ "$DRY_RUN" != 1 ]; then
 	trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 fi
 
-INDEX_ROADS_EFFECTIVE="${INDEX_ROADS:-false}"
+# The value the indexer will actually receive - read from the rendered compose
+# config, which merges ./.env, not from this shell's own environment (bash
+# never sources .env, so ${INDEX_ROADS:-false} would log "false" while compose
+# passed "true"). Falls back to false if config can't be read (e.g. dry-run
+# without Docker).
+INDEX_ROADS_EFFECTIVE="$("${COMPOSE[@]}" --profile index config --format json 2>/dev/null | jq -r '.services.indexer.environment.INDEX_ROADS // "false"' || echo false)"
+[ -n "$INDEX_ROADS_EFFECTIVE" ] || INDEX_ROADS_EFFECTIVE=false
 
 log "Profile:      $PROFILE"
 log "Tiles volume: $VOLUME"
@@ -119,8 +134,13 @@ run "${COMPOSE[@]}" --profile "$PROFILE" up -d
 # 4. Wait for the tile build to finish (England ~30 min). The app is up but
 #    routing 502s until this passes.
 log "Waiting for Valhalla to become healthy (can take ~30 min for England)"
+# Bounded wait: a broken build (bad extract, full disk, crash loop) shows
+# `unhealthy` forever, and an unbounded loop here would hold the lockfile
+# indefinitely under cron with no alert. HEALTH_TIMEOUT (default 2h - England
+# on a small VM is documented as "an hour or more") caps it; on timeout we
+# fail, the EXIT trap releases the lock, and cron/systemd sees a non-zero exit.
 wait_healthy() {
-	local cid status waited=0
+	local cid status waited=0 max="${HEALTH_TIMEOUT:-7200}"
 	while :; do
 		cid="$("${COMPOSE[@]}" ps -q valhalla)"
 		[ -n "$cid" ] || { echo "error: valhalla container not found after 'up'" >&2; return 1; }
@@ -129,6 +149,11 @@ wait_healthy() {
 			healthy) return 0 ;;
 			none|unknown) echo "error: valhalla has no healthcheck status ($status)" >&2; return 1 ;;
 		esac
+		if [ "$waited" -ge "$max" ]; then
+			echo "error: valhalla did not become healthy within ${max}s (last status: $status)" >&2
+			echo "       check 'docker compose logs valhalla'; raise HEALTH_TIMEOUT if the build is just slow" >&2
+			return 1
+		fi
 		sleep 15
 		waited=$((waited + 15))
 		if [ $((waited % 300)) -eq 0 ]; then
