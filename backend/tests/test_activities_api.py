@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Activity
@@ -162,43 +162,39 @@ async def test_deletes_a_ride(client: AsyncClient) -> None:
     assert (await client.get(f"/api/activities/{body['id']}")).status_code == 404
 
 
-async def test_deleting_a_ride_clears_its_coverage_credit(
-    client: AsyncClient, db: AsyncSession
+async def test_deleting_a_ride_schedules_a_coverage_rederive(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """activity_ways has no per-activity link, so a deleted ride's coverage
-    credit cannot be decremented in place. Deleting a ride must instead reset
-    the rider's aggregate so it can be re-derived from what remains - without
-    that, coverage stays inflated forever, still crediting ways after every
-    contributing activity is gone."""
-    from sqlalchemy import select
+    credit cannot be decremented in place. Deleting a ride schedules a full
+    re-derive (clear + rebuild) as a clear_first job on the match-queue worker,
+    NOT on the request session: doing the clear on a second session deadlocked
+    against the worker and left phantom over-credits. The rebuild correctness
+    is covered in test_way_matching; here we pin that the delete returns 204
+    and schedules exactly that job."""
+    import uuid as uuidlib
 
-    from app.models import ActivityWay
+    from app.services import way_matching
+
+    calls: list[tuple[uuidlib.UUID, bool]] = []
+    real_submit = way_matching.queue.submit
+
+    def spy(user_id, activity_ids=None, clear_first=False):  # type: ignore[no-untyped-def]
+        calls.append((user_id, clear_first))
+        return real_submit(user_id, activity_ids, clear_first)
+
+    monkeypatch.setattr(way_matching.queue, "submit", spy)
 
     await register(client)
     body = await _import(client, GPX_RIDE)
     activity_id = uuid.UUID(body["id"])
     user_id = await db.scalar(select(Activity.user_id).where(Activity.id == activity_id))
 
-    # Simulate the state after matching: this ride credited way 999, and the
-    # ride is marked attempted.
-    db.add(ActivityWay(user_id=user_id, way_id=999, first_ridden_at=datetime.now(UTC)))
-    await db.execute(
-        update(Activity).where(Activity.id == activity_id).values(ways_matched_at=datetime.now(UTC))
-    )
-    await db.commit()
-
     assert (await client.delete(f"/api/activities/{activity_id}")).status_code == 204
 
-    # The DELETE ran in the request's own session; drop this session's cached
-    # copy of the row so the query reads the committed state (Postgres READ
-    # COMMITTED gives each statement a fresh snapshot).
-    db.expire_all()
-    remaining = (
-        (await db.execute(select(ActivityWay).where(ActivityWay.user_id == user_id)))
-        .scalars()
-        .all()
-    )
-    assert remaining == []
+    # A clear_first re-derive was scheduled for this rider (the import's own
+    # match submit, clear_first=False, is also in `calls` and is not it).
+    assert (user_id, True) in calls
 
 
 async def test_one_riders_activities_are_invisible_to_another(
