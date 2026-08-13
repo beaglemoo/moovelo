@@ -256,13 +256,13 @@ def test_jobs_cannot_grow_past_the_tracked_cap() -> None:
     assert len(queue._jobs) == MAX_TRACKED_JOBS  # noqa: SLF001
 
 
-def test_a_rederive_always_schedules_even_when_the_tracker_is_full() -> None:
-    """A re-derive (a delete's clear_first job) is correctness-critical: it
-    must schedule even when the tracker is full of queued match jobs,
-    displacing one rather than raising. Dropping it would strand a deleted
-    ride's coverage credit with no recovery, since the backfill button only
-    matches unmatched rides and cannot remove a credit whose activity is gone
-    - which was the false claim in delete_activity's own comment."""
+def test_a_rederive_is_untracked_so_it_can_never_be_evicted() -> None:
+    """A delete's re-derive is fire-and-forget: never put in the bounded _jobs
+    tracker, so neither a full tracker nor a later burst of deletes can evict
+    it before the worker runs it. It is enqueued for the worker regardless.
+    Tracking it once let a burst of ~50 subsequent deletes force-evict an
+    earlier re-derive, silently stranding a deleted ride's credit; match jobs
+    stay tracked and bounded."""
     import uuid
 
     from app.services.way_matching import MAX_TRACKED_JOBS
@@ -270,13 +270,16 @@ def test_a_rederive_always_schedules_even_when_the_tracker_is_full() -> None:
     queue = WayMatchQueue()
     user = uuid.uuid4()
     for _ in range(MAX_TRACKED_JOBS):
-        queue.submit(user)  # fill the tracker with queued match jobs
+        queue.submit(user)  # fill the tracker with match jobs
     assert len(queue._jobs) == MAX_TRACKED_JOBS  # noqa: SLF001
 
-    # Does not raise - a queued match is displaced to make room.
-    rederive = queue.submit(user, clear_first=True)
-    assert len(queue._jobs) == MAX_TRACKED_JOBS  # noqa: SLF001 - cap still holds
-    assert rederive.id in queue._jobs  # noqa: SLF001 - and the re-derive is tracked
+    # Many re-derives, tracker already full: none raise, none are tracked (so
+    # none can displace another), and every one is enqueued for the worker.
+    before = queue._queue.qsize()  # noqa: SLF001
+    ids = [queue.submit(user, clear_first=True).id for _ in range(MAX_TRACKED_JOBS + 5)]
+    assert len(queue._jobs) == MAX_TRACKED_JOBS  # noqa: SLF001 - tracker unchanged
+    assert all(rid not in queue._jobs for rid in ids)  # noqa: SLF001
+    assert queue._queue.qsize() == before + len(ids)  # noqa: SLF001 - all enqueued
 
 
 @respx.mock
