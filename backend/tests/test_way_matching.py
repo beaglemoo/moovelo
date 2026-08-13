@@ -230,3 +230,27 @@ async def test_backfill_with_explicit_ids_attempts_even_a_fresh_import(
     assert job.total == 1
     assert job.matched == 0
     assert job.unmatched == 1
+
+
+def test_jobs_cannot_grow_past_the_tracked_cap() -> None:
+    """When every tracked job is still queued/running, _remember refuses a
+    new one rather than inserting anyway - the archive queue's behaviour.
+    Before the fix, `break`-and-insert let _jobs overshoot MAX_TRACKED_JOBS
+    (observed 74 tracked against the 50 cap under a burst)."""
+    import uuid
+
+    from app.services.activity_import import QueueFullError
+    from app.services.way_matching import MAX_TRACKED_JOBS
+
+    queue = WayMatchQueue()
+    user = uuid.uuid4()
+    # Submitting only ever tracks; the worker is never started, so nothing is
+    # ever marked done/error and nothing is evictable.
+    for _ in range(MAX_TRACKED_JOBS):
+        queue.submit(user)
+    assert len(queue._jobs) == MAX_TRACKED_JOBS  # noqa: SLF001
+
+    with pytest.raises(QueueFullError):
+        queue.submit(user)
+    # And it did not sneak in past the cap.
+    assert len(queue._jobs) == MAX_TRACKED_JOBS  # noqa: SLF001

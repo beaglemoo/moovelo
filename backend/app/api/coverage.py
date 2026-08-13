@@ -17,6 +17,7 @@ from app.schemas import (
     NetworkCoverage,
     RoadCoverageResponse,
 )
+from app.services.activity_import import QueueFullError
 from app.services.coverage import (
     BBox,
     cycle_network_coverage,
@@ -193,7 +194,10 @@ async def backfill(user: UserDep) -> CoverageBackfillStatus:
     hundreds of Valhalla round trips, the same reasoning as the archive
     import endpoint. See services/way_matching.py.
     """
-    return _job(match_queue.submit(user.id))
+    try:
+        return _job(match_queue.submit(user.id))
+    except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
 
 
 @router.get("/backfill/{job_id}")

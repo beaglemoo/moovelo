@@ -163,7 +163,18 @@ class WayMatchQueue:
                 (i for i, j in self._jobs.items() if j.status in ("done", "error")), None
             )
             if finished is None:
-                break
+                # Mirror ArchiveImportQueue._remember: rather than fall through
+                # and insert anyway - which let _jobs grow past
+                # MAX_TRACKED_JOBS under a submission burst, since this queue's
+                # own asyncio.Queue is unbounded and nothing upstream refuses
+                # work - refuse so the cap actually holds. Imported here rather
+                # than at module scope because activity_import imports this
+                # module, so a top-level import would be a cycle.
+                from app.services.activity_import import QueueFullError
+
+                raise QueueFullError(
+                    "Too many coverage jobs are already tracked. Try again in a few minutes."
+                )
             del self._jobs[finished]
         self._jobs[job.id] = job
 
