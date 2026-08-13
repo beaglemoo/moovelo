@@ -4,8 +4,9 @@
 	import { ApiError, auth, type UserInfo } from '$lib/api';
 	import { activityImportQueue, importQueue, pendingArchives } from '$lib/import.svelte';
 	import { resetSession } from '$lib/session';
+	import { units } from '$lib/units.svelte';
 	import { unsaved } from '$lib/unsaved.svelte';
-	import type { Snippet } from 'svelte';
+	import { onMount, type Snippet } from 'svelte';
 
 	let { children }: { children: Snippet } = $props();
 
@@ -17,6 +18,10 @@
 	// fires a second, spurious confirm for the one intent. Also disables the
 	// button below.
 	let loggingOut = $state(false);
+
+	// Load the rider's metric/imperial preference once on the client. onMount
+	// never runs during SSR, matching the other moovelo:* localStorage reads.
+	onMount(() => units.load());
 
 	// Files get dragged at the window, not at a particular drop target, so the
 	// whole app accepts them once you are logged in.
@@ -164,6 +169,15 @@
 				<a href="/admin" class:active={page.url.pathname === '/admin'}>Admin</a>
 			{/if}
 			<span class="spacer"></span>
+			<button
+				type="button"
+				class="units-toggle"
+				onclick={() => units.toggle()}
+				title="Switch between metric and imperial units"
+				aria-label="Units: {units.system === 'imperial' ? 'imperial' : 'metric'}"
+			>
+				{units.system === 'imperial' ? 'mi' : 'km'}
+			</button>
 			<span class="email">{user.email}</span>
 			<button type="button" onclick={logout} disabled={loggingOut}>Log out</button>
 		</nav>
