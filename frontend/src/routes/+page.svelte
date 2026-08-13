@@ -47,6 +47,7 @@
 	import WaypointList from '$lib/components/WaypointList.svelte';
 	import WeatherPanel from '$lib/components/WeatherPanel.svelte';
 	import MapView from '$lib/map/MapView.svelte';
+	import { beforeNavigate } from '$app/navigation';
 	import { unsaved } from '$lib/unsaved.svelte';
 	import { onDestroy } from 'svelte';
 
@@ -275,6 +276,22 @@
 	});
 	onDestroy(() => {
 		unsaved.dirty = false;
+	});
+
+	// Leaving the planner with unsaved edits discards them: a nav link
+	// unmounts it, and a ?route= load (opening a library route, an import
+	// result's View) overwrites it in place. Only the file-drop path used to
+	// check, so every other route out lost the work silently. Confirm before
+	// any navigation away from a dirty planner - the client-side counterpart
+	// of warnOnUnsaved's tab-close prompt, and the one guard the drop path now
+	// relies on too rather than carrying its own copy.
+	beforeNavigate((navigation) => {
+		if (!(dirty && waypoints.length > 0)) return;
+		if (
+			!confirm('You have unsaved changes to the route you are planning.\n\nLeave and lose them?')
+		) {
+			navigation.cancel();
+		}
 	});
 
 	// An imported route's line is the track that was uploaded; its waypoints

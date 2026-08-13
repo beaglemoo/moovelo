@@ -55,16 +55,13 @@
 			return;
 		}
 
-		// Importing leaves the planner, so unsaved edits would vanish silently.
-		if (
-			unsaved.dirty &&
-			!confirm(
-				'You have unsaved changes to the route you are planning.\n\nImport anyway and lose them?'
-			)
-		) {
-			return;
-		}
+		// Importing leaves the planner, so unsaved edits would vanish. The
+		// planner's own beforeNavigate guard confirms that for every route out,
+		// this one included, so it is not asked again here. If the rider
+		// cancels it to keep editing, the navigation does not happen - so only
+		// import once we have actually landed on the library, not behind them.
 		await goto('/library');
+		if (page.url.pathname !== '/library') return;
 		await importQueue.add(files);
 	}
 
