@@ -286,6 +286,13 @@
 	// of warnOnUnsaved's tab-close prompt, and the one guard the drop path now
 	// relies on too rather than carrying its own copy.
 	beforeNavigate((navigation) => {
+		// A navigation to /login is either an intentional log-out (which runs
+		// its own confirm) or the forced session-expiry bounce - in both the
+		// session is being torn down on purpose, so guarding it just fires a
+		// second prompt and, if cancelled, strands a dead session behind a live
+		// planner. The guard is for accidental exits; there is no accidental
+		// dirty-planner -> /login path.
+		if (navigation.to?.url.pathname === '/login') return;
 		if (!(dirty && waypoints.length > 0)) return;
 		if (
 			!confirm('You have unsaved changes to the route you are planning.\n\nLeave and lose them?')
