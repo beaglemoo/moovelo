@@ -1,3 +1,4 @@
+import mimetypes
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -147,6 +148,12 @@ class SPAStaticFiles(StaticFiles):
             response = await super().get_response("index.html", scope)
         return response
 
+
+# Starlette's StaticFiles serves the Content-Type from mimetypes.guess_type,
+# which does not know .webmanifest on every Python build. Register it so the
+# manifest is always served as application/manifest+json (some browsers refuse
+# to install a PWA whose manifest arrives as text/plain).
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 static_dir = Path(settings.static_dir)
 if static_dir.is_dir():

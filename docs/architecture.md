@@ -1625,6 +1625,35 @@ about extract coverage when no roads are found near a waypoint.
   infrastructure.
 - **Static SPA served by the backend** in prod: single container, single
   port, no SSR complexity - the app is a map tool, not a content site.
+- **PWA cache is version-keyed, network-first, and never written at
+  runtime**: the service worker (`frontend/src/service-worker.ts`)
+  precaches the build's hashed assets plus the SPA shell (`/`) into
+  `moovelo-cache-${version}` at install and deletes every other cache on
+  activate. Nothing is added to the cache after install, so it is exactly
+  that bounded, version-keyed set - impossible to poison and with no
+  per-URL growth. Two blanket rules keep dynamic data out entirely, with no
+  per-URL special-casing: `/api/*` is never intercepted (the app must
+  always see live data), and cross-origin requests are never intercepted
+  (this alone excludes map tiles on every install shape). Navigations are
+  network-first, so a live network always wins; offline, they fall back to
+  the one precached shell (every route renders from the same document, so
+  there is nothing per-URL worth storing). Precaching the shell matters
+  because the navigation that *registers* the worker is never controlled by
+  it - without it, the first offline load would white-screen.
+  - **Update behaviour is deliberately conservative** - no
+    `skipWaiting`/`clients.claim`. A tab already open when a new version
+    deploys keeps its active worker and cache until it is closed; only then
+    does the new version take over. Forcing activation mid-session would
+    purge the running tab's cache and then 404 on its next lazily-loaded
+    route chunk, since a deploy replaces the hashed files on the server -
+    breaking a live session is worse than letting it finish on the version
+    it started with, and a fresh load always gets the latest anyway. The
+    only cost is that a browser left open across many deploys accumulates
+    one small per-version cache until it restarts.
+  - The service worker and manifest are production-build artifacts that do
+    not exist under `vite dev`, so their Playwright suite (`e2e-pwa/`, run
+    with `npm run e2e:pwa`) runs against a real `vite preview` build - not
+    the dev-server smoke suite, where it would pass for the wrong reason.
 - **Compose profiles over separate files**: `dev` (hot reload, mounted
   source, Vite on 5173) and `prod` (single container on 17777) live in one
   docker-compose.yml.

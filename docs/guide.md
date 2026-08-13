@@ -557,6 +557,28 @@ GPX - no account needed, and nothing about who owns the route or its
 internal ID is exposed. **Unshare** revokes the link immediately;
 sharing again issues a new one, so an old link stops working.
 
+## Installing as an app
+
+Moovelo is a progressive web app: you can install it to your home screen
+or desktop and launch it in its own window, without a browser address
+bar. It still needs a network connection to plan and save - installing
+does not make routing work offline - but it launches faster and feels
+like a native app. Installing requires HTTPS, which staging and prod
+already have; a plain `http://` dev instance will not offer it.
+
+- **Android (Chrome)**: open the site, then the browser menu -> **Install
+  app** (or **Add to Home screen**).
+- **iOS/iPadOS (Safari)**: the Share button -> **Add to Home Screen**.
+  iOS has no automatic install prompt, so this manual step is the only
+  way; the app name and icon come from the same manifest.
+- **Desktop (Chrome/Edge)**: an install icon appears at the right of the
+  address bar, or use the browser menu -> **Install Moovelo**.
+
+The app updates itself: each deploy ships under a new version, and the
+next time you open it online the new version replaces the old one - a
+cached copy is only ever used as an offline fallback, never in place of a
+newer one that is reachable.
+
 ## The admin page
 
 The first account you register becomes an admin automatically, and gets

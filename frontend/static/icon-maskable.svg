@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Moovelo">
+  <!-- PLACEHOLDER maskable/apple variant: full-bleed background (no rounded
+       corners - the platform mask supplies the shape) with the glyph kept
+       inside the ~80% safe zone. Swap for the real logo when one exists. -->
+  <rect width="100" height="100" fill="#073642"/>
+  <path d="M30 68 V38 L50 56 L70 38 V68"
+        fill="none" stroke="#fdf6e3" stroke-width="8"
+        stroke-linejoin="round" stroke-linecap="round"/>
+</svg>
