@@ -125,6 +125,12 @@ gap: the route assistant still talks in kilometres in its chat and
 proposals, because it reasons over metric figures; the toggle only changes
 what the app itself renders.
 
+**Appearance.** The **Auto / Light / Dark** button in the top bar cycles
+the app's theme. Auto is the default and follows your operating system's
+light/dark setting; Light and Dark pin the app to one regardless of the
+OS. Like units, this is remembered per-browser, not per-account, and it
+never changes anything that gets exported or pushed to Wahoo.
+
 **Stats.** Distance, ride time, and ascent/descent. The ride time shown
 here is your *personal* estimate, not Valhalla's flat routing duration -
 see [Ride time](#ride-time) below.

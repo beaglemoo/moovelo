@@ -316,7 +316,7 @@
 		padding: 0.4rem 0.9rem;
 	}
 	.error {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	.archive {
 		display: flex;

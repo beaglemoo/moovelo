@@ -170,7 +170,7 @@
 		text-overflow: ellipsis;
 	}
 	.label.head {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	.label.tail {
 		color: var(--success);
@@ -185,6 +185,6 @@
 		font-size: 0.8rem;
 	}
 	.note.error {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 </style>

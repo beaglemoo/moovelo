@@ -200,9 +200,21 @@ It reads the same `./.env` as `docker compose`, so `INDEX_ROADS`,
 if all-roads coverage is on in your `.env`, the refresh rebuilds it too,
 with no extra flag. The tiles volume name is derived from `docker compose
 config` rather than hardcoded, a lockfile prevents two runs colliding, and
-the script refuses to run unless the stack is already up. Routing 502s
-during the ~30-minute England rebuild; the library and everything that
-does not touch Valhalla stay up.
+the script refuses to run unless the stack is already up. Requests that hit
+routing get a 503 ("routing engine unavailable") during the ~30-minute
+England rebuild; the library and everything that does not touch Valhalla
+stay up.
+
+Two more knobs are plain shell environment variables, not `.env` keys - the
+script does not source `.env` for them, so set them in the calling shell,
+cron line or systemd unit, not the compose `.env` file:
+
+- `SMOKE_ROUTE="lat,lon;lat,lon"` - point the final route probe at your
+  extract (default is central London, valid for the England default
+  extract).
+- `HEALTH_TIMEOUT=<seconds>` - cap how long the script waits for Valhalla
+  to report healthy before giving up (default `7200` = 2 hours), so an
+  unattended run under cron cannot hang forever.
 
 **Why a host script and not a compose sidecar:** a container cannot delete
 the `valhalla_tiles` volume while another container has it mounted, and the

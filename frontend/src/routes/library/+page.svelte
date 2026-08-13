@@ -592,7 +592,7 @@
 	}
 	.wahoo-connect {
 		border: 1px solid var(--accent);
-		color: var(--accent);
+		color: var(--link);
 		border-radius: 8px;
 		padding: 0.4rem 0.8rem;
 		font-size: 0.9rem;
@@ -611,7 +611,7 @@
 		padding: 0;
 		font: inherit;
 		font-size: 0.85rem;
-		color: var(--danger);
+		color: var(--danger-text);
 		cursor: pointer;
 	}
 	.badge {
@@ -632,7 +632,7 @@
 	}
 	.badge.bad {
 		background: #dc322f33;
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	table {
 		width: 100%;
@@ -658,7 +658,7 @@
 		padding: 0;
 		font: inherit;
 		font-weight: 600;
-		color: var(--accent);
+		color: var(--link);
 		cursor: pointer;
 	}
 	.muted {
@@ -670,7 +670,7 @@
 		align-items: center;
 	}
 	.actions a {
-		color: var(--accent);
+		color: var(--link);
 		font-size: 0.85rem;
 		text-decoration: none;
 	}
@@ -684,7 +684,7 @@
 		cursor: pointer;
 	}
 	.actions button.danger {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	td input {
 		font: inherit;
@@ -699,7 +699,7 @@
 		color: var(--text-muted);
 	}
 	.error {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	/* Collapse table rows into cards on small screens. */
 	@media (max-width: 640px) {

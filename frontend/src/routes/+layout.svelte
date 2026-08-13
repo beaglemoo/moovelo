@@ -223,9 +223,14 @@
 	   `:not([data-theme='light'])` guard on the media-query block. Nav
 	   colours are NOT tokenised as light/dark - the nav is dark chrome in
 	   both themes, so --nav-* is a single flat value, not swept.
-	   Accent colours (--accent/--danger/--success/--warning/--link) are
-	   Solarized's own accents and read correctly on both grounds, so they
-	   too are a single flat value. */
+	   Accent colours used as BACKGROUNDS (--accent/--danger/--success/
+	   --warning) are Solarized's own accents and read correctly on both
+	   grounds, so they are a single flat value. --link/--danger-text are the
+	   TEXT roles for the same colours - flat --accent/--danger text fails
+	   WCAG AA on the dark surface, so those two are swept per-theme like
+	   --border/--border-strong/--input-border. Border tokens are brightened
+	   in dark for the same reason: the original dark borders sat near
+	   invisible (~1.3:1) against --surface/--bg. */
 	:global(:root) {
 		/* Render native form controls (inputs, selects, scrollbars) and any
 		   unstyled control in the theme's own palette - the belt-and-braces for
@@ -251,6 +256,7 @@
 		--success: #859900;
 		--warning: #b58900;
 		--link: #268bd2;
+		--danger-text: #dc322f;
 	}
 	@media (prefers-color-scheme: dark) {
 		:global(:root:not([data-theme='light'])) {
@@ -260,12 +266,14 @@
 			--surface-sunken: #00212b;
 			--text: #eee8d5;
 			--text-muted: #93a1a1;
-			--border: #0d4a5a;
-			--border-strong: #204a58;
+			--border: #4f8698;
+			--border-strong: #5590a5;
 			--input-bg: #00212b;
-			--input-border: #204a58;
+			--input-border: #5590a5;
 			--shadow: rgba(0, 0, 0, 0.45);
 			--overlay-scrim: rgba(0, 0, 0, 0.62);
+			--link: #4ea6e6;
+			--danger-text: #ff6b64;
 		}
 	}
 	:global(:root[data-theme='dark']) {
@@ -275,12 +283,14 @@
 		--surface-sunken: #00212b;
 		--text: #eee8d5;
 		--text-muted: #93a1a1;
-		--border: #0d4a5a;
-		--border-strong: #204a58;
+		--border: #4f8698;
+		--border-strong: #5590a5;
 		--input-bg: #00212b;
-		--input-border: #204a58;
+		--input-border: #5590a5;
 		--shadow: rgba(0, 0, 0, 0.45);
 		--overlay-scrim: rgba(0, 0, 0, 0.62);
+		--link: #4ea6e6;
+		--danger-text: #ff6b64;
 	}
 	:global(:root[data-theme='light']) {
 		color-scheme: light;
@@ -295,6 +305,8 @@
 		--input-border: #ccc;
 		--shadow: rgba(0, 0, 0, 0.12);
 		--overlay-scrim: rgba(7, 54, 66, 0.75);
+		--link: #268bd2;
+		--danger-text: #dc322f;
 	}
 	:global(html, body) {
 		margin: 0;

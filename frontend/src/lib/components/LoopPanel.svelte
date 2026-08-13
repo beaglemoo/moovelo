@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { PAVED_SURFACES } from '$lib/surface';
 	import type { LoopCandidate } from '$lib/api';
-	import { distance, elevation } from '$lib/format';
+	import { distance, elevation, KM_PER_MILE } from '$lib/format';
 	import { units } from '$lib/units.svelte';
 
 	interface Props {
@@ -35,6 +35,24 @@
 	// three candidates, the same three colours.
 	const COLOURS = ['#268bd2', '#b58900', '#d33682'];
 
+	// The wire contract (targetKm, onTargetKmChange) stays metric end to end -
+	// the backend only ever sees km. This panel is the only place that needs
+	// to know about miles, so the km<->mi conversion lives entirely here
+	// rather than leaking into +page.svelte's state, matching the toDisplay/
+	// fromDisplay pattern ElevationProfile.svelte uses for its own axis.
+	const imperial = $derived(units.system === 'imperial');
+	// Snapped to the input's own step (5) rather than the nearest integer -
+	// the number input enforces step validation on submit against whatever
+	// value is showing, touched or not, so an unsnapped default (60 km is
+	// 37.28 mi, off the 5-wide grid) would silently block the very first
+	// "Find loops" click before the rider even touches the field.
+	const targetDisplay = $derived(imperial ? Math.round(targetKm / KM_PER_MILE / 5) * 5 : targetKm);
+
+	function onTargetInput(event: Event & { currentTarget: HTMLInputElement }) {
+		const value = Number(event.currentTarget.value);
+		onTargetKmChange(imperial ? value * KM_PER_MILE : value);
+	}
+
 	function pavedPercent(candidate: LoopCandidate): number | null {
 		const surface = candidate.snapshot.surface;
 		if (!surface || surface.total_m <= 0) return null;
@@ -55,14 +73,14 @@
 	</div>
 	<form class="target" onsubmit={submit}>
 		<label>
-			Target distance (km)
+			Target distance ({imperial ? 'mi' : 'km'})
 			<input
 				type="number"
 				min="5"
-				max="200"
+				max={imperial ? 125 : 200}
 				step="5"
-				value={targetKm}
-				oninput={(event) => onTargetKmChange(Number(event.currentTarget.value))}
+				value={targetDisplay}
+				oninput={onTargetInput}
 			/>
 		</label>
 		<button type="submit" disabled={loading}>{loading ? 'Searching…' : 'Find loops'}</button>
@@ -135,7 +153,7 @@
 		padding: 0 4px;
 	}
 	.close:hover {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	.target {
 		display: flex;
@@ -177,7 +195,7 @@
 		color: var(--text-muted);
 	}
 	.note.error {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	.candidates {
 		list-style: none;
@@ -221,6 +239,6 @@
 	}
 	.candidates button:hover {
 		border-color: var(--accent);
-		color: var(--accent);
+		color: var(--link);
 	}
 </style>

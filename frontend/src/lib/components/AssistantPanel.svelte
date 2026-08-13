@@ -583,7 +583,7 @@
 	}
 	.assistant-error {
 		margin: 0;
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	.assistant-proposal.partial {
 		border-color: var(--warning);
