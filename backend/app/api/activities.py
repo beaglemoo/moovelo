@@ -254,10 +254,10 @@ async def delete_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> N
     # is gone. Re-derive it from what remains. The clear+rematch runs on the
     # match-queue worker (clear_first), NOT on this request session: doing it
     # here on a second session deadlocked against the worker's own matching
-    # and left phantom over-credits. A re-derive always schedules (it displaces
-    # a queued match job if the tracker is full - that ride stays unmatched and
-    # a backfill recovers it), so a delete under a full queue cannot leave a
-    # permanent over-count; it does not raise QueueFullError.
+    # and left phantom over-credits. A re-derive is never put in the bounded
+    # tracker (submit() skips _remember for clear_first), so it cannot be
+    # evicted or refused - a delete under a full queue always schedules it and
+    # never raises QueueFullError.
     match_queue.submit(user.id, clear_first=True)
 
 
