@@ -75,8 +75,9 @@
 			.then((me) => (user = me))
 			.catch((err) => {
 				if (err instanceof ApiError && err.status === 401 && path !== '/login') {
-					// The session is gone; bounce to login. The planner's guard
-					// skips /login, so this forced navigation is not blocked.
+					// The session is gone; bounce to login. Mark the teardown so
+					// the planner's guard does not block this forced navigation.
+					unsaved.leaving = true;
 					void goto('/login');
 				}
 			});
@@ -84,15 +85,16 @@
 
 	async function logout() {
 		// Confirm before destroying the session - a log-out with unsaved edits
-		// still warrants a warning. The planner's beforeNavigate guard skips
-		// /login, so the goto below fires no second prompt; dismissing this one
-		// returns early with the session and edits intact.
+		// still warrants a warning. Dismissing returns early with the session
+		// and edits intact. On confirm, mark the teardown so the planner's guard
+		// does not fire a second prompt on the goto below.
 		if (
 			unsaved.dirty &&
 			!confirm('You have unsaved changes to the route you are planning.\n\nLog out and lose them?')
 		) {
 			return;
 		}
+		unsaved.leaving = true;
 		await auth.logout();
 		user = null;
 		await goto('/login');
