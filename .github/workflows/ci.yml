@@ -83,3 +83,36 @@ jobs:
       - run: npm run check
       - run: npm run lint
       - run: npm run build
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: shellcheck scripts/*.sh
+      # The refresh script's --dry-run is its test surface (a real run wipes a
+      # volume and rebuilds routing tiles for ~30 min). Assert it emits the
+      # destructive steps in the one safe order: stop -> remove container ->
+      # wipe volume -> up -> wait healthy -> reindex -> smoke.
+      - name: refresh-data --dry-run ordering
+        shell: bash
+        run: |
+          out=$(bash scripts/refresh-data.sh --dry-run --profile prod)
+          echo "$out"
+          ln() { printf '%s\n' "$out" | grep -nF "$1" | head -1 | cut -d: -f1; }
+          stop=$(ln 'stop valhalla')
+          remove=$(ln 'rm -f valhalla')
+          vol=$(ln 'docker volume rm')
+          up=$(ln 'up -d')
+          health=$(ln 'health == healthy')
+          idx=$(ln 'run --rm indexer')
+          smoke=$(ln 'exec -T valhalla curl')
+          for step in stop remove vol up health idx smoke; do
+            [ -n "${!step}" ] || { echo "missing step: $step"; exit 1; }
+          done
+          [ "$stop" -lt "$remove" ] && [ "$remove" -lt "$vol" ] \
+            && [ "$vol" -lt "$up" ] && [ "$up" -lt "$health" ] \
+            && [ "$health" -lt "$idx" ] && [ "$idx" -lt "$smoke" ] \
+            || { echo "refresh steps out of order"; exit 1; }
+          echo "refresh-data ordering OK"
