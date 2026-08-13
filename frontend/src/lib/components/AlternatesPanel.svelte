@@ -151,7 +151,7 @@
 		cursor: pointer;
 	}
 	.candidates button:hover {
-		border-color: var(--accent);
+		border-color: var(--link);
 		color: var(--link);
 	}
 </style>

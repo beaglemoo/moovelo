@@ -216,7 +216,7 @@
 	}
 	.hover-label {
 		font-weight: 600;
-		fill: var(--accent);
+		fill: var(--link);
 	}
 	.legend {
 		display: flex;

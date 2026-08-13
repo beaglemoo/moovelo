@@ -591,7 +591,7 @@
 		gap: 1rem;
 	}
 	.wahoo-connect {
-		border: 1px solid var(--accent);
+		border: 1px solid var(--link);
 		color: var(--link);
 		border-radius: 8px;
 		padding: 0.4rem 0.8rem;

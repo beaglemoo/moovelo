@@ -474,7 +474,12 @@
 	}
 	.models li button.picked,
 	.providers li button.picked {
-		background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+		/* Mark the selection with an inset accent bar rather than an accent-tinted
+		   fill: a light-enough tint to be visible in dark dropped the row's own
+		   muted price text below WCAG AA, so keep the darker sunken fill (text
+		   stays readable) and let the bar carry the selected state. */
+		background: var(--surface-sunken);
+		box-shadow: inset 3px 0 0 var(--accent);
 		font-weight: 600;
 	}
 	.id {
