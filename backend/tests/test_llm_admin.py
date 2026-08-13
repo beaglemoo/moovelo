@@ -108,6 +108,39 @@ async def test_missing_table_falls_back_to_env(db: AsyncSession, env_llm: None) 
     assert (await db.execute(text("SELECT 1"))).scalar_one() == 1
 
 
+async def test_admin_get_degrades_when_llm_settings_is_missing(
+    client: AsyncClient, db: AsyncSession, no_env_llm: None
+) -> None:
+    """GET /api/admin/llm queried LLMSettings directly and 500'd on a missing
+    table - the endpoint the first fix's message claimed to cover. It must
+    degrade to env-only like every other reader."""
+    from sqlalchemy import text
+
+    await register(client)  # first user is the admin
+    await db.execute(text("DROP TABLE llm_settings"))
+    await db.commit()
+
+    response = await client.get("/api/admin/llm")
+    assert response.status_code == 200, response.text
+    assert response.json()["enabled"] is False  # no env, no table -> disabled
+
+
+async def test_admin_patch_reports_a_missing_table_clearly(
+    client: AsyncClient, db: AsyncSession, no_env_llm: None
+) -> None:
+    """A PATCH cannot persist to a missing table, so it returns a clear 503
+    naming the cause rather than a bare 500."""
+    from sqlalchemy import text
+
+    await register(client)
+    await db.execute(text("DROP TABLE llm_settings"))
+    await db.commit()
+
+    response = await client.patch("/api/admin/llm", json={"model": "foo/bar"})
+    assert response.status_code == 503, response.text
+    assert "llm_settings" in response.json()["detail"]
+
+
 # --- the key must never come back -----------------------------------------
 
 

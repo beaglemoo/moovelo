@@ -222,3 +222,28 @@ async def test_stale_signature_suppresses_the_summary(
     await client.post("/api/auth/logout")
     stale = await client.get(f"/api/shared/{token}")
     assert stale.json()["summary"] is None
+
+
+async def test_share_still_works_when_llm_settings_is_missing(
+    client: AsyncClient, db: AsyncSession, snapshot: RouteResponse, no_env_llm: None
+) -> None:
+    """An install downgraded past migration 0011 has no llm_settings table.
+    share_route assigns route.share_token, then asks resolve_llm_config for a
+    summary - which used to roll the whole transaction back on the missing
+    table, discarding the token and 500ing via MissingGreenlet. The savepoint
+    leaves the caller's work intact, so sharing degrades (no summary) rather
+    than failing."""
+    from sqlalchemy import text
+
+    await register(client)
+    created = (await client.post("/api/routes", json=save_body(snapshot))).json()
+    await db.execute(text("DROP TABLE llm_settings"))
+    await db.commit()
+
+    shared = await client.post(f"/api/routes/{created['id']}/share")
+    assert shared.status_code == 200, shared.text
+    token = shared.json()["share_token"]
+    assert token
+    # The token really persisted - the summary's failed lookup did not take
+    # the share write down with it - and the public read serves it.
+    assert (await client.get(f"/api/shared/{token}")).status_code == 200

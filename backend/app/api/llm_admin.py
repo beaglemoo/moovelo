@@ -15,7 +15,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from app.api.admin import AdminDep
 from app.api.deps import DbDep
@@ -126,9 +126,13 @@ def _to_response(
 
 @router.get("")
 async def get_llm_settings(db: DbDep, _admin: AdminDep) -> LLMSettingsResponse:
-    from app.services.llm_config import config_from_env
+    from app.services.llm_config import config_from_env, select_llm_settings
 
-    row = (await db.execute(select(LLMSettings))).scalar_one_or_none()
+    # Through select_llm_settings, not a raw query: on an install downgraded
+    # past 0011 the table is gone, and this admin page must degrade to env-only
+    # like every other reader rather than 500 (the exact endpoint the first fix
+    # claimed to cover but missed, because it queried LLMSettings directly).
+    row = await select_llm_settings(db)
     return _to_response(row, await resolve_llm_config(db), config_from_env())
 
 
@@ -136,7 +140,7 @@ async def get_llm_settings(db: DbDep, _admin: AdminDep) -> LLMSettingsResponse:
 async def update_llm_settings(
     body: LLMSettingsPatch, db: DbDep, _admin: AdminDep
 ) -> LLMSettingsResponse:
-    from app.services.llm_config import config_from_env
+    from app.services.llm_config import config_from_env, select_llm_settings
 
     changes = body.model_dump(exclude_unset=True)
     sort = changes.get("provider_sort")
@@ -152,25 +156,39 @@ async def update_llm_settings(
         if isinstance(value, str) and not value.strip():
             changes[key] = None
 
-    row = (await db.execute(select(LLMSettings))).scalar_one_or_none()
-    if row is None:
-        row = LLMSettings(id=True, **changes)
-        db.add(row)
-        try:
-            await db.commit()
-        except IntegrityError:
-            # Two concurrent first PATCHes both see no row and both insert
-            # the same singleton primary key. Recover rather than 500ing:
-            # re-select and apply this request's changes on top.
-            await db.rollback()
-            row = (await db.execute(select(LLMSettings))).scalar_one()
+    try:
+        row = await select_llm_settings(db)
+        if row is None:
+            row = LLMSettings(id=True, **changes)
+            db.add(row)
+            try:
+                await db.commit()
+            except IntegrityError:
+                # Two concurrent first PATCHes both see no row and both insert
+                # the same singleton primary key. Recover rather than 500ing:
+                # re-select and apply this request's changes on top.
+                await db.rollback()
+                row = (await db.execute(select(LLMSettings))).scalar_one()
+                for field_name, value in changes.items():
+                    setattr(row, field_name, value)
+                await db.commit()
+        else:
             for field_name, value in changes.items():
                 setattr(row, field_name, value)
             await db.commit()
-    else:
-        for field_name, value in changes.items():
-            setattr(row, field_name, value)
-        await db.commit()
+    except ProgrammingError as exc:
+        # The table is gone (downgraded past 0011): a write cannot land, so say
+        # so clearly instead of 500ing. Unlike a read, a PATCH has nowhere to
+        # degrade to - the operator has to restore the migration or use env.
+        await db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The llm_settings table is missing (this install was downgraded "
+                "past migration 0011). Restore the migration, or configure the "
+                "assistant with the LLM_* environment variables instead."
+            ),
+        ) from exc
     await db.refresh(row)
     return _to_response(row, await resolve_llm_config(db), config_from_env())
 
