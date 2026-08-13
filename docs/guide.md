@@ -114,6 +114,17 @@ those avoids, so re-add any that still matter.
 
 Once a route exists, a panel appears below the map.
 
+**Units.** The **km / mi** button in the top bar switches every distance,
+elevation and speed the app displays between metric and imperial - the
+stats bar, the elevation profile axes, place and POI distances, climbs,
+alternates, and share pages all follow it. The choice is remembered in
+your browser (it is a display setting, not part of your account, so it is
+not shared with anyone you send a route to). Route files you export and
+push to your Wahoo are unaffected - those carry their own data. One known
+gap: the route assistant still talks in kilometres in its chat and
+proposals, because it reasons over metric figures; the toggle only changes
+what the app itself renders.
+
 **Stats.** Distance, ride time, and ascent/descent. The ride time shown
 here is your *personal* estimate, not Valhalla's flat routing duration -
 see [Ride time](#ride-time) below.
