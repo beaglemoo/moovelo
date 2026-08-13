@@ -1625,6 +1625,20 @@ about extract coverage when no roads are found near a waypoint.
   infrastructure.
 - **Static SPA served by the backend** in prod: single container, single
   port, no SSR complexity - the app is a map tool, not a content site.
+- **PWA cache is version-keyed and network-first for navigations**: the
+  service worker (`frontend/src/service-worker.ts`) precaches the build's
+  hashed assets into `moovelo-cache-${version}` and deletes every other
+  cache on activate, so a new deploy can never be masked by a stale one -
+  the whole failure mode a service worker most often introduces. Two
+  blanket rules keep dynamic data out of the cache without any per-URL
+  special-casing: `/api/*` is never cached (the app must always see live
+  data), and cross-origin requests are never cached (this alone excludes
+  map tiles on every install shape). Navigations are network-first with a
+  cache fallback, so a live network always wins and an offline load still
+  gets the last good shell. The service worker and manifest are
+  production-build artifacts and do not exist under `vite dev`, so their
+  Playwright suite (`e2e-pwa/`, run with `npm run e2e:pwa`) runs against a
+  real `vite preview` build, not the dev-server smoke suite.
 - **Compose profiles over separate files**: `dev` (hot reload, mounted
   source, Vite on 5173) and `prod` (single container on 17777) live in one
   docker-compose.yml.
