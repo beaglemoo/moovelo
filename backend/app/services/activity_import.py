@@ -427,7 +427,18 @@ class ArchiveImportQueue:
         # wait for no benefit - coverage can lag an import by however long
         # the queue takes to reach it.
         if created:
-            match_queue.submit(job.user_id, created)
+            try:
+                match_queue.submit(job.user_id, created)
+            except QueueFullError:
+                # The rides are imported; only their coverage matching is
+                # deferred. ways_matched_at is still null on each, so a later
+                # backfill picks them up - a full tracking table must not fail
+                # a completed archive import.
+                logger.warning(
+                    "match queue full; %d activities from archive %s left for backfill",
+                    len(created),
+                    job.id,
+                )
 
         job.status = "done"
 

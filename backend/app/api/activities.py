@@ -7,6 +7,7 @@ and is not worth the ambiguity yet.
 """
 
 import asyncio
+import logging
 import uuid
 from typing import Annotated
 
@@ -39,6 +40,7 @@ from app.services.polyline import encode_polyline6
 from app.services.way_matching import queue as match_queue
 
 router = APIRouter(prefix="/api/activities", tags=["activities"])
+logger = logging.getLogger(__name__)
 
 UPLOAD_CHUNK_BYTES = 64 * 1024
 
@@ -76,7 +78,13 @@ async def import_activity(
     # rider uploading one ride should not wait on them (or on Valhalla's own
     # 30s timeout, if it is unreachable). Coverage simply lags the import by
     # however long the queue takes to reach it.
-    match_queue.submit(user.id, [activity.id])
+    try:
+        match_queue.submit(user.id, [activity.id])
+    except QueueFullError:
+        # The ride is imported; only its coverage matching is deferred. Its
+        # ways_matched_at is still null, so a later backfill picks it up -
+        # refusing under a submission burst must not fail the import itself.
+        logger.warning("match queue full; activity %s left for backfill", activity.id)
     return await _detail(activity, db)
 
 
