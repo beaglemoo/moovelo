@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { cueCount, type ImportResult } from '$lib/import.svelte';
 	import type { ActivityDetail, SavedRoute } from '$lib/api';
-	import { km } from '$lib/format';
+	import { distance, elevation } from '$lib/format';
+	import { units } from '$lib/units.svelte';
 
 	/** Structural rather than the class itself, so this renders for either
 	 * queue without importing both and without a union of two generics. */
@@ -42,8 +43,8 @@
 					{:else if result.item}
 						{@const route = asRoute(result.item)}
 						<span class="detail">
-							{km(result.item.distance_m)} ·
-							{Math.round(result.item.ascent_m)} m ascent
+							{distance(result.item.distance_m, units.system)} ·
+							{elevation(result.item.ascent_m, units.system)} ascent
 							{#if route}
 								{@const cues = cueCount(route)}
 								·

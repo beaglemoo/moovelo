@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { shared, fetchConfig, type SharedRoute } from '$lib/api';
+	import { distance, elevation } from '$lib/format';
+	import { units } from '$lib/units.svelte';
 	import { decodePolyline6 } from '$lib/polyline';
 	import { cumulativeDistances, pointAtDistance } from '$lib/geo';
 	import MapView from '$lib/map/MapView.svelte';
@@ -51,10 +53,6 @@
 	function onHover(distM: number | null) {
 		hoverPoint = distM === null ? null : pointAtDistance(routeLine, routeDists, distM);
 	}
-
-	function km(m: number): string {
-		return `${(m / 1000).toFixed(1)} km`;
-	}
 </script>
 
 <svelte:head>
@@ -67,7 +65,10 @@
 		{#if route}
 			<span class="name">{route.name}</span>
 			<span class="stats">
-				{km(route.distance_m)} &middot; {Math.round(route.ascent_m)} m up &middot; {route.preset}
+				{distance(route.distance_m, units.system)} &middot; {elevation(
+					route.ascent_m,
+					units.system
+				)} up &middot; {route.preset}
 			</span>
 			<span class="spacer"></span>
 			<a class="download" href={shared.gpxUrl(token)}>Download GPX</a>

@@ -5,6 +5,8 @@
 		type CustomPreset,
 		type Preset
 	} from '$lib/api';
+	import { speed } from '$lib/format';
+	import { units } from '$lib/units.svelte';
 	import { untrack } from 'svelte';
 
 	interface Props {
@@ -155,7 +157,7 @@
 			</select>
 		</label>
 		<label>
-			Cycling speed: {cyclingSpeed} km/h
+			Cycling speed: {speed(cyclingSpeed, units.system)}
 			<input
 				type="range"
 				min="10"

@@ -1,7 +1,8 @@
 <script lang="ts">
 	import type { Climb } from '$lib/api';
 	import { categoryColour, categoryLabel } from '$lib/climbs';
-	import { km } from '$lib/format';
+	import { distance, elevation, shortLength } from '$lib/format';
+	import { units } from '$lib/units.svelte';
 
 	interface Props {
 		climbs: Climb[];
@@ -10,10 +11,6 @@
 	}
 
 	let { climbs, hoveredIndex, onHover }: Props = $props();
-
-	function at(metres: number): string {
-		return metres < 1000 ? `${Math.round(metres)} m` : `${(metres / 1000).toFixed(1)} km`;
-	}
 </script>
 
 <div class="climbs">
@@ -35,13 +32,16 @@
 						<span
 							class="badge"
 							style="background: {categoryColour(climb.category)}"
-							title="{km(climb.length_m)} at {climb.avg_grade_pct.toFixed(1)}%"
+							title="{distance(climb.length_m, units.system)} at {climb.avg_grade_pct.toFixed(1)}%"
 						>
 							{categoryLabel(climb.category)}
 						</span>
-						<span class="at">{at(climb.start_dist_m)}</span>
+						<span class="at">{shortLength(climb.start_dist_m, units.system)}</span>
 						<span class="what">
-							{km(climb.length_m)} at {climb.avg_grade_pct.toFixed(1)}%, {Math.round(climb.gain_m)} m
+							{distance(climb.length_m, units.system)} at {climb.avg_grade_pct.toFixed(1)}%, {elevation(
+								climb.gain_m,
+								units.system
+							)}
 						</span>
 					</button>
 				</li>

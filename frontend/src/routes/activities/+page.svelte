@@ -3,7 +3,8 @@
 	import { Latest } from '$lib/latest';
 	import CoverageCard from '$lib/components/CoverageCard.svelte';
 	import ImportResults from '$lib/components/ImportResults.svelte';
-	import { km } from '$lib/format';
+	import { distance, elevation } from '$lib/format';
+	import { units } from '$lib/units.svelte';
 	import {
 		ACCEPTED_FILES,
 		activityImportQueue,
@@ -238,7 +239,10 @@
 				{/each}
 			</select>
 			<span class="totals">
-				{totals.count} rides · {km(totals.distance_m)} · {Math.round(totals.ascent_m)} m
+				{totals.count} rides · {distance(totals.distance_m, units.system)} · {elevation(
+					totals.ascent_m,
+					units.system
+				)}
 			</span>
 		</div>
 
@@ -258,9 +262,9 @@
 					<tr>
 						<td data-label="Date">{rideDate(item)}</td>
 						<td data-label="Name">{item.name}</td>
-						<td data-label="Distance">{km(item.distance_m)}</td>
+						<td data-label="Distance">{distance(item.distance_m, units.system)}</td>
 						<td data-label="Moving">{duration(item.moving_time_s)}</td>
-						<td data-label="Ascent">{Math.round(item.ascent_m)} m</td>
+						<td data-label="Ascent">{elevation(item.ascent_m, units.system)}</td>
 						<td class="actions">
 							<button type="button" onclick={() => remove(item)}>Delete</button>
 						</td>

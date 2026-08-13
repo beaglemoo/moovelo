@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { PoiResult } from '$lib/api';
+	import { distance, shortLength } from '$lib/format';
 	import { categoryColour, categoryLabel, POI_GROUPS } from '$lib/pois';
+	import { units } from '$lib/units.svelte';
 
 	interface Props {
 		pois: PoiResult[];
@@ -15,14 +17,6 @@
 	}
 
 	let { pois, truncated, loading, selected, hoveredId, onToggleGroup, onHover }: Props = $props();
-
-	function km(metres: number): string {
-		return `${(metres / 1000).toFixed(1)} km`;
-	}
-
-	function off(metres: number): string {
-		return metres < 1000 ? `${Math.round(metres)} m off` : `${(metres / 1000).toFixed(1)} km off`;
-	}
 </script>
 
 <div class="pois">
@@ -65,7 +59,7 @@
 							onblur={() => onHover(null)}
 						>
 							<span class="dot" style="background: {categoryColour(poi.category)}"></span>
-							<span class="at">{km(poi.dist_along_m)}</span>
+							<span class="at">{distance(poi.dist_along_m, units.system)}</span>
 							<!-- OSM strings are untrusted input: text only, never markup. -->
 							<span class="what">{poi.name ?? categoryLabel(poi.category)}</span>
 							<span class="meta">
@@ -74,7 +68,7 @@
 									<span class="hours" title={poi.tags.opening_hours}>{poi.tags.opening_hours}</span>
 								{/if}
 							</span>
-							<span class="off">{off(poi.dist_from_route_m)}</span>
+							<span class="off">{shortLength(poi.dist_from_route_m, units.system)} off</span>
 						</button>
 					</li>
 				{/each}
