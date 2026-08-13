@@ -49,6 +49,11 @@ class ImportQueue<T> {
 	#nextId = 1;
 	#running = 0;
 	#tail: Promise<void> = Promise.resolve();
+	// Bumped by reset(). A batch pins the epoch it started under and stops
+	// touching the queue once it moves on, so a previous session's in-flight
+	// upload cannot mutate the next account's queue when it finally settles -
+	// the same guard ArchiveImport gets from its #owner token.
+	#epoch = 0;
 	#upload: (file: File, preset: Preset) => Promise<T>;
 
 	constructor(upload: (file: File, preset: Preset) => Promise<T>) {
@@ -63,18 +68,29 @@ class ImportQueue<T> {
 		this.results = [];
 	}
 
-	/** Everything clear() drops, plus the batch signals - the whole queue back
-	 * to construction state, for a logout that must not carry results (or a
-	 * stuck busy) into the next account. */
+	/** Everything clear() drops, plus the batch signals and bookkeeping - the
+	 * whole queue back to construction state, for a logout that must not carry
+	 * results (or a stuck busy) into the next account. Bumping the epoch first
+	 * makes any still-in-flight batch from the previous session inert, so
+	 * zeroing #running here cannot be undone by a straggler's finally later. */
 	reset() {
+		this.#epoch += 1;
 		this.results = [];
 		this.busy = false;
 		this.completedBatches = 0;
+		this.#running = 0;
+		this.#tail = Promise.resolve();
 	}
 
 	async add(files: Iterable<File>, preset: Preset = 'road'): Promise<void> {
 		const incoming = [...files];
 		if (incoming.length === 0) return;
+
+		// The session this batch belongs to. A logout (reset()) bumps the epoch;
+		// once it has, this batch stops writing to the queue - see the guards
+		// below - so a logged-out user's straggler neither strands the next
+		// account's Import button nor leaks its result row.
+		const epoch = this.#epoch;
 
 		const queued: ImportResult<T>[] = incoming.map((file) => ({
 			id: this.#nextId++,
@@ -91,12 +107,17 @@ class ImportQueue<T> {
 		// finish would clear `busy` while the other was still uploading.
 		const run = this.#tail.then(async () => {
 			for (const [offset, file] of incoming.entries()) {
+				// Superseded by a logout mid-batch: stop, leaving nothing on the
+				// next account's queue.
+				if (this.#epoch !== epoch) return;
 				const { id } = queued[offset];
 				this.#patch(id, { status: 'importing' });
 				try {
 					const item = await this.#upload(file, preset);
+					if (this.#epoch !== epoch) return;
 					this.#patch(id, { status: 'done', item });
 				} catch (err) {
+					if (this.#epoch !== epoch) return;
 					this.#patch(id, {
 						status: 'failed',
 						error: err instanceof Error ? err.message : 'Import failed'
@@ -109,10 +130,14 @@ class ImportQueue<T> {
 		try {
 			await run;
 		} finally {
-			this.#running -= 1;
-			if (this.#running === 0) {
-				this.busy = false;
-				this.completedBatches += 1;
+			// A stale batch's finally must not touch the counter reset() already
+			// zeroed, or busy would be stranded for the next account.
+			if (this.#epoch === epoch) {
+				this.#running -= 1;
+				if (this.#running === 0) {
+					this.busy = false;
+					this.completedBatches += 1;
+				}
 			}
 		}
 	}
