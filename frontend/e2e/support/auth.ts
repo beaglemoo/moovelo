@@ -58,3 +58,22 @@ export async function registerOrSkip(page: Page, prefix: string, password: strin
 	const registered = await page.request.post('/api/auth/register', { data: { email, password } });
 	expect(registered.ok()).toBeTruthy();
 }
+
+/** Wait until a window-level drop will actually be heard.
+ *
+ * The layout's drop handler opens with `hasFiles`, which returns false until
+ * `auth.me()` has resolved and set `user` - a drop before that is swallowed
+ * with no trace, and no page-level readiness signal rules it out: page
+ * content renders unconditionally, so "the Import button is visible" or "the
+ * map canvas is visible" can all be true while `user` is still null. This
+ * lost drop was the archive-ownership flake (1 in 20 serial runs: the spec's
+ * drop landed before /api/auth/me came back, and `.archive` never appeared).
+ *
+ * The nav is rendered by the very condition the drop handler checks
+ * (`{#if user}` in +layout.svelte), so its Log out button appearing is the
+ * observable proof the handler will accept files - and since `user` is only
+ * ever set after hydration, it proves the window listener is attached too.
+ */
+export async function windowDropReady(page: Page): Promise<void> {
+	await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible();
+}

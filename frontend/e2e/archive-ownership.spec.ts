@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { registerOrSkip } from './support/auth';
+import { registerOrSkip, windowDropReady } from './support/auth';
 
 // Two archive imports started before the first has reported anything: whoever
 // started LAST must own the card, and the earlier one's late response must be
@@ -65,8 +65,10 @@ test('the Import button cannot start a second archive while one is uploading', a
 
 	await page.goto('/activities');
 	const importButton = page.getByRole('button', { name: /Import rides|Importing/ });
-	// The drop goes to a window listener, so it is silently lost if it lands
-	// before the page has hydrated.
+	// Not just hydration: the drop handler ignores files until the layout has
+	// resolved the session, and the button being visible proves neither -
+	// this spec's own 1-in-20 flake was a drop landing in that window.
+	await windowDropReady(page);
 	await expect(importButton).toBeVisible();
 
 	await dropZip(page, 'archive-a.zip');
@@ -108,7 +110,7 @@ test('a second dropped archive is not clobbered by the first, slower one', async
 	});
 
 	await page.goto('/activities');
-	await expect(page.getByRole('button', { name: /Import rides/ })).toBeVisible();
+	await windowDropReady(page);
 
 	await dropZip(page, 'archive-a.zip');
 	await expect(page.locator('.archive')).toContainText('archive-a.zip', { timeout: 10_000 });
@@ -118,9 +120,22 @@ test('a second dropped archive is not clobbered by the first, slower one', async
 	await expect(page.locator('.archive')).toContainText('archive-b.zip', { timeout: 10_000 });
 	await expect(page.locator('.archive.done')).toBeVisible({ timeout: 10_000 });
 
-	// Now release A's long-delayed response. It must be discarded.
+	// Now release A's long-delayed response. It must be discarded. Wait for
+	// the page to actually receive it, then let two frames render - if the
+	// ownership guard ever regresses, the stale job is applied by the
+	// response's own then-handler and painted by the next frame, so the card
+	// would read archive-a by now. A fixed 1s sleep proved the same thing,
+	// slower and only probabilistically.
+	const staleResponse = page.waitForResponse(
+		(response) =>
+			response.url().endsWith('/api/activities/import/archive') &&
+			response.request().method() === 'POST'
+	);
 	releaseA();
-	await page.waitForTimeout(1000);
+	await staleResponse;
+	await page.evaluate(
+		() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))
+	);
 
 	await expect(page.locator('.archive')).toContainText('archive-b.zip');
 	await expect(page.locator('.archive.done')).toBeVisible();
