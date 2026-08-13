@@ -1,4 +1,5 @@
 import type { BicycleCostingOptions, Preset, RouteResponse, RouteSource, Waypoint } from '$lib/api';
+import { onSessionReset } from '$lib/session';
 
 /** One point in planner history: everything a mutator changes as an input,
  * captured before the mutation lands. */
@@ -86,3 +87,8 @@ class PlannerHistory {
 }
 
 export const history = new PlannerHistory();
+
+// Logging out must not leave the next account's fresh planner able to undo
+// into the previous rider's route - the singleton outlives a client-side
+// logout the same way it outlives a page navigation.
+onSessionReset(() => history.clear());
