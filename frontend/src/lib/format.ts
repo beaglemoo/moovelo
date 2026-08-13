@@ -6,7 +6,7 @@
  */
 export type UnitSystem = 'metric' | 'imperial';
 
-export const KM_PER_MILE = 1.609344;
+const KM_PER_MILE = 1.609344;
 export const METRES_PER_FOOT = 0.3048;
 
 /** Long distances (route length): one decimal, km or mi. */
