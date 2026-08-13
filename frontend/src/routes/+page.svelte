@@ -1078,6 +1078,13 @@
 		// goes straight onto `route` rather than being replanned.
 		waypoints = proposal.waypoints;
 		preset = proposal.preset;
+		// The proposal carries a named preset and its geometry was routed under
+		// that preset, so any custom bundle the rider had dialled in earlier no
+		// longer describes this route - clear it, exactly as changePreset does.
+		// Left set, storedPreset would compute 'custom' and a save would persist
+		// preset='custom' plus the stale bundle against road-preset geometry,
+		// which a later reverse or recompute then mis-costs.
+		customCostingOptions = null;
 		claimRoute();
 		route = proposal.snapshot;
 		routeStale = false;
