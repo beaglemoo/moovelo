@@ -10,6 +10,7 @@ that never opens the admin page keeps working untouched.
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -53,9 +54,24 @@ def config_from_env() -> LLMConfig:
 
 
 async def resolve_llm_config(db: AsyncSession) -> LLMConfig:
-    """The effective configuration: the stored row over the environment."""
-    row = (await db.execute(select(LLMSettings))).scalar_one_or_none()
+    """The effective configuration: the stored row over the environment.
+
+    Falls back to env-only config if `llm_settings` is absent - the state of
+    an install downgraded past migration 0011. Without this the unhandled
+    UndefinedTableError is not just an /api/admin/llm 500: resolve_llm_config
+    is also called from the unauthenticated GET /api/config on every page
+    load, so the whole app 500s for every visitor, and 0011's promised
+    recovery (set the LLM_* env vars) never runs because the query throws
+    before the env fallback is reached.
+    """
     env = config_from_env()
+    try:
+        row = (await db.execute(select(LLMSettings))).scalar_one_or_none()
+    except ProgrammingError:
+        # The table is gone. The failed statement aborts this transaction, so
+        # roll it back before the caller reuses the session for anything else.
+        await db.rollback()
+        return env
     if row is None:
         return env
     # `or` is the right operator here rather than an `is not None` check:

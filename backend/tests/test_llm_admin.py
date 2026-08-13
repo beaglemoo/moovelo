@@ -90,6 +90,24 @@ async def test_disabled_when_neither_source_set(db: AsyncSession, no_env_llm: No
     assert (await resolve_llm_config(db)).enabled is False
 
 
+async def test_missing_table_falls_back_to_env(db: AsyncSession, env_llm: None) -> None:
+    """An install downgraded past migration 0011 has no llm_settings table.
+    resolve_llm_config must degrade to env-only config, not raise - the query
+    otherwise 500s the unauthenticated GET /api/config on every page load."""
+    from sqlalchemy import text
+
+    await db.execute(text("DROP TABLE llm_settings"))
+    await db.commit()
+
+    config = await resolve_llm_config(db)
+    assert config.base_url == "https://env.test/v1"
+    assert config.model == "env/model"
+    assert config.enabled is True
+
+    # The failed SELECT must have been rolled back, leaving the session usable.
+    assert (await db.execute(text("SELECT 1"))).scalar_one() == 1
+
+
 # --- the key must never come back -----------------------------------------
 
 
