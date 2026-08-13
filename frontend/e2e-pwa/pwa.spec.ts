@@ -48,6 +48,23 @@ test('the service worker registers and precaches under a versioned cache', async
 	}
 });
 
+test('serves the app shell offline after a single online load', async ({ page, context }) => {
+	// The reported first-session scenario: one (uncontrolled) online load, then
+	// offline before any second navigation. The shell must be precached at
+	// install or this reload white-screens.
+	await page.goto('/');
+	await page.evaluate(() => navigator.serviceWorker.ready);
+
+	await context.setOffline(true);
+	try {
+		const res = await page.reload();
+		expect(res?.ok(), 'offline reload should be served from cache').toBeTruthy();
+		await expect(page).toHaveTitle(/Moovelo/);
+	} finally {
+		await context.setOffline(false);
+	}
+});
+
 test('the cache never holds /api or cross-origin requests', async ({ page }) => {
 	await page.goto('/');
 	await page.evaluate(() => navigator.serviceWorker.ready);
