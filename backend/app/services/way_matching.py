@@ -217,7 +217,9 @@ class WayMatchQueue:
         session deadlocked against the worker and left phantom over-credits.
         It forces activity_ids to None (rebuild everything)."""
         job = MatchJob(id=uuid.uuid4(), user_id=user_id)
-        self._remember(job)
+        # A re-derive must always be tracked: unlike a match job, a dropped
+        # re-derive has no recovery (below).
+        self._remember(job, force=clear_first)
         self._queue.put_nowait(
             (job.id, user_id, None if clear_first else activity_ids, clear_first)
         )
@@ -227,12 +229,22 @@ class WayMatchQueue:
         job = self._jobs.get(job_id)
         return job if job is not None and job.user_id == user_id else None
 
-    def _remember(self, job: MatchJob) -> None:
+    def _remember(self, job: MatchJob, force: bool = False) -> None:
         while len(self._jobs) >= MAX_TRACKED_JOBS:
             finished = next(
                 (i for i, j in self._jobs.items() if j.status in ("done", "error")), None
             )
             if finished is None:
+                if force:
+                    # A re-derive (a delete's clear_first job) is correctness-
+                    # critical and must always schedule: dropping it strands a
+                    # deleted ride's coverage credit with no recovery, since the
+                    # backfill button only matches unmatched rides and cannot
+                    # remove a credit whose activity is gone. Displace the oldest
+                    # tracked job to make room - if it was a queued match, that
+                    # ride just stays unmatched and a backfill recovers it.
+                    del self._jobs[next(iter(self._jobs))]
+                    continue
                 # Mirror ArchiveImportQueue._remember: rather than fall through
                 # and insert anyway - which let _jobs grow past
                 # MAX_TRACKED_JOBS under a submission burst, since this queue's

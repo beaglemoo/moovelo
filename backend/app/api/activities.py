@@ -254,14 +254,11 @@ async def delete_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> N
     # is gone. Re-derive it from what remains. The clear+rematch runs on the
     # match-queue worker (clear_first), NOT on this request session: doing it
     # here on a second session deadlocked against the worker's own matching
-    # and left phantom over-credits.
-    try:
-        match_queue.submit(user.id, clear_first=True)
-    except QueueFullError:
-        # Coverage keeps the deleted ride's stale credit until a re-derive
-        # runs; a rider can force it with the backfill button. Better than a
-        # 500, and better than clearing without a rebuild scheduled.
-        logger.warning("coverage re-derive queue full after delete; user %s can backfill", user.id)
+    # and left phantom over-credits. A re-derive always schedules (it displaces
+    # a queued match job if the tracker is full - that ride stays unmatched and
+    # a backfill recovers it), so a delete under a full queue cannot leave a
+    # permanent over-count; it does not raise QueueFullError.
+    match_queue.submit(user.id, clear_first=True)
 
 
 async def _read_capped(file: UploadFile, limit: int) -> bytes:
