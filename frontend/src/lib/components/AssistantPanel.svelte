@@ -452,25 +452,28 @@
 		flex-direction: column;
 	}
 	/* Collapsed by default. There is no backdrop-filter or translucent card
-	   anywhere else in this codebase - every other card is opaque #fff - so
-	   this is a deliberate new pattern, not an extension of one, and it needs
-	   an opaque fallback for a browser that does not support the filter:
-	   unreadable text over a busy map is the failure mode otherwise. */
+	   anywhere else in this codebase - every other card is opaque var(--surface)
+	   - so this is a deliberate new pattern, not an extension of one, and it
+	   needs an opaque fallback for a browser that does not support the filter:
+	   unreadable text over a busy map is the failure mode otherwise.
+	   color-mix keeps the translucency theme-aware (--surface is already
+	   light/dark); a browser without color-mix falls back to the @supports
+	   block's plain var(--surface), same as the no-backdrop-filter case. */
 	.assistant-pill {
 		font: inherit;
 		font-size: 0.85rem;
 		padding: 0.5rem 1rem;
-		border: 1px solid #ddd;
+		border: 1px solid var(--border);
 		border-radius: 999px;
-		background: #fdf6e3e6;
+		background: color-mix(in srgb, var(--surface) 90%, transparent);
 		backdrop-filter: blur(8px);
-		box-shadow: 0 8px 30px #0003;
-		color: #073642;
+		box-shadow: 0 8px 30px var(--shadow);
+		color: var(--text);
 		cursor: pointer;
 	}
 	@supports not (backdrop-filter: blur(1px)) {
 		.assistant-pill {
-			background: #fdf6e3;
+			background: var(--surface);
 		}
 	}
 	.assistant:not(.collapsed) {
@@ -478,16 +481,16 @@
 		max-height: min(60%, 26rem);
 		gap: 0.4rem;
 		padding: 0.5rem 0.6rem 0.6rem;
-		border: 1px solid #ddd;
+		border: 1px solid var(--border);
 		border-radius: 8px;
-		background: #fdf6e3e6;
+		background: color-mix(in srgb, var(--surface) 90%, transparent);
 		backdrop-filter: blur(8px);
-		box-shadow: 0 8px 30px #0003;
+		box-shadow: 0 8px 30px var(--shadow);
 		overflow: hidden;
 	}
 	@supports not (backdrop-filter: blur(1px)) {
 		.assistant:not(.collapsed) {
-			background: #fdf6e3;
+			background: var(--surface);
 		}
 	}
 	/* No responsive breakpoint exists on any other map overlay in this
@@ -533,7 +536,7 @@
 		font-size: 0.8rem;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
-		color: #93a1a1;
+		color: var(--text-muted);
 		cursor: grab;
 		touch-action: none;
 		user-select: none;
@@ -547,7 +550,7 @@
 		padding: 0.1rem 0.2rem;
 		font-size: 0.9rem;
 		line-height: 1;
-		color: #93a1a1;
+		color: var(--text-muted);
 		cursor: pointer;
 	}
 	.assistant-log {
@@ -562,28 +565,29 @@
 	}
 	.assistant-hint {
 		margin: 0;
-		color: #93a1a1;
+		color: var(--text-muted);
 	}
 	.assistant-entry {
 		margin: 0;
 		white-space: pre-wrap;
-		color: #073642;
+		color: var(--text);
 	}
 	.assistant-entry.mine {
-		color: #586e75;
+		color: var(--text-muted);
 		font-weight: 600;
 	}
 	.assistant-status {
 		margin: 0;
-		color: #93a1a1;
+		color: var(--text-muted);
 		font-style: italic;
 	}
 	.assistant-error {
 		margin: 0;
-		color: #dc322f;
+		color: var(--danger);
 	}
 	.assistant-proposal.partial {
-		border-color: #b58900;
+		border-color: var(--warning);
+		/* Accent alpha-tint highlight fill - deliberately left literal. */
 		background: #b589001a;
 		flex-wrap: wrap;
 	}
@@ -591,7 +595,7 @@
 		margin: 0;
 		width: 100%;
 		font-size: 0.8rem;
-		color: #7a5c00;
+		color: var(--warning);
 	}
 	.assistant-proposal {
 		display: flex;
@@ -599,14 +603,15 @@
 		justify-content: space-between;
 		gap: 0.5rem;
 		padding: 0.4rem 0.5rem;
-		border: 1px solid #859900;
+		border: 1px solid var(--success);
 		border-radius: 6px;
+		/* Accent alpha-tint highlight fill - deliberately left literal. */
 		background: #8599001a;
 	}
 	.assistant-proposal-stats {
 		margin: 0;
 		font-size: 0.85rem;
-		color: #073642;
+		color: var(--text);
 	}
 	.assistant-proposal-buttons {
 		display: flex;
@@ -616,14 +621,15 @@
 		font: inherit;
 		font-size: 0.8rem;
 		padding: 0.25rem 0.6rem;
-		border: 1px solid #ccc;
+		border: 1px solid var(--input-border);
 		border-radius: 6px;
-		background: #fff;
+		background: var(--surface);
+		color: var(--text);
 		cursor: pointer;
 	}
 	.assistant-proposal-buttons .primary {
-		background: #859900;
-		border-color: #859900;
+		background: var(--success);
+		border-color: var(--success);
 		color: #fff;
 	}
 	.assistant-ask {
@@ -636,16 +642,19 @@
 		font: inherit;
 		font-size: 0.85rem;
 		padding: 0.35rem 0.5rem;
-		border: 1px solid #ccc;
+		border: 1px solid var(--input-border);
+		background: var(--input-bg);
+		color: var(--text);
 		border-radius: 6px;
 	}
 	.assistant-ask button {
 		font: inherit;
 		font-size: 0.85rem;
 		padding: 0.35rem 0.8rem;
-		border: 1px solid #ccc;
+		border: 1px solid var(--input-border);
 		border-radius: 6px;
-		background: #fff;
+		background: var(--surface);
+		color: var(--text);
 		cursor: pointer;
 	}
 	.assistant-ask button:disabled {

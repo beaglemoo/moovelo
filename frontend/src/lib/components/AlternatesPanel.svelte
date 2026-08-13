@@ -69,10 +69,10 @@
 		right: 10px;
 		z-index: 8;
 		width: min(280px, 85vw);
-		background: #fff;
-		border: 1px solid #ddd;
+		background: var(--surface);
+		border: 1px solid var(--border);
 		border-radius: 8px;
-		box-shadow: 0 8px 30px #0003;
+		box-shadow: 0 8px 30px var(--shadow);
 		padding: 0.7rem 0.8rem;
 		display: flex;
 		flex-direction: column;
@@ -87,26 +87,26 @@
 	.header h3 {
 		margin: 0;
 		font-size: 0.95rem;
-		color: #073642;
+		color: var(--text);
 	}
 	.close {
 		border: 0;
 		background: none;
 		font-size: 1.1rem;
 		line-height: 1;
-		color: #93a1a1;
+		color: var(--text-muted);
 		cursor: pointer;
 		padding: 0 4px;
 	}
 	.close:hover {
-		color: #dc322f;
+		color: var(--danger);
 	}
 	.note {
 		margin: 0;
-		color: #93a1a1;
+		color: var(--text-muted);
 	}
 	.note.error {
-		color: #dc322f;
+		color: var(--danger);
 	}
 	.candidates {
 		list-style: none;
@@ -124,24 +124,26 @@
 		border-radius: 5px;
 	}
 	.candidates li.hovered {
-		background: #eee8d5;
+		background: var(--surface-sunken);
 	}
 	.dot {
 		flex: none;
 		width: 9px;
 		height: 9px;
 		border-radius: 50%;
+		/* Matches MapView's alternates preview line colour - left fixed. */
 		background: #93a1a1;
 	}
 	.stats {
 		flex: 1;
 		min-width: 0;
-		color: #073642;
+		color: var(--text);
 	}
 	.candidates button {
 		flex: none;
-		border: 1px solid #ccc;
-		background: #fff;
+		border: 1px solid var(--input-border);
+		background: var(--surface);
+		color: var(--text);
 		border-radius: 5px;
 		padding: 0.25rem 0.55rem;
 		font: inherit;
@@ -149,7 +151,7 @@
 		cursor: pointer;
 	}
 	.candidates button:hover {
-		border-color: #268bd2;
-		color: #268bd2;
+		border-color: var(--accent);
+		color: var(--accent);
 	}
 </style>

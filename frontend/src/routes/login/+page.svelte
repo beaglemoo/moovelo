@@ -93,13 +93,13 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: #fdf6e3;
+		background: var(--bg);
 	}
 	.card {
-		background: #fff;
-		border: 1px solid #eee8d5;
+		background: var(--surface);
+		border: 1px solid var(--border);
 		border-radius: 12px;
-		box-shadow: 0 4px 16px #0001;
+		box-shadow: 0 4px 16px var(--shadow);
 		padding: 2rem;
 		width: min(340px, 90vw);
 		display: flex;
@@ -109,28 +109,32 @@
 	h1 {
 		margin: 0;
 		font-size: 1.3rem;
+		/* Route-brand magenta, same literal MapView uses for the route line -
+		   deliberately not tokenised, see step 3. */
 		color: #d33682;
 	}
 	h2 {
 		margin: 0;
 		font-size: 1.05rem;
 		font-weight: 600;
-		color: #073642;
+		color: var(--text);
 	}
 	.hint {
 		margin: 0;
 		font-size: 0.85rem;
-		color: #586e75;
+		color: var(--text-muted);
 	}
 	label {
 		display: flex;
 		flex-direction: column;
 		gap: 0.3rem;
 		font-size: 0.9rem;
-		color: #586e75;
+		color: var(--text-muted);
 	}
 	input {
-		border: 1px solid #ccc;
+		border: 1px solid var(--input-border);
+		background: var(--input-bg);
+		color: var(--text);
 		border-radius: 6px;
 		padding: 0.5rem 0.6rem;
 		font: inherit;
@@ -151,32 +155,33 @@
 	.link {
 		background: none;
 		border: none;
-		color: #268bd2;
+		color: var(--accent);
 		font: inherit;
 		font-size: 0.85rem;
 		cursor: pointer;
 	}
 	.error {
 		margin: 0;
-		color: #dc322f;
+		color: var(--danger);
 		font-size: 0.85rem;
 	}
 	.divider {
 		text-align: center;
-		color: #93a1a1;
+		color: var(--text-muted);
 		font-size: 0.8rem;
 	}
 	.sso {
 		display: block;
 		text-align: center;
-		border: 1px solid #268bd2;
-		color: #268bd2;
+		border: 1px solid var(--accent);
+		color: var(--accent);
 		border-radius: 8px;
 		padding: 0.5rem;
 		font-weight: 600;
 		text-decoration: none;
 	}
 	.sso:hover {
+		/* Accent alpha-tint highlight fill - deliberately left literal. */
 		background: #268bd212;
 	}
 </style>

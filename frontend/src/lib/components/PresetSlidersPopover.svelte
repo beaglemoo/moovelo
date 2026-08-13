@@ -276,10 +276,10 @@
 		left: 0;
 		z-index: 10;
 		width: min(300px, 85vw);
-		background: #fff;
-		border: 1px solid #ddd;
+		background: var(--surface);
+		border: 1px solid var(--border);
 		border-radius: 8px;
-		box-shadow: 0 8px 30px #0003;
+		box-shadow: 0 8px 30px var(--shadow);
 		padding: 0.8rem;
 		display: flex;
 		flex-direction: column;
@@ -295,7 +295,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.2rem;
-		color: #073642;
+		color: var(--text);
 	}
 	.sliders select,
 	.sliders input[type='range'] {
@@ -304,7 +304,7 @@
 	.presets-list h4 {
 		margin: 0 0 0.3rem;
 		font-size: 0.8rem;
-		color: #586e75;
+		color: var(--text-muted);
 	}
 	.presets-list ul {
 		list-style: none;
@@ -319,6 +319,8 @@
 		gap: 4px;
 	}
 	.presets-list li.active .name {
+		/* Route-brand magenta, same literal MapView uses for the route line -
+		   deliberately not tokenised, see step 3. */
 		color: #d33682;
 		font-weight: 600;
 	}
@@ -329,7 +331,7 @@
 		border: 0;
 		padding: 3px 4px;
 		font: inherit;
-		color: #073642;
+		color: var(--text);
 		cursor: pointer;
 	}
 	.presets-list .name:hover {
@@ -338,22 +340,22 @@
 	.presets-list .remove {
 		background: none;
 		border: 0;
-		color: #93a1a1;
+		color: var(--text-muted);
 		cursor: pointer;
 		font-size: 1rem;
 		line-height: 1;
 		padding: 2px 6px;
 	}
 	.presets-list .remove:hover {
-		color: #dc322f;
+		color: var(--danger);
 	}
 	.note {
 		margin: 0;
-		color: #93a1a1;
+		color: var(--text-muted);
 		font-size: 0.8rem;
 	}
 	.note.error {
-		color: #dc322f;
+		color: var(--danger);
 	}
 	.save-as {
 		display: flex;
@@ -364,12 +366,14 @@
 		font: inherit;
 		font-size: 0.8rem;
 		padding: 4px 6px;
-		border: 1px solid #ccc;
+		border: 1px solid var(--input-border);
 		border-radius: 4px;
+		background: var(--input-bg);
+		color: var(--text);
 	}
 	.save-as button {
-		border: 1px solid #268bd2;
-		background: #268bd2;
+		border: 1px solid var(--accent);
+		background: var(--accent);
 		color: #fff;
 		border-radius: 4px;
 		padding: 4px 8px;
@@ -383,8 +387,9 @@
 	}
 	.close {
 		align-self: flex-end;
-		border: 1px solid #ccc;
-		background: #fff;
+		border: 1px solid var(--input-border);
+		background: var(--surface);
+		color: var(--text);
 		border-radius: 4px;
 		padding: 3px 10px;
 		font: inherit;

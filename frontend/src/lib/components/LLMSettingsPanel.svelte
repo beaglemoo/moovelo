@@ -361,7 +361,7 @@
 	}
 	.intro,
 	.hint {
-		color: #586e75;
+		color: var(--text-muted);
 		font-size: 0.85rem;
 	}
 	.hint {
@@ -370,14 +370,14 @@
 	}
 	.status {
 		font-size: 0.9rem;
-		color: #93a1a1;
+		color: var(--text-muted);
 	}
 	.status.on {
-		color: #268bd2;
+		color: var(--accent);
 	}
 	.from-env {
 		display: block;
-		color: #93a1a1;
+		color: var(--text-muted);
 		font-size: 0.8rem;
 	}
 	.field {
@@ -389,7 +389,7 @@
 		font-weight: 600;
 		font-size: 0.85rem;
 		margin-bottom: 0.3rem;
-		color: #073642;
+		color: var(--text);
 	}
 	.row {
 		display: flex;
@@ -404,7 +404,9 @@
 		width: 100%;
 		box-sizing: border-box;
 		padding: 0.4rem 0.5rem;
-		border: 1px solid #ddd;
+		border: 1px solid var(--input-border);
+		background: var(--input-bg);
+		color: var(--text);
 		border-radius: 4px;
 		font-size: 0.9rem;
 		min-width: 0;
@@ -418,14 +420,15 @@
 	}
 	.unit {
 		font-size: 0.8rem;
-		color: #586e75;
+		color: var(--text-muted);
 		white-space: nowrap;
 	}
 	button {
 		padding: 0.4rem 0.7rem;
-		border: 1px solid #ccc;
+		border: 1px solid var(--input-border);
 		border-radius: 4px;
-		background: #fff;
+		background: var(--surface);
+		color: var(--text);
 		cursor: pointer;
 		font-size: 0.85rem;
 	}
@@ -434,8 +437,8 @@
 		cursor: default;
 	}
 	button.primary {
-		background: #268bd2;
-		border-color: #268bd2;
+		background: var(--accent);
+		border-color: var(--accent);
 		color: #fff;
 	}
 	.modes {
@@ -444,8 +447,8 @@
 		margin-bottom: 0.4rem;
 	}
 	.modes button.active {
-		background: #eee8d5;
-		border-color: #93a1a1;
+		background: var(--surface-sunken);
+		border-color: var(--text-muted);
 	}
 	.models,
 	.providers {
@@ -454,7 +457,7 @@
 		padding: 0;
 		max-height: 180px;
 		overflow-y: auto;
-		border: 1px solid #eee8d5;
+		border: 1px solid var(--border);
 		border-radius: 4px;
 	}
 	.models li button,
@@ -471,7 +474,7 @@
 	}
 	.models li button.picked,
 	.providers li button.picked {
-		background: #eee8d5;
+		background: var(--surface-sunken);
 		font-weight: 600;
 	}
 	.id {
@@ -481,7 +484,7 @@
 		text-overflow: ellipsis;
 	}
 	.cost {
-		color: #586e75;
+		color: var(--text-muted);
 		font-size: 0.78rem;
 		white-space: nowrap;
 	}
@@ -493,12 +496,12 @@
 	.probe {
 		margin-top: 0.8rem;
 		padding: 0.6rem 0.8rem;
-		border: 1px solid #268bd2;
+		border: 1px solid var(--accent);
 		border-radius: 6px;
 		font-size: 0.85rem;
 	}
 	.probe.bad {
-		border-color: #dc322f;
+		border-color: var(--danger);
 	}
 	.probe ul {
 		margin: 0.3rem 0;
@@ -506,10 +509,10 @@
 	}
 	.probe p {
 		margin: 0.3rem 0 0;
-		color: #586e75;
+		color: var(--text-muted);
 	}
 	.error {
-		color: #dc322f;
+		color: var(--danger);
 		font-size: 0.9rem;
 	}
 </style>

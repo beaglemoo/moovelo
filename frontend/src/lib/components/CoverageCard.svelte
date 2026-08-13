@@ -245,8 +245,8 @@
 
 <style>
 	.card {
-		background: #fdf6e3;
-		border: 1px solid #eee8d5;
+		background: var(--surface);
+		border: 1px solid var(--border);
 		border-radius: 6px;
 		padding: 0.7rem 0.9rem;
 		margin: 0.8rem 0;
@@ -256,7 +256,7 @@
 		margin-bottom: 0.6rem;
 	}
 	section.muted {
-		color: #657b83;
+		color: var(--text-muted);
 	}
 	section:last-of-type {
 		margin-bottom: 0.5rem;
@@ -265,7 +265,7 @@
 		margin: 0 0 0.3rem;
 		font-size: 0.75rem;
 		font-weight: 600;
-		color: #657b83;
+		color: var(--text-muted);
 		text-transform: uppercase;
 		letter-spacing: 0.03em;
 	}
@@ -280,14 +280,14 @@
 		gap: 1rem;
 	}
 	.label {
-		color: #073642;
+		color: var(--text);
 	}
 	.pct {
 		font-weight: 600;
-		color: #268bd2;
+		color: var(--accent);
 	}
 	.error {
-		color: #dc322f;
+		color: var(--danger);
 	}
 	button {
 		font-size: 0.85rem;

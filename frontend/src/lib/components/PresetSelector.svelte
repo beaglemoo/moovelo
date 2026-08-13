@@ -50,8 +50,8 @@
 		display: flex;
 		border-radius: 8px;
 		overflow: hidden;
-		border: 1px solid #ccc;
-		background: #fff;
+		border: 1px solid var(--input-border);
+		background: var(--surface);
 	}
 	button {
 		border: none;
@@ -59,11 +59,14 @@
 		padding: 0.45rem 0.9rem;
 		font: inherit;
 		cursor: pointer;
+		color: var(--text);
 	}
 	button + button {
-		border-left: 1px solid #ddd;
+		border-left: 1px solid var(--border);
 	}
 	button.active {
+		/* Route-brand magenta, same literal MapView uses for the route line -
+		   deliberately not tokenised, see step 3. */
 		background: #d33682;
 		color: #fff;
 	}

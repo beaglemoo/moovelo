@@ -88,7 +88,7 @@
 		height: 8px;
 		border-radius: 4px;
 		overflow: hidden;
-		background: #eee8d5;
+		background: var(--surface-sunken);
 	}
 	.segment {
 		height: 100%;
@@ -98,7 +98,7 @@
 		flex-wrap: wrap;
 		gap: 0.7rem;
 		font-size: 0.78rem;
-		color: #586e75;
+		color: var(--text-muted);
 	}
 	.entry {
 		display: flex;
@@ -112,6 +112,6 @@
 		flex: none;
 	}
 	.cycleway {
-		color: #93a1a1;
+		color: var(--text-muted);
 	}
 </style>
