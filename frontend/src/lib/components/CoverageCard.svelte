@@ -284,10 +284,10 @@
 	}
 	.pct {
 		font-weight: 600;
-		color: var(--accent);
+		color: var(--link);
 	}
 	.error {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	button {
 		font-size: 0.85rem;

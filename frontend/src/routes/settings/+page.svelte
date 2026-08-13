@@ -165,7 +165,7 @@
 		font-size: 0.9rem;
 	}
 	.error {
-		color: var(--danger);
+		color: var(--danger-text);
 		font-size: 0.9rem;
 	}
 </style>

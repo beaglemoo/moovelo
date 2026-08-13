@@ -111,12 +111,12 @@
 		color: var(--text-muted);
 	}
 	.error {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	.warn {
 		color: var(--warning);
 	}
 	li.failed .file {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 </style>

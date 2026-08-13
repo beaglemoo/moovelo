@@ -155,14 +155,14 @@
 	.link {
 		background: none;
 		border: none;
-		color: var(--accent);
+		color: var(--link);
 		font: inherit;
 		font-size: 0.85rem;
 		cursor: pointer;
 	}
 	.error {
 		margin: 0;
-		color: var(--danger);
+		color: var(--danger-text);
 		font-size: 0.85rem;
 	}
 	.divider {
@@ -174,7 +174,7 @@
 		display: block;
 		text-align: center;
 		border: 1px solid var(--accent);
-		color: var(--accent);
+		color: var(--link);
 		border-radius: 8px;
 		padding: 0.5rem;
 		font-weight: 600;

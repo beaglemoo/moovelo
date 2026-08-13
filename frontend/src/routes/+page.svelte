@@ -1837,7 +1837,7 @@
 	.avoid-remove {
 		border: none;
 		background: transparent;
-		color: var(--danger);
+		color: var(--danger-text);
 		font-size: 0.95rem;
 		line-height: 1;
 		padding: 0.1rem 0.3rem;
@@ -1992,7 +1992,7 @@
 	}
 	.isochrone-error {
 		margin: 0;
-		color: var(--danger);
+		color: var(--danger-text);
 		font-size: 0.8rem;
 	}
 	.hint,
@@ -2076,7 +2076,7 @@
 	}
 	.ride-time-link {
 		font-size: 0.8rem;
-		color: var(--accent);
+		color: var(--link);
 		align-self: center;
 		margin-left: -0.7rem;
 	}

@@ -347,7 +347,7 @@
 		padding: 2px 6px;
 	}
 	.presets-list .remove:hover {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	.note {
 		margin: 0;
@@ -355,7 +355,7 @@
 		font-size: 0.8rem;
 	}
 	.note.error {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	.save-as {
 		display: flex;

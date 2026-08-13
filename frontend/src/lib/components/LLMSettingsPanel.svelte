@@ -373,7 +373,7 @@
 		color: var(--text-muted);
 	}
 	.status.on {
-		color: var(--accent);
+		color: var(--link);
 	}
 	.from-env {
 		display: block;
@@ -474,7 +474,7 @@
 	}
 	.models li button.picked,
 	.providers li button.picked {
-		background: var(--surface-sunken);
+		background: color-mix(in srgb, var(--accent) 22%, var(--surface));
 		font-weight: 600;
 	}
 	.id {
@@ -512,7 +512,7 @@
 		color: var(--text-muted);
 	}
 	.error {
-		color: var(--danger);
+		color: var(--danger-text);
 		font-size: 0.9rem;
 	}
 </style>

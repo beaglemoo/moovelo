@@ -99,14 +99,14 @@
 		padding: 0 4px;
 	}
 	.close:hover {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	.note {
 		margin: 0;
 		color: var(--text-muted);
 	}
 	.note.error {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 	.candidates {
 		list-style: none;
@@ -152,6 +152,6 @@
 	}
 	.candidates button:hover {
 		border-color: var(--accent);
-		color: var(--accent);
+		color: var(--link);
 	}
 </style>

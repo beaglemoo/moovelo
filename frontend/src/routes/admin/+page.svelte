@@ -181,10 +181,10 @@
 		padding: 0;
 		font: inherit;
 		font-size: 0.85rem;
-		color: var(--danger);
+		color: var(--danger-text);
 		cursor: pointer;
 	}
 	.error {
-		color: var(--danger);
+		color: var(--danger-text);
 	}
 </style>
