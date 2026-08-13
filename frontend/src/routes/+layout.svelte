@@ -11,6 +11,12 @@
 
 	let user: UserInfo | null = $state(null);
 	let dropping = $state(false);
+	// True while a log-out is tearing the session down. The confirm() has been
+	// answered by then but auth.logout() is still in flight, so without this an
+	// impatient re-click (likelier on a slow connection) re-enters logout() and
+	// fires a second, spurious confirm for the one intent. Also disables the
+	// button below.
+	let loggingOut = $state(false);
 
 	// Files get dragged at the window, not at a particular drop target, so the
 	// whole app accepts them once you are logged in.
@@ -88,6 +94,10 @@
 	});
 
 	async function logout() {
+		// A re-click while the previous log-out is still in flight is the same
+		// intent, not a new one: drop it rather than run the confirm and teardown
+		// a second time.
+		if (loggingOut) return;
 		// Confirm before destroying the session - a log-out with unsaved edits
 		// still warrants a warning. Dismissing returns early with the session
 		// and edits intact. On confirm, mark the teardown so the planner's guard
@@ -98,6 +108,7 @@
 		) {
 			return;
 		}
+		loggingOut = true;
 		// Tear the session down first, and only mark the teardown once it has
 		// actually happened. Setting unsaved.leaving before the awaited call let
 		// a failed logout (a network error) leave the flag stuck true - it is
@@ -108,6 +119,9 @@
 		try {
 			await auth.logout();
 		} catch {
+			// Failed teardown: session and guard intact, and the button must work
+			// again so the rider can retry.
+			loggingOut = false;
 			return;
 		}
 		user = null;
@@ -117,6 +131,9 @@
 		resetSession();
 		unsaved.leaving = true;
 		await goto('/login');
+		// The root layout never unmounts, so reset for the next account that logs
+		// in on this tab - otherwise its Log out button stays disabled.
+		loggingOut = false;
 	}
 	/** The browser's own "leave site?" prompt when the planner is holding
 	 * edits. Reloading or closing the tab discarded them silently, which is
@@ -148,7 +165,7 @@
 			{/if}
 			<span class="spacer"></span>
 			<span class="email">{user.email}</span>
-			<button type="button" onclick={logout}>Log out</button>
+			<button type="button" onclick={logout} disabled={loggingOut}>Log out</button>
 		</nav>
 	{/if}
 	<main>
