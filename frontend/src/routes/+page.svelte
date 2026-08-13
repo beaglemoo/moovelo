@@ -1271,10 +1271,18 @@
 		}
 	}
 
-	function changePreset(next: Preset) {
+	// The costing counterpart of planEdit(): a costing change re-routes the
+	// line between its endpoints exactly as a waypoint edit does, so it must
+	// go through the same mayEdit() confirmation - for an imported route that
+	// reroute discards the imported track and its cues. changePreset and
+	// changeCustomCosting were the two mutators that rerouted with no confirm,
+	// so this wrapper retires the family rather than adding the guard twice.
+	// It also dismisses the panels a costing change makes stale, which the
+	// waypoint-only planEdit does not.
+	function costingEdit(mutation: () => void) {
+		if (!mayEdit()) return;
 		history.push(currentSnapshot());
-		preset = next;
-		customCostingOptions = null;
+		mutation();
 		// Anything computed under the old costing is stale the moment the
 		// costing changes - leaving the panels open would let a road-costed
 		// alternate or loop be adopted while the toolbar says gravel.
@@ -1283,12 +1291,15 @@
 		reroute();
 	}
 
+	function changePreset(next: Preset) {
+		costingEdit(() => {
+			preset = next;
+			customCostingOptions = null;
+		});
+	}
+
 	function changeCustomCosting(next: BicycleCostingOptions) {
-		history.push(currentSnapshot());
-		customCostingOptions = next;
-		dismissAlternates();
-		dismissLoop();
-		reroute();
+		costingEdit(() => (customCostingOptions = next));
 	}
 
 	function handleElevationHover(distM: number | null) {
