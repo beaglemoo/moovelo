@@ -154,6 +154,13 @@ with turn-by-turn cues.
   or clear the match by hand. The route page lists every ride matched to
   it, each with the same comparison, so a saved route can answer "how does
   this usually go" from real rides rather than only Valhalla's estimate.
+- Ride-time calibration: once you have at least 5 matched rides, `/settings`
+  offers a flat-road speed fitted from them - "Your rides suggest 24.1 km/h
+  (from 17 rides). Apply?" It only ever suggests; applying it is the same
+  `PATCH /api/settings` as typing a number in by hand, and the suggestion is
+  hidden entirely below the 5-ride floor. The fit combines rides with the
+  median rather than the mean, so one outlier ride (a long cafe stop, a GPS
+  hiccup) cannot move it much.
 
 ## Route intelligence
 
@@ -267,7 +274,10 @@ Rider settings (weight, flat-road speed, optional FTP) are the first thing
 in this project configured in-app rather than by environment variable -
 per-user, at `/settings`. They feed the realistic ride-time estimate (see
 [Route intelligence](#route-intelligence)) shown throughout the planner and
-library.
+library. Once you have enough matched rides, `/settings` also offers a
+flat-road speed fitted from them - see "Ride-time calibration" under
+[Features](#features) above; it only ever suggests, and applying it is the
+same PATCH endpoint as typing a number in by hand.
 
 ## Routing presets
 
