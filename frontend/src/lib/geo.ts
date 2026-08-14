@@ -45,6 +45,26 @@ export function pointAtDistance(
 	];
 }
 
+/** Merge a route's per-leg decoded lines into one, dropping a leg's first
+ * point when it duplicates the previous leg's last point - the join `+page
+ * .svelte`'s own `routeLine` derivation uses, exported here so a page that
+ * only ever reads a route (never edits it) does not need to keep its own
+ * copy. */
+export function mergeLegLines(legs: [number, number][][]): [number, number][] {
+	const merged: [number, number][] = [];
+	for (const leg of legs) {
+		const start =
+			merged.length &&
+			leg.length &&
+			merged[merged.length - 1][0] === leg[0][0] &&
+			merged[merged.length - 1][1] === leg[0][1]
+				? 1
+				: 0;
+		merged.push(...leg.slice(start));
+	}
+	return merged;
+}
+
 /** Index of the vertex nearest to a point (planar approximation is fine here). */
 export function nearestVertexIndex(line: [number, number][], point: [number, number]): number {
 	let best = 0;
