@@ -72,6 +72,14 @@
 		const token = ++loadToken;
 		loading = true;
 		error = null;
+		// The picker belongs to whichever ride is on screen, so a new one takes
+		// it over. Without this a pick still in flight when the rider navigates
+		// never reaches its own reset - its token no longer matches - and the
+		// select stays disabled on this ride and every ride after it, for the
+		// life of the component. The token guard protects the data pickRoute
+		// writes; this is the flag it owns.
+		pickerBusy = false;
+		pickerError = null;
 		try {
 			const pair = await fetchPair(target);
 			if (token !== loadToken) return;
