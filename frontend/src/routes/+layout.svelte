@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { ApiError, auth, type UserInfo } from '$lib/api';
 	import { activityImportQueue, importQueue, pendingArchives } from '$lib/import.svelte';
+	import { panelSize } from '$lib/panel.svelte';
 	import { resetSession } from '$lib/session';
 	import { theme } from '$lib/theme.svelte';
 	import { units } from '$lib/units.svelte';
@@ -27,6 +28,7 @@
 	onMount(() => {
 		units.load();
 		theme.load();
+		panelSize.load();
 	});
 
 	function themeLabel(mode: 'system' | 'light' | 'dark'): string {

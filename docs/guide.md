@@ -114,6 +114,13 @@ those avoids, so re-add any that still matter.
 
 Once a route exists, a panel appears below the map.
 
+**Resizing and collapsing.** Drag the handle at the top edge of the panel
+up or down to give it more or less room - useful when you want more map to
+place waypoints on. Click the chevron on the handle (or press Enter with
+the handle focused) to collapse the panel down to just its stats line, and
+click again to bring the details back. Your chosen height is remembered in
+your browser.
+
 **Units.** The **km / mi** button in the top bar switches every distance,
 elevation and speed the app displays between metric and imperial - the
 stats bar, the elevation profile axes, place and POI distances, climbs,
