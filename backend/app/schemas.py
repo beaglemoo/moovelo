@@ -558,6 +558,39 @@ class HeatmapAvailability(BaseModel):
     available: bool
 
 
+class ActivityMonthStats(BaseModel):
+    """One calendar month's totals within a year - see ActivityYearStats."""
+
+    month: int
+    count: int
+    distance_m: float
+    moving_time_s: float
+    ascent_m: float
+
+
+class ActivityYearStats(BaseModel):
+    """One year's riding totals, as GET /api/activities/stats groups them.
+
+    `year` is None for the "undated" bucket - rides whose started_at is
+    NULL, which is a real and expected state (see Activity.started_at's own
+    comment) and not one this endpoint drops. Those rides have nothing to
+    group by month either, so `months` is always empty for that bucket.
+    """
+
+    year: int | None
+    count: int
+    distance_m: float
+    moving_time_s: float
+    ascent_m: float
+    months: list[ActivityMonthStats] = []
+
+
+class ActivityStatsResponse(BaseModel):
+    """Newest year first, the undated bucket (if any) last."""
+
+    years: list[ActivityYearStats]
+
+
 class NetworkCoverage(BaseModel):
     """Ridden vs total metres of one network tier (icn/ncn/rcn/lcn) within a
     bbox."""
