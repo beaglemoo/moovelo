@@ -212,6 +212,20 @@ class Activity(Base):
     ways_matched_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
+    # The saved route this ride followed - found automatically by
+    # services/route_match.py, or set by hand. SET NULL, not CASCADE:
+    # deleting the route must not delete the ride that happened, it just
+    # loses its link. index=True names it ix_activities_route_id, matching
+    # the migration.
+    route_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("routes.id", ondelete="SET NULL"), nullable=True, default=None, index=True
+    )
+    # The Frechet distance (services/route_match.py), in true ground metres,
+    # that produced an auto-match. Null for a manual link or no match.
+    match_confidence: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    # Set true the moment a rider picks or clears the matched route by hand,
+    # so a later auto-match run never overwrites a human decision.
+    match_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     __table_args__ = (
         # The library's own query: one user's rides, newest first.
