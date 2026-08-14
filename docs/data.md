@@ -15,11 +15,11 @@ https://download.geofabrik.de/europe/united-kingdom/england-latest.osm.pbf
 
 Useful alternatives:
 
-| Region | URL | Notes |
-|--------|-----|-------|
-| Whole UK | `https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf` | ~2 GB PBF |
+| Region                   | URL                                                                                         | Notes             |
+| ------------------------ | ------------------------------------------------------------------------------------------- | ----------------- |
+| Whole UK                 | `https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf`                        | ~2 GB PBF         |
 | Single county (fast dev) | `https://download.geofabrik.de/europe/united-kingdom/england/west-yorkshire-latest.osm.pbf` | builds in minutes |
-| Any Geofabrik region | browse https://download.geofabrik.de | |
+| Any Geofabrik region     | browse https://download.geofabrik.de                                                        |                   |
 
 Note: Geofabrik reorganized its UK tree - the old `europe/great-britain`
 paths now redirect to the Geofabrik homepage and will break the build with
@@ -85,11 +85,11 @@ the routing path, are unaffected. Nobody ever sees a half-loaded index.
 Measured on England (`england-latest.osm.pbf`, 1.6 GB), before all-roads
 coverage (places, POIs and cycle routes only):
 
-| Stage | Time | Peak memory |
-|-------|------|-------------|
-| `osmium tags-filter` | ~9 s | ~2.2 GB |
-| Parse and load | ~25 s | ~200 MB |
-| Publish | ~3 s | - |
+| Stage                | Time  | Peak memory |
+| -------------------- | ----- | ----------- |
+| `osmium tags-filter` | ~9 s  | ~2.2 GB     |
+| Parse and load       | ~25 s | ~200 MB     |
+| Publish              | ~3 s  | -           |
 
 That yields roughly 73,000 places, 285,000 POIs and 5,500 cycle routes,
 adding about 150 MB to the database. The filter pass is the high-water
@@ -112,12 +112,12 @@ With it on (every bikeable OSM way, not just signed cycle-route members -
 see [docs/architecture.md](architecture.md#all-roads-coverage) for what
 "bikeable" excludes), the same extract measures:
 
-| Stage | Time | Peak memory |
-|-------|------|-------------|
-| `osmium tags-filter` | ~13 s | ~2.2 GB (unchanged - dominated by the 1.6 GB input) |
-| Parse and load (extraction + concurrent COPY) | ~6 min 18 s | ~772 MiB |
-| Assemble (simplify geometry, measure length) + publish | ~1 min 22 s | Postgres-side |
-| **Total** | **~7 min 53 s** | |
+| Stage                                                  | Time            | Peak memory                                         |
+| ------------------------------------------------------ | --------------- | --------------------------------------------------- |
+| `osmium tags-filter`                                   | ~13 s           | ~2.2 GB (unchanged - dominated by the 1.6 GB input) |
+| Parse and load (extraction + concurrent COPY)          | ~6 min 18 s     | ~772 MiB                                            |
+| Assemble (simplify geometry, measure length) + publish | ~1 min 22 s     | Postgres-side                                       |
+| **Total**                                              | **~7 min 53 s** |                                                     |
 
 The filtered extract grows from 45 MB to 469 MB, and pass B now resolves
 6,477,862 road ways alongside the places/POIs/cycle routes above - two
@@ -166,6 +166,25 @@ indexed; it just does not pick up anything OSM has changed since, until a
 run with the flag set again refreshes it. "Never indexed" and "was
 indexed, then a later refresh forgot the flag" are deliberately distinct
 outcomes now - only the first one degrades to "needs a re-index".
+
+**Ride insights (migrations 0017 and 0018) need no re-index.** Everything
+they add - the link between a ride and the route it followed, the
+per-activity climbs, the riding totals - is derived from data the app
+already stores about your own rides, not from the OpenStreetMap index, and
+the indexer is untouched by them. Upgrading is an image pull: the backend
+runs `alembic upgrade head` on start (`backend/entrypoint.sh`), so 0017 and
+0018 apply themselves, including 0018's one-off backfill that detects
+climbs on activities imported before the column existed. That backfill is
+deliberately forgiving - an activity whose elevation is missing or
+unreadable gets an empty list rather than failing the migration - so a
+library full of odd old files cannot block the upgrade.
+
+The one thing worth knowing: matching runs at import, so rides imported
+_before_ this version are not retroactively linked to their routes by the
+upgrade itself. `POST /api/activities/{id}/rematch` links one on demand,
+and importing a route that an existing ride followed does not match it
+either - the pairing is evaluated when the ride arrives, not when the
+route does.
 
 ## Refreshing data (monthly)
 
@@ -271,11 +290,11 @@ script; the mechanics are the same, off unless you load it.
 
 ## Disk and memory expectations
 
-| Extract | PBF | Volume after build | Build RAM |
-|---------|-----|--------------------|-----------|
-| West Yorkshire | ~50 MB | ~1 GB | ~2 GB |
-| England | ~1.6 GB | ~5 GB | ~6 GB |
-| Whole UK | ~2 GB | ~7 GB | ~8 GB |
+| Extract        | PBF     | Volume after build | Build RAM |
+| -------------- | ------- | ------------------ | --------- |
+| West Yorkshire | ~50 MB  | ~1 GB              | ~2 GB     |
+| England        | ~1.6 GB | ~5 GB              | ~6 GB     |
+| Whole UK       | ~2 GB   | ~7 GB              | ~8 GB     |
 
 Build time ranges from a few minutes (fast desktop CPUs) to an hour or
 more (small VMs) for England.
