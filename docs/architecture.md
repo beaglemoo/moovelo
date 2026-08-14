@@ -583,37 +583,83 @@ query's index-narrow-then-exact-test pattern (see
    `models.py`'s comment on `Route.geom`) - a harmless divergence that this
    is the first query to actually depend on the index existing at all,
    rather than merely on it being named consistently; `&&` is served
-   regardless of what the index is called. Narrowing also applies a
+   regardless of what the index is called. Narrowing also applies a loose
    distance-ratio prefilter (the candidate route's `distance_m` within
    roughly half to double the activity's own), capped at 25 candidates so
    a pathological library cannot make this unbounded.
-2. **Confirmation**, exact, on survivors only: PostGIS's
-   `ST_FrechetDistance`, which measures how far apart two lines are
-   *shaped* rather than merely how close their endpoints land - nothing
-   else in the app used this function before now. It has no geography
-   form, so both lines are projected to EPSG:3857 and simplified
-   (`ST_Simplify`, 20 m tolerance) before the O(n×m) comparison runs.
+2. **Confirmation**, exact, on survivors only: **bidirectional coverage**,
+   not `ST_FrechetDistance` as originally planned - both lines are
+   projected to EPSG:3857, simplified, and the fraction of each one's
+   length that falls within a buffered corridor around the other is
+   computed both ways.
 
-Two corrections on the raw Frechet result, both required for the number to
-mean what it claims:
+**The plan changed after measuring `ST_FrechetDistance` against real dev
+Postgres, and the finding is worth keeping.** Frechet distance (and
+Hausdorff, which has the same shape) is a *maximum*-based metric - a
+single outlier sets the whole score. A ride that followed its route
+exactly except for one ~300 m detour (a shop stop, a wrong turn, a loop
+round a car park) measured a 300.6 m Frechet distance against it - over
+any sane threshold - despite over 85% of the ride genuinely being on the
+route. Shipping a maximum-based decider means ordinary rides with ordinary
+outliers silently fail to match, which is the feature failing at its one
+job. Coverage does not have this failure mode: a short detour drags the
+ratio down without being able to veto the rest of the ride on its own.
+Bidirectional matters on its own too - one direction alone would pass a
+ride that only covered half its route (ride-coverage near 100%, route
+half-covered) or an out-and-back over a one-way route (both directions
+near 100%, roughly double the real distance); requiring **both** fractions
+over the threshold, plus a tighter distance-ratio check at decision time
+(`MATCH_DISTANCE_RATIO_MIN/MAX`, 0.8-1.25, separate from the looser 0.5-2.0
+prefilter above), catches what a single coverage number cannot.
 
-- **Web Mercator's scale is not uniform.** It grows as `1 / cos(latitude)`,
-  so a "150 m" Frechet distance computed in EPSG:3857 is really about 93 m
-  on the ground at the UK's ~51.8°N (`1 / cos(51.8°) ≈ 1.62`). The query
-  multiplies by `cos(latitude)` of the activity's own centroid to convert
-  back to true ground metres. `tests/test_route_match.py`'s dedicated
-  Mercator test is built so it only passes with the correction in place -
-  a fixture whose true offset is under the match threshold but whose
-  *uncorrected* EPSG:3857 distance would read over it.
-- **Frechet distance is direction-sensitive** - it walks both lines start
-  to start, so a route ridden in reverse scores as though it were a
-  different shape. The match is computed against both the candidate route
-  and `ST_Reverse(route.geom)`, and the smaller of the two wins.
+Two provisional constants decide a match, neither yet tuned against real
+ride/route geometry - staging verification with genuine GPS traces is
+expected to move both:
 
-`MAX_MATCH_DISTANCE_M` (150 m) is a **provisional** threshold - a round
-number comfortably above GPS/routing noise and comfortably below "a
-different road", not yet tuned against real ride/route geometry. Staging
-verification against genuine GPS traces is expected to move it.
+- `COVERAGE_BUFFER_M` (40 m) - the corridor width either line is tested
+  against.
+- `MIN_COVERAGE` (0.80) - both directions have to clear this.
+
+**Web Mercator's scale is not uniform.** It grows as `1 / cos(latitude)`,
+so a "40 m" buffer built directly in EPSG:3857 units is really only about
+25 m on the ground at the UK's ~51.8°N (`1 / cos(51.8°) ≈ 1.62`). The
+query divides `COVERAGE_BUFFER_M` by `cos(latitude)` of the activity's own
+centroid before building the buffer, so it represents a genuine ground
+distance. This only has to apply to the buffer distance, not to the
+coverage ratio itself - numerator and denominator are both lengths in the
+same (if locally distorted) projected geometry, so the distortion cancels
+out of the ratio on its own. `tests/test_route_match.py`'s dedicated
+Mercator test is built so it only passes with the correction in place - a
+fixture whose true offset is under the buffer but whose *uncorrected*
+EPSG:3857 buffer would fail to reach it.
+
+**Coverage is direction-agnostic by construction**, so unlike the Frechet
+plan there is no `ST_Reverse` arm to maintain - a route ridden backwards
+buffers and intersects exactly the same as one ridden forwards. That whole
+bug family is retired rather than patched, which is why `ST_FrechetDistance`
+does not appear in the shipped query at all.
+
+**An unsimplified real trace can crash the database, not merely run
+slowly - this is the severe finding, and it applies regardless of which
+metric ended up deciding the match.** A 14,000-point activity (an ordinary
+four-hour ride recorded at 1Hz) run through `ST_FrechetDistance` against
+itself - a ~196M-cell comparison - killed the Postgres backend process
+outright ("server closed the connection unexpectedly / server terminated
+abnormally"). `ST_Simplify`'s tolerance alone is not a sufficient guard:
+it has no vertex-count bound, and a noisy real GPS trace does not
+simplify nearly as well as a smooth synthetic line does. `services/
+route_match.py` enforces a hard cap instead - `MAX_SIMPLIFIED_VERTICES`
+(1000), tried against an ascending ladder of tolerances
+(`SIMPLIFY_TOLERANCE_LADDER_M`, 20 m up to 1280 m) until either geometry -
+the activity, or a given candidate route - is safely under it. If nothing
+on the ladder gets a geometry under the cap, that geometry is left out of
+matching entirely (the whole activity, if it is the one too large; just
+that one candidate, if it is a route) rather than ever letting
+`ST_Buffer`/`ST_Intersection` run on something that size.
+`tests/test_route_match.py` has a dedicated regression test building a
+~14,000-point trace (via `generate_series`, the same technique used to
+find the crash) that asserts this completes and the database connection
+is still alive afterward - a match is a bonus, not the point of that test.
 
 Matching runs **inline**, not through a queue, right after an activity
 commits - both in `POST /api/activities/import` and in the Strava archive
