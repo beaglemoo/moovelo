@@ -408,6 +408,37 @@ export interface ActivityQuery {
 	source?: string;
 }
 
+/** Body of PUT /api/activities/{id}/route. `route_id` null clears the link -
+ * both a set and a clear lock out the auto-matcher. Mirrors
+ * backend/app/schemas.py ActivityRouteLinkRequest. */
+export interface ActivityRouteLinkRequest {
+	route_id: string | null;
+}
+
+/** One ride matched to a route, as GET /api/routes/{id}/activities lists it.
+ * Mirrors backend/app/schemas.py RouteActivity. */
+export interface RouteActivity {
+	id: string;
+	name: string;
+	started_at: string | null;
+	elapsed_time_s: number | null;
+	moving_time_s: number | null;
+	distance_m: number;
+	ascent_m: number;
+	match_confidence: number | null;
+}
+
+/** GET /api/routes/{id}/activities: the rides matched to one route, for
+ * planned-vs-actual. `predicted_time_s` is a property of the route, not of
+ * any one ride - computed on read over the viewer's rider settings, the same
+ * model SavedRoute.ride_time uses (its own last point's time_s), and null
+ * when the route has fewer than two elevation points. Mirrors
+ * backend/app/schemas.py RouteActivitiesResponse. */
+export interface RouteActivitiesResponse {
+	predicted_time_s: number | null;
+	activities: RouteActivity[];
+}
+
 /** Whether this rider has anything for the personal heatmap to draw. Mirrors
  * backend/app/schemas.py HeatmapAvailability. */
 export interface HeatmapAvailability {
@@ -490,7 +521,10 @@ export const routes = {
 	gpxUrl: (id: string) => `/api/routes/${id}/export.gpx`,
 	fitUrl: (id: string) => `/api/routes/${id}/export.fit`,
 	share: (id: string) => request<SavedRoute>(`/api/routes/${id}/share`, { method: 'POST' }),
-	revokeShare: (id: string) => request<SavedRoute>(`/api/routes/${id}/share`, { method: 'DELETE' })
+	revokeShare: (id: string) => request<SavedRoute>(`/api/routes/${id}/share`, { method: 'DELETE' }),
+	/** The rides matched to this route, for the route detail page's
+	 * planned-vs-actual list. */
+	activities: (id: string) => request<RouteActivitiesResponse>(`/api/routes/${id}/activities`)
 };
 
 export const activities = {
@@ -504,6 +538,18 @@ export const activities = {
 	},
 	get: (id: string) => request<ActivityDetail>(`/api/activities/${id}`),
 	remove: (id: string) => request<void>(`/api/activities/${id}`, { method: 'DELETE' }),
+	/** Set (routeId) or clear (null) the ride's matched route by hand - the
+	 * rider overriding or correcting the auto-matcher. Locks out
+	 * services/route_match.py either way. */
+	setRoute: (id: string, routeId: string | null) =>
+		request<ActivityDetail>(`/api/activities/${id}/route`, {
+			method: 'PUT',
+			body: JSON.stringify({ route_id: routeId } satisfies ActivityRouteLinkRequest)
+		}),
+	/** Re-run auto-matching for one ride - a no-op if the rider has already
+	 * picked or cleared the match by hand. */
+	rematch: (id: string) =>
+		request<ActivityDetail>(`/api/activities/${id}/rematch`, { method: 'POST' }),
 	importFile: (file: File) => {
 		const form = new FormData();
 		form.append('file', file);
