@@ -79,8 +79,8 @@ import logging
 import uuid
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db import session_factory
 from app.models import Activity
 
 logger = logging.getLogger(__name__)
@@ -260,7 +260,7 @@ _MATCH_SQL = text("""
 
 
 async def match_activity_to_route(
-    db: AsyncSession, activity_id: uuid.UUID, *, clear_if_unmatched: bool = False
+    activity_id: uuid.UUID, *, clear_if_unmatched: bool = False
 ) -> uuid.UUID | None:
     """Find the best-matching route for one activity and persist the result.
 
@@ -289,46 +289,54 @@ async def match_activity_to_route(
     is stored as a 0-1 score (the lower of the two coverage fractions), not
     a distance - higher is better.
 
-    Never raises. Every caller's contract is "a matching failure must never
-    fail the import", and that guarantee has to live here rather than at
-    each call site - and it took two attempts to actually deliver it,
-    reproduced directly against real Postgres both times:
+    Never raises, and - the part that took four review rounds to get right -
+    never disturbs the caller's session either. It opens its OWN session
+    rather than borrowing one.
 
-    A failed statement leaves the whole session's Postgres transaction
-    *aborted*, so catching the exception at the call site and carrying on
-    is not enough by itself - the very next query on the same session
-    (typically the caller re-reading the activity for its response) fails
-    too, with "current transaction is aborted, commands ignored until end
-    of transaction block", turning a missing enrichment into a 500 for the
-    whole request.
+    That is a mechanism, not a patch, and it exists because three consecutive
+    rounds found a new bug in the previous round's fix, all of them the same
+    shape: this function has to write and commit, the caller is mid-request
+    holding loaded ORM objects, and every way of failing inside a *shared*
+    session damages those objects.
 
-    The first fix - catch here and call `db.rollback()` - clears the abort,
-    but a plain rollback also *expires every object already loaded in the
-    session*, matching real transactional semantics (their state may no
-    longer be valid). The caller's own `activity` object - fetched before
-    this function was ever called - is one of them, so its very next
-    attribute access anywhere in the caller triggers an implicit lazy
-    reload, and `AsyncSession` refuses to do that reload outside an
-    explicit `await` ("MissingGreenlet: ... Was IO attempted in an
-    unexpected place?"). Swapping the plain rollback for a `SAVEPOINT`
-    (`db.begin_nested()`) is what actually fixes both problems at once: a
-    failure inside it only undoes work done inside it, so the caller's
-    already-loaded objects are never touched. This is the same mechanism
-    Sprint 1's C8/G3 fix used for the identical shape of bug (see
-    CLAUDE.md) - a plain rollback trashing a caller's transaction is not a
-    new failure mode in this codebase, it is a recurring one.
+      - A failed statement aborts the whole Postgres transaction, so the
+        caller's next query dies with "current transaction is aborted".
+      - Catching it and calling `db.rollback()` clears the abort but expires
+        every object in the session, so the caller's next attribute access
+        becomes an implicit lazy load, which AsyncSession refuses outside a
+        greenlet ("MissingGreenlet"). The ride is already durably committed
+        by then, so a rider got a 500 for an import that genuinely worked.
+      - A SAVEPOINT (`db.begin_nested()`) fixed the query path but not the
+        COMMIT path, which cannot be inside a savepoint.
+      - Rolling back and re-loading the activity to repopulate the caller's
+        identity-mapped instance fixed that - unless the re-load ITSELF
+        failed, which is exactly what a dropped connection does to the very
+        next statement after a failed commit. Then the caller was left
+        holding an expired object with no working reload: MissingGreenlet
+        again, one branch deeper.
+
+    Each fix was a case; the family was the borrowing. Every caller already
+    commits its own work BEFORE calling this (import_activity, the archive
+    worker, the rematch endpoint, and _rematch_linked_activities all do), so
+    there was never a transaction here worth sharing - only one worth not
+    breaking. With a private session the caller's objects are untouchable by
+    construction: a failure of any kind in here rolls back a session nobody
+    else can see, and the caller's request carries on with the enrichment
+    simply not applied. That is the stated policy - the ride is the valuable
+    thing, its route link is an enrichment.
+
+    The cost of the mechanism, and the one thing callers must know: the
+    caller's own `activity` object does NOT see the write, because it was
+    made on another connection. A caller that goes on to render the new link
+    has to re-read it (`db.refresh`), which import_activity does.
     """
     route_id: uuid.UUID | None = None
-    # One exit that commits, rather than a commit reachable from only one of
-    # the branches that write. The clear_if_unmatched path used to `return`
-    # from inside the SAVEPOINT below, which skipped the commit at the end
-    # entirely: the clear was visible to the calling session and then rolled
-    # back at close, so an explicit rematch appeared to work and changed
-    # nothing. Releasing a SAVEPOINT only merges into the still-open outer
-    # transaction; durability is this function's own commit.
-    changed = False
     try:
-        async with db.begin_nested():
+        # Module-scope `session_factory` on purpose: conftest monkeypatches
+        # this attribute to point at the per-test throwaway database, the same
+        # convention services/wahoo_queue.py and services/activity_import.py
+        # already use for their own out-of-request sessions.
+        async with session_factory() as db:
             activity = await db.get(Activity, activity_id)
             if activity is None or activity.match_locked:
                 return None
@@ -358,62 +366,18 @@ async def match_activity_to_route(
                 if clear_if_unmatched and activity.route_id is not None:
                     activity.route_id = None
                     activity.match_confidence = None
-                    changed = True
-            else:
-                route_id = row.id
-                activity.route_id = route_id
-                activity.match_confidence = float(row.confidence)
-                changed = True
+                    await db.commit()
+                return None
+
+            route_id = row.id
+            activity.route_id = route_id
+            activity.match_confidence = float(row.confidence)
+            await db.commit()
     except Exception:  # noqa: BLE001 - see the "Never raises" docstring note above
         logger.warning("route match failed for activity %s", activity_id, exc_info=True)
-        # Deliberately no rollback here: exiting the SAVEPOINT has already
-        # unwound the failed statement, and a plain rollback would expire every
-        # object the caller had loaded - which is the bug the SAVEPOINT was
-        # introduced to avoid in the first place, documented above.
+        # No rollback needed and none possible to get wrong: leaving the
+        # `async with` closes this private session, which rolls back anything
+        # uncommitted. There is no other session to damage.
         return None
-
-    # Its own try, because a failed COMMIT is a different failure from a failed
-    # query and needs the opposite handling. Nothing flushes until this runs,
-    # so it is the statement most exposed to a real operational fault - a
-    # dropped connection, a deadlock, a statement timeout - and it briefly sat
-    # outside the block above, which made "never raises" false for exactly the
-    # call most likely to fail. _rematch_linked_activities iterates this with
-    # no try/except of its own, from a PATCH whose route save has already
-    # committed, so an escape there 500s a request that actually succeeded and
-    # silently abandons every remaining ride's re-derive.
-    #
-    # Guarded on `changed` so a no-op match does not commit a caller's
-    # unrelated pending work as a side effect of asking a question.
-    if changed:
-        try:
-            await db.commit()
-        except Exception:  # noqa: BLE001 - the contract above
-            logger.warning("route match commit failed for activity %s", activity_id, exc_info=True)
-            # Here a rollback IS required: a failed commit leaves the
-            # transaction unusable, so the caller cannot continue without one,
-            # and there is no half-applied state worth preserving.
-            #
-            # It has to heal what it breaks, though. A rollback expires EVERY
-            # object in the session - that is true regardless of
-            # expire_on_commit, which only governs the success path - including
-            # the Activity the caller loaded before calling this and goes on
-            # using afterwards. import_activity does exactly that: it calls
-            # this and then builds its response from the same object, so an
-            # expired one turns the next attribute read into an implicit lazy
-            # load, which AsyncSession refuses outside a greenlet. The ride is
-            # already durably committed at that point, so the rider would get a
-            # 500 for an import that genuinely succeeded - the very bug the
-            # SAVEPOINT above exists to avoid, reintroduced on the other path.
-            #
-            # Re-loading it here repopulates that same identity-mapped
-            # instance, so the caller's reference is usable again. Both calls
-            # are guarded: on a dead connection either can raise, and this
-            # function's whole contract is that it does not.
-            try:
-                await db.rollback()
-                await db.get(Activity, activity_id)
-            except Exception:  # noqa: BLE001
-                logger.warning("recovery after a failed match commit also failed", exc_info=True)
-            return None
 
     return route_id

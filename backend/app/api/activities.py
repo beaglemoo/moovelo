@@ -102,7 +102,14 @@ async def import_activity(
     # Never allowed to fail the import itself: the ride is the valuable
     # thing, its route link is an enrichment.
     try:
-        await match_activity_to_route(db, activity.id)
+        matched = await match_activity_to_route(activity.id)
+        if matched is not None:
+            # It committed on its own private session, so our `activity` still
+            # holds the pre-match row - refresh or the response reports the
+            # ride as unmatched when it was in fact just matched. Guarded for
+            # the same reason the match itself is: this is one SELECT for an
+            # enrichment, and the ride is already durably committed above.
+            await db.refresh(activity)
     except Exception:  # noqa: BLE001 - see comment above
         logger.warning("route match failed for activity %s", activity.id, exc_info=True)
     return await _detail(activity, db)
@@ -430,7 +437,7 @@ async def rematch_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> 
     on rather than duplicating.
     """
     activity = await _owned(activity_id, db, user.id)
-    await match_activity_to_route(db, activity.id, clear_if_unmatched=True)
+    await match_activity_to_route(activity.id, clear_if_unmatched=True)
     await db.refresh(activity)
     return await _detail(activity, db)
 

@@ -110,12 +110,21 @@ async def db_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
 
 
 @pytest.fixture
-async def db(db_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[AsyncSession]:
+async def db(
+    db_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[AsyncSession]:
     """A session on the same throwaway database the client fixture uses.
 
     Request one alongside `client` to seed rows the API has no endpoint
     for - the place index tables are written only by the indexer sidecar.
     """
+    # route_match deliberately opens its OWN session rather than borrowing the
+    # caller's, so a failure in it cannot expire the caller's ORM objects (see
+    # its docstring). That means it has to be pointed at the throwaway database
+    # here as well as in `client` - the direct-call unit tests take `db` alone,
+    # and without this they would match against the developer's real dev
+    # database instead of the per-test one.
+    monkeypatch.setattr("app.services.route_match.session_factory", db_factory)
     async with db_factory() as session:
         yield session
 
@@ -139,6 +148,9 @@ async def client(
     # Same for the archive import worker, which likewise opens its own
     # sessions outside the request dependency.
     monkeypatch.setattr("app.services.activity_import.session_factory", db_factory)
+    # And route matching, which opens its own for a different reason - to keep
+    # a failed match from expiring the request session's objects.
+    monkeypatch.setattr("app.services.route_match.session_factory", db_factory)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as http:
         yield http

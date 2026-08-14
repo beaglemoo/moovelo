@@ -461,7 +461,7 @@ async def _rematch_linked_activities(route_id: uuid.UUID, db: AsyncSession) -> N
         # promise covers match_activity_to_route, which never raises; it never
         # covered this line. A transient fault on it would have 500'd a PATCH
         # whose route snapshot and every re-derived match were already durable.
-        await match_activity_to_route(db, activity_id, clear_if_unmatched=True)
+        await match_activity_to_route(activity_id, clear_if_unmatched=True)
 
 
 def _suffixed(name: str, suffix: str) -> str:
