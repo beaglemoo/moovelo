@@ -459,6 +459,40 @@ class ActivityRouteLinkRequest(BaseModel):
     route_id: uuid.UUID | None = None
 
 
+class RouteActivity(BaseModel):
+    """One ride matched to a route, as GET /api/routes/{id}/activities lists
+    it. No geometry - the ride detail page (GET /api/activities/{id}) is
+    where a rider goes to see the trace itself."""
+
+    id: uuid.UUID
+    name: str
+    started_at: datetime | None = None
+    elapsed_time_s: float | None = None
+    moving_time_s: float | None = None
+    distance_m: float
+    ascent_m: float
+    # 0-1 bidirectional coverage score, or null for a manual link - same
+    # meaning as ActivitySummary.match_confidence, see route_match.py.
+    match_confidence: float | None = None
+
+
+class RouteActivitiesResponse(BaseModel):
+    """GET /api/routes/{id}/activities: the rides matched to one route, for
+    planned-vs-actual comparison.
+
+    predicted_time_s is a property of the ROUTE, not of any one ride - the
+    same compute_ride_time model api/routes.py already uses for a saved
+    route's own `ride_time`, over the viewer's rider settings, with the
+    total simply the last RideTimePoint's time_s. It sits once at the top
+    level rather than repeated on every row. Null when the route has fewer
+    than two elevation points, the same case compute_ride_time itself
+    returns [] for.
+    """
+
+    predicted_time_s: float | None = None
+    activities: list[RouteActivity] = []
+
+
 class HeatmapAvailability(BaseModel):
     """Whether this rider has anything for the personal heatmap to draw.
 
