@@ -167,6 +167,14 @@ with turn-by-turn cues.
   it - category, length, gain and how many ascents, entirely geometric
   (recovered from each ride's own recorded line, clustered by proximity
   and similar length) and computed from data already on your own server.
+- Riding totals on `/activities`: distance, moving time, ascent and ride
+  count grouped by year, expandable to a month-by-month breakdown -
+  aggregated in SQL, not by loading every ride into the app and summing.
+  A ride with no usable timestamp (a file that declares itself an activity
+  but carries no clock) is bucketed as "Undated" rather than dropped, so
+  the totals always agree with your library: summing every bucket the
+  endpoint returns, including the undated one, equals your unfiltered
+  total.
 
 ## Route intelligence
 

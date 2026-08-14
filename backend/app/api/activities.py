@@ -14,7 +14,7 @@ a wrong or missing auto-match is exactly the case services/route_match.py's
 import asyncio
 import logging
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, Path, Query, Request, UploadFile
 from fastapi.responses import Response
@@ -25,8 +25,11 @@ from app.api.deps import DbDep, UserDep
 from app.models import Activity, Route
 from app.schemas import (
     ActivityDetail,
+    ActivityMonthStats,
     ActivityRouteLinkRequest,
+    ActivityStatsResponse,
     ActivitySummary,
+    ActivityYearStats,
     ArchiveImportStatus,
     ClimbLogResponse,
     ElevationPoint,
@@ -218,6 +221,108 @@ async def list_climb_log(db: DbDep, user: UserDep) -> ClimbLogResponse:
     404 instead.
     """
     return ClimbLogResponse(climbs=await climb_log(db, user.id))
+
+
+@router.get("/stats")
+async def activity_stats(db: DbDep, user: UserDep) -> ActivityStatsResponse:
+    """Yearly (and monthly-within-year) riding totals for /activities.
+
+    Ahead of `/{activity_id}` for the same route-ordering reason `/climbs`
+    and `/heatmap-available` are - see the comment on `list_climb_log`.
+
+    Two aggregate SQL queries, not a Python loop summing loaded rows: one
+    GROUP BY year for the per-year totals (every activity, including one
+    with no `started_at` at all, which lands in a NULL year group - the
+    "undated" bucket, not silently dropped, since started_at is nullable
+    by design - see Activity.started_at's own comment), and one GROUP BY
+    year, month restricted to rows that actually have a month to report,
+    for the drill-down. Because the year query has no such restriction,
+    summing every bucket it returns always equals this rider's unfiltered
+    total - test_api_ride_stats.py pins exactly that reconciliation.
+
+    func.coalesce guards distance and ascent - both NOT NULL on the model,
+    so a zero there is always a real sum - from SUM's NULL-for-empty-input.
+    `moving_time_s` is deliberately left uncoalesced; see its own comment
+    below.
+
+    KNOWN GAP - buckets are UTC, not the rider's local calendar. `started_at`
+    is `timestamptz`, which keeps only the absolute instant: the offset the
+    source file carried is discarded at import, so there is nothing left to
+    reconstruct a local calendar from. `extract` therefore reports the
+    session's timezone, which is UTC. Measured consequences: a rider west of
+    UTC can see a New Year's Eve ride counted in the following year (22:00 on
+    31 December US Pacific reports as year 2026, month 1). In the UK, year
+    totals are unaffected - 1 January falls in GMT, which is UTC - but a
+    summer ride starting just after local midnight lands in the previous
+    month, because 00:30 BST is 23:30 UTC the day before.
+
+    Closing it properly means storing the rider's own offset alongside the
+    instant, which is a schema change rather than a query change, so it is
+    stated here rather than half-fixed with a guessed timezone.
+    """
+    year_expr = func.extract("year", Activity.started_at)
+    month_expr = func.extract("month", Activity.started_at)
+
+    def _totals() -> tuple[Any, Any, Any, Any]:
+        return (
+            func.count().label("ride_count"),
+            func.coalesce(func.sum(Activity.distance_m), 0.0).label("distance_m"),
+            # Deliberately NOT coalesced to 0, unlike distance and ascent.
+            # Activity.moving_time_s is the one nullable numeric here - a file
+            # can carry no per-point timestamps at all - and format.ts's
+            # duration() renders null as "-" precisely so a bucket with no
+            # timing data cannot read as a real, suspiciously fast ride.
+            # Coalescing here would erase that distinction before the UI ever
+            # saw it. SUM already skips individual NULLs, so this is None only
+            # when every contributing ride lacked a time.
+            func.sum(Activity.moving_time_s).label("moving_time_s"),
+            func.coalesce(func.sum(Activity.ascent_m), 0.0).label("ascent_m"),
+        )
+
+    year_rows = (
+        await db.execute(
+            select(year_expr.label("year"), *_totals())
+            .where(Activity.user_id == user.id)
+            .group_by(year_expr)
+        )
+    ).all()
+
+    month_rows = (
+        await db.execute(
+            select(year_expr.label("year"), month_expr.label("month"), *_totals())
+            .where(Activity.user_id == user.id, Activity.started_at.is_not(None))
+            .group_by(year_expr, month_expr)
+        )
+    ).all()
+
+    months_by_year: dict[int, list[ActivityMonthStats]] = {}
+    for row in month_rows:
+        months_by_year.setdefault(int(row.year), []).append(
+            ActivityMonthStats(
+                month=int(row.month),
+                count=row.ride_count,
+                distance_m=float(row.distance_m),
+                moving_time_s=float(row.moving_time_s) if row.moving_time_s is not None else None,
+                ascent_m=float(row.ascent_m),
+            )
+        )
+    for months in months_by_year.values():
+        months.sort(key=lambda m: m.month)
+
+    years = [
+        ActivityYearStats(
+            year=int(row.year) if row.year is not None else None,
+            count=row.ride_count,
+            distance_m=float(row.distance_m),
+            moving_time_s=float(row.moving_time_s) if row.moving_time_s is not None else None,
+            ascent_m=float(row.ascent_m),
+            months=months_by_year.get(int(row.year), []) if row.year is not None else [],
+        )
+        for row in year_rows
+    ]
+    # Newest year first; the undated bucket (year None) sorts last.
+    years.sort(key=lambda y: (y.year is None, -(y.year or 0)))
+    return ActivityStatsResponse(years=years)
 
 
 @router.get("/heatmap-available")

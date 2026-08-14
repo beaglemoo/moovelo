@@ -616,6 +616,20 @@ speed on the climb matched your average speed for the whole ride, which is
 never quite true - climbs are slower than the flat and the descents - so
 treat it as a reasonable guess rather than a stopwatch split.
 
+### Your riding totals
+
+A **Riding totals** table on the Activities page groups every ride by
+year - distance, moving time, ascent and how many rides - with a click on
+a year expanding it to a month-by-month breakdown. The numbers are all
+computed on the server, not added up in your browser from whatever the
+page happens to have loaded.
+
+A ride imported from a file with no usable timestamp gets its own
+**Undated** row rather than being left out of the totals - it still
+counts towards everything except the month breakdown, which needs a date
+to group by. The totals always add up to your full ride history: the
+undated row exists precisely so nothing goes missing from the count.
+
 ## Export
 
 Every saved route (and the planner toolbar, once a route is saved) offers

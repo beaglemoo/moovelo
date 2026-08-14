@@ -35,13 +35,13 @@ flowchart LR
     UI -.->|raster tiles when TILE_URL_CYCLOSM set| SELF
 ```
 
-| Component | Technology | Role |
-|-----------|------------|------|
-| frontend | SvelteKit + MapLibre GL JS, static SPA build | Planner, library, activities, admin, share pages |
-| backend | Python 3.12, FastAPI, SQLAlchemy async, httpx | API + static host; proxies Valhalla, talks to Wahoo/weather/LLM |
-| postgres | PostGIS 16 | Users, sessions, routes and activities (geometry + snapshot), the place index, Wahoo tokens, LLM settings |
-| valhalla | Official `valhalla-scripted` image | Bicycle routing, elevation, and map-matching (imports, coverage); never exposed directly |
-| indexer | Python + pyosmium, own Dockerfile and lockfile, compose profile `index` | Opt-in, one-shot: parses the OSM extract Valhalla already downloaded into places/POIs/cycle routes and (with `INDEX_ROADS=true`) every bikeable road |
+| Component | Technology                                                              | Role                                                                                                                                                 |
+| --------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| frontend  | SvelteKit + MapLibre GL JS, static SPA build                            | Planner, library, activities, admin, share pages                                                                                                     |
+| backend   | Python 3.12, FastAPI, SQLAlchemy async, httpx                           | API + static host; proxies Valhalla, talks to Wahoo/weather/LLM                                                                                      |
+| postgres  | PostGIS 16                                                              | Users, sessions, routes and activities (geometry + snapshot), the place index, Wahoo tokens, LLM settings                                            |
+| valhalla  | Official `valhalla-scripted` image                                      | Bicycle routing, elevation, and map-matching (imports, coverage); never exposed directly                                                             |
+| indexer   | Python + pyosmium, own Dockerfile and lockfile, compose profile `index` | Opt-in, one-shot: parses the OSM extract Valhalla already downloaded into places/POIs/cycle routes and (with `INDEX_ROADS=true`) every bikeable road |
 
 Nothing in the "Compose stack" box makes an outbound call by default -
 every arrow into "External" is opt-in and gated behind its own
@@ -131,7 +131,7 @@ could be rewritten. Reads return the trace as polyline6, the same encoding
 the planner already decodes for route legs, so an activity draws through
 the path everything else on the map uses.
 
-The one thing an activity *can* be edited to carry is which saved route it
+The one thing an activity _can_ be edited to carry is which saved route it
 matches - that does not change what the ride was, only what it is
 associated with, and a rider correcting a wrong or missing automatic match
 is exactly the case the endpoint exists for. See
@@ -159,7 +159,7 @@ works in three stages:
    objects and the nodes and members they reference. This is what keeps
    the rest cheap: parsing the whole extract with node-location caching
    would be the largest memory consumer on the machine. (The `-R` flag
-   looks like it would help and does the opposite - it *omits* referenced
+   looks like it would help and does the opposite - it _omits_ referenced
    objects, which would leave every way without coordinates.) Before
    all-roads coverage this reduced England's 1.6 GB to 45 MB in about nine
    seconds; keeping every `highway=*` way (minus what a bike cannot ride -
@@ -235,9 +235,9 @@ England's several Newports did you mean" is a 50-200 km question.
 Measured over the 60 most duplicated settlement names from four map
 centres, by the median distance of the top result:
 
-| half-life | 5 km | 20 km | 40 km | 80 km | 160 km | 400 km |
-|---|---|---|---|---|---|---|
-| median top result | 154 km | 109 km | 92 km | **80 km** | 91 km | 110 km |
+| half-life         | 5 km   | 20 km  | 40 km | 80 km     | 160 km | 400 km |
+| ----------------- | ------ | ------ | ----- | --------- | ------ | ------ |
+| median top result | 154 km | 109 km | 92 km | **80 km** | 91 km  | 110 km |
 
 A clean U with its minimum around 80 km - and note both tails, which is
 the saturation showing up from either side. Raising it changed nothing
@@ -267,9 +267,9 @@ alongside that first version passed.
 Instead each place gets a **reach** - how far it may lend its name -
 scaling with the square of the importance the indexer already assigns:
 
-| | city | town | village | hamlet | locality |
-|---|---|---|---|---|---|
-| reach | 48 km | 21 km | 8 km | 3 km | 1.1 km |
+|       | city  | town  | village | hamlet | locality |
+| ----- | ----- | ----- | ------- | ------ | -------- |
+| reach | 48 km | 21 km | 8 km    | 3 km   | 1.1 km   |
 
 Ranking by `distance / reach` asks how far into a place's natural range
 the point sits, rather than what is closest, and dropping rows beyond
@@ -296,7 +296,7 @@ this ride". Two choices carry it:
   stored route would miss the moment it matters. A real 50 km route is
   about 1,800 points - roughly 40 KB of JSON - so this is cheap; the cap
   is 20,000 points.
-- **Ordered by distance *along* the route, not distance *from* it.** A
+- **Ordered by distance _along_ the route, not distance _from_ it.** A
   list of nearby POIs is not a plan for a ride; a list in the order you
   will pass them is. `ST_LineLocatePoint` gives the fraction along, which
   the geography length turns into metres. On a route that doubles back it
@@ -321,8 +321,8 @@ defaults to four. That is measured rather than guessed. The same 50 km
 ride passes 722 POIs within 250 m:
 
 | bike_parking | food | cafe | pub | ... | water | bike_repair | picnic |
-|---|---|---|---|---|---|---|---|
-| 232 | 167 | 123 | 68 | | 1 | 1 | 1 |
+| ------------ | ---- | ---- | --- | --- | ----- | ----------- | ------ |
+| 232          | 167  | 123  | 68  |     | 1     | 1           | 1      |
 
 Only one of those 232 bike parking stands has a name. Show everything at
 once and the rare things people actually go looking for - water, a repair
@@ -343,19 +343,19 @@ per tile.
 Which networks appear depends on zoom, the way a paper map drops detail
 rather than drawing everything at every scale:
 
-| zoom | networks |
-|---|---|
-| 11+ | all four, including local |
-| 8-10 | international, national, regional |
-| below 8 | international and national only |
+| zoom    | networks                          |
+| ------- | --------------------------------- |
+| 11+     | all four, including local         |
+| 8-10    | international, national, regional |
+| below 8 | international and national only   |
 
-`ST_Transform` is applied to the tile *envelope*, not to every row: the
+`ST_Transform` is applied to the tile _envelope_, not to every row: the
 envelope is a constant, so `ix_cycle_ways_geom` still serves the
 bounding-box filter. Transforming each row would disable it.
 
 An empty tile is a normal answer and never a 404 - most of the world has
 no NCN, and MapLibre handles a zero-length body fine. A tile outside the
-pyramid *is* a 404, because that is a client bug worth seeing.
+pyramid _is_ a 404, because that is a client bug worth seeing.
 
 #### Why the indexer merges the ways
 
@@ -466,12 +466,12 @@ zip) are imported unconditionally; there is nothing to deduplicate them
 against.
 
 **One failed file costs that file, not the archive - literally, not just
-by intent.** Each entry is parsed *and committed* inside its own
+by intent.** Each entry is parsed _and committed_ inside its own
 `try`/`except`: a `RouteImportError`, `ArchiveError` or a raw
 `SQLAlchemyError` rolls back that one entry, increments `failed`, and
 appends a problem string to `problems` rather than aborting the loop - the
 same "degrade per unit of work, not the whole request" shape as
-`trace_route`'s chunking. The commit has to sit *inside* the loop, not
+`trace_route`'s chunking. The commit has to sit _inside_ the loop, not
 once at the end: SQLAlchemy batches pending inserts that share a table
 into one multi-row `INSERT`, so without a commit between entries, a
 single row Postgres refuses (a stray `NaN` that slipped past the
@@ -511,7 +511,7 @@ collected - averaging 195 parts, which is what defeated simplification
 until they were merged. An `activities` row is already one continuous GPS
 trace stored as a single `LINESTRING`, so there is nothing to merge, and
 merging traces together is exactly what would defeat the point of a
-heatmap - the darkening comes from *keeping* every ride a separate
+heatmap - the darkening comes from _keeping_ every ride a separate
 feature that composites over the others where they coincide.
 
 The one line in the query that matters is `WHERE user_id = :user_id`.
@@ -552,15 +552,15 @@ a handful of favourite commute/loop corridors ridden repeatedly with GPS
 jitter between recordings (the way a heatmap actually darkens), plus a
 long tail of one-off rides, both scaled to a Chilterns-sized county:
 
-| rider | rides | z6 | z10 | z12 | z14 | z16 |
-|---|---|---|---|---|---|---|
-| decade (~10y, 3/wk) | 1,550 | 164 kB | 320 kB | 54 kB | 8 kB | 0.3 kB |
-| moderate (~3y, 3/wk) | 470 | 50 kB | 92 kB | 15 kB | 2 kB | 0.2 kB |
+| rider                | rides | z6     | z10    | z12   | z14  | z16    |
+| -------------------- | ----- | ------ | ------ | ----- | ---- | ------ |
+| decade (~10y, 3/wk)  | 1,550 | 164 kB | 320 kB | 54 kB | 8 kB | 0.3 kB |
+| moderate (~3y, 3/wk) | 470   | 50 kB  | 92 kB  | 15 kB | 2 kB | 0.2 kB |
 
 Sizes are uncompressed (gzip over HTTP shrinks a repetitive protobuf like
 this further, not measured here). They do not grow monotonically with
 zoom the way the cycle-network overlay's do: the largest tiles are around
-z10, where a single tile still covers most of a rider's whole area *and*
+z10, where a single tile still covers most of a rider's whole area _and_
 `ST_Simplify`'s tolerance is fine enough to keep most of each trace's
 points. `ST_LineMerge` is not an available lever here (see above), so a
 power rider's mid-zoom tiles are genuinely larger than the cycle
@@ -577,14 +577,14 @@ query's index-narrow-then-exact-test pattern (see
 [POIs along a route](#pois-along-a-route)):
 
 1. **Candidate narrowing**, cheap and index-backed: `routes.geom &&
-   activities.geom` (a bounding-box overlap test, served by the GiST index
+activities.geom` (a bounding-box overlap test, served by the GiST index
    on each column). `routes.geom`'s own index is named `ix_routes_geom` in
    the migration but `idx_routes_geom` in the ORM's metadata (see
    `models.py`'s comment on `Route.geom`) - a harmless divergence that this
    is the first query to actually depend on the index existing at all,
    rather than merely on it being named consistently; `&&` is served
    regardless of what the index is called. Narrowing also applies a
-   distance-ratio prefilter - deliberately the *same* band the decision
+   distance-ratio prefilter - deliberately the _same_ band the decision
    itself uses, since a route outside it could never win, and admitting it
    would only spend the candidate cap on rows destined to be discarded.
    The list is capped at 25 so a pathological library cannot make this
@@ -593,7 +593,7 @@ query's index-narrow-then-exact-test pattern (see
    qualifying rows it likes, so a rider with more overlapping routes than
    the cap could have the true match cut purely on physical row order - and
    a dropped candidate is indistinguishable from "nothing matched".
-   Ordering on closeness of *length* does not work, which is worth knowing:
+   Ordering on closeness of _length_ does not work, which is worth knowing:
    variants of the same route usually have near-identical distances, so
    every candidate ties and the cap goes back to cutting arbitrarily.
 2. **Confirmation**, exact, on survivors only: **bidirectional coverage**,
@@ -604,7 +604,7 @@ query's index-narrow-then-exact-test pattern (see
 
 **The plan changed after measuring `ST_FrechetDistance` against real dev
 Postgres, and the finding is worth keeping.** Frechet distance (and
-Hausdorff, which has the same shape) is a *maximum*-based metric - a
+Hausdorff, which has the same shape) is a _maximum_-based metric - a
 single outlier sets the whole score. A ride that followed its route
 exactly except for one ~300 m detour (a shop stop, a wrong turn, a loop
 round a car park) measured a 300.6 m Frechet distance against it - over
@@ -639,7 +639,7 @@ coverage ratio itself - numerator and denominator are both lengths in the
 same (if locally distorted) projected geometry, so the distortion cancels
 out of the ratio on its own. `tests/test_route_match.py`'s dedicated
 Mercator test is built so it only passes with the correction in place - a
-fixture whose true offset is under the buffer but whose *uncorrected*
+fixture whose true offset is under the buffer but whose _uncorrected_
 EPSG:3857 buffer would fail to reach it.
 
 **Coverage is direction-agnostic by construction**, so unlike the Frechet
@@ -679,6 +679,7 @@ routes, so there is nothing here that benefits from being queued - and
 Sprint 1 spent eight review rounds on bugs introduced by queue lifetimes
 that a genuinely queue-free feature does not need to risk. A matching
 failure never fails the import: it is caught, logged, and the ride is kept
+
 - the ride is the valuable thing, its route link is an enrichment.
 
 A rider can always override the result: `PUT /api/activities/{id}/route`
@@ -704,7 +705,7 @@ every path that can null the column, including a bulk delete or a psql
 session during an incident.
 
 It deliberately does **not** touch `match_locked`. Clearing a link by hand
-sets `route_id` null and `match_locked` true *together* - that pairing is
+sets `route_id` null and `match_locked` true _together_ - that pairing is
 how a rider says "there is no route for this ride, stop guessing" - so a
 trigger that reset the flag whenever `route_id` went null would silently
 undo the rider's own decision and let the next auto-match re-link the ride.
@@ -740,7 +741,7 @@ retrigger the map's own sync effects), every edit callback a shared
   entry calls `PUT /api/activities/{id}/route`, clearing it back to "No
   matched route" sends `route_id: null`.
 - `/library/{id}` - the route itself plus `GET /api/routes/{id}/
-  activities`'s list, each row the same actual-vs-planned comparison,
+activities`'s list, each row the same actual-vs-planned comparison,
   linking back to that ride's own detail page. Empty state points at
   `/activities` rather than explaining the matching algorithm again.
 
@@ -761,24 +762,25 @@ proposes a value the rider applies themselves, through the existing
 
 For every ride the caller can use - `route_id` set (so there is a matched
 route's `elevation`/`surface` to compute over) and `moving_time_s` present
+
 - `solve_flat_speed_kmh` finds the `flat_speed_kmh` that would make
-`compute_ride_time`'s total, over that route's own elevation and surface,
-equal the ride's actual moving time. The obvious closed form -
-`suggested = reference_speed * predicted_total / actual_total` - assumes
-total time is exactly proportional to `1/flat_speed_kmh`, and it is not:
-`compute_ride_time` floors segment speed at `MIN_SPEED_KMH` and
-`effective_flat_speed` rescales by FTP. The fit is instead **numerical**:
-`compute_ride_time` is treated as a black box and bisected over
-`flat_speed_kmh`'s own valid range, 5-60 (`UserSettingsPatch`'s bounds,
-`app/schemas.py`), until the predicted total is within a second of the
-actual. Bisection is valid because the predicted total is monotonically
-decreasing in `flat_speed_kmh` across that whole range - raising the
-flat-road speed can only shorten a segment, never lengthen one, since
-every other factor (gradient, surface, the floor) is unchanged -
-`test_ride_calibration.py` asserts this directly rather than assuming it.
-A ride slower or faster than the model can express at either end of the
-range clamps to that end rather than being excluded: the range boundary
-is the closest representable answer, not a failure to solve.
+  `compute_ride_time`'s total, over that route's own elevation and surface,
+  equal the ride's actual moving time. The obvious closed form -
+  `suggested = reference_speed * predicted_total / actual_total` - assumes
+  total time is exactly proportional to `1/flat_speed_kmh`, and it is not:
+  `compute_ride_time` floors segment speed at `MIN_SPEED_KMH` and
+  `effective_flat_speed` rescales by FTP. The fit is instead **numerical**:
+  `compute_ride_time` is treated as a black box and bisected over
+  `flat_speed_kmh`'s own valid range, 5-60 (`UserSettingsPatch`'s bounds,
+  `app/schemas.py`), until the predicted total is within a second of the
+  actual. Bisection is valid because the predicted total is monotonically
+  decreasing in `flat_speed_kmh` across that whole range - raising the
+  flat-road speed can only shorten a segment, never lengthen one, since
+  every other factor (gradient, surface, the floor) is unchanged -
+  `test_ride_calibration.py` asserts this directly rather than assuming it.
+  A ride slower or faster than the model can express at either end of the
+  range clamps to that end rather than being excluded: the range boundary
+  is the closest representable answer, not a failure to solve.
 
 Per-ride results are combined with the **median**, not the mean, so one
 outlier ride - a long cafe stop folded into `moving_time_s`, a GPS
@@ -874,7 +876,7 @@ elapsed time) proportionally over the climb's share of the ride's total
 distance. This assumes the rider's average speed on the climb matches their
 average speed over the whole ride, which is false in the direction that
 matters - climbs are slower than flat and downhill sections - so the
-estimate systematically *underestimates* real time spent climbing. It is a
+estimate systematically _underestimates_ real time spent climbing. It is a
 coarse first cut, not a per-climb speed model, and is documented as such
 rather than presented as measured.
 
@@ -886,6 +888,88 @@ seeds a stranger's activity at the identical location through the session
 (not the API) specifically to pin it, after Sprint 1's PR3 shipped a
 `user_id` filter with 14 passing tests behind it that none of them actually
 exercised.
+
+## Riding totals
+
+`GET /api/activities/stats` answers "how much have I ridden": distance,
+moving time, ascent and ride count grouped by year, and by month within a
+year, rendered as `RideStatsCard.svelte` on `/activities`.
+
+**Two aggregate SQL queries, not a Python loop summing loaded rows.** One
+`GROUP BY` over `func.extract("year", Activity.started_at)` produces the
+per-year totals; a second `GROUP BY` over both the year and month
+expressions, restricted to rows with a non-null `started_at`, produces the
+per-month drill-down attached to each year in the response. `func.coalesce`
+around every `func.sum(...)` guards a bucket whose contributing values are
+all `NULL` (an activity with no `moving_time_s` at all) from turning
+`SUM`'s own NULL-for-empty-input into a `NULL` total for the whole bucket,
+rather than the real partial sum.
+
+**The undated bucket is not a special case bolted on afterwards - it falls
+out of the same `GROUP BY`.** `Activity.started_at` is nullable by design
+(a file can declare itself an activity and carry no usable timestamp, the
+same reason `GET /api/activities` falls back to `created_at` for
+ordering), and `func.extract` on a `NULL` timestamp returns `NULL`, which
+Postgres groups as its own bucket - `year: null` in the response, "Undated"
+in the UI - rather than excluding those rows from the aggregate. Because
+the year query has no `started_at IS NOT NULL` filter the month query
+needs (a `NULL` year and a `NULL` month would otherwise be indistinguishable
+from a genuine January with no rides), summing every bucket the year query
+returns, including the undated one, always equals the caller's unfiltered
+total. `test_api_ride_stats.py`'s
+`test_undated_bucket_reconciles_with_the_unfiltered_total` pins exactly
+that reconciliation, not just that the undated bucket exists.
+
+**Ordering is applied in Python, after both queries return** (newest year
+first, undated last, months ascending within a year) - `ORDER BY` on a
+`GROUP BY` aggregate would work here too, but the response shape (a year
+row carrying a nested list of its own months) already requires assembling
+`months_by_year` in Python from the second query's rows, so sorting there
+alongside it is one place rather than two.
+
+Declared before `/{activity_id}` in `api/activities.py`, for the same
+FastAPI route-ordering reason `/climbs` and `/heatmap-available` are - see
+the comment on `list_climb_log`.
+
+**Both queries carry their own `WHERE Activity.user_id == user.id`,
+independently.** They are two separate `SELECT`s, not one query reused, so
+one carrying the filter does not imply the other does. The month query's
+own filter is the one this PR's mutation check actually caught: with only
+`test_another_users_totals_are_never_visible` (a stranger with no rides of
+their own) in place, deleting the month query's `user_id` filter left every
+test green, because the year query alone already returns nothing for a
+rider with zero activities.
+`test_another_users_ride_in_the_same_month_never_inflates_your_own` closes
+that gap - two riders with an activity in the _same_ year and month, which
+only a `GROUP BY year, month` missing its own `user_id` filter would merge
+together, since both rows would otherwise have a real, matched year bucket
+to land in on both sides.
+
+**Known gap: buckets are UTC, not the rider's local calendar.**
+`Activity.started_at` is a `timestamptz`, which keeps only the absolute
+instant - the offset the source file carried is discarded at import, so
+there is nothing left to rebuild a local calendar from. `extract` therefore
+reports the database session's timezone, which is UTC.
+
+Measured: a rider west of UTC can see a New Year's Eve ride counted in the
+following year - 22:00 on 31 December US Pacific reports as year 2026,
+month 1. In the UK, year totals are unaffected, because 1 January falls in
+GMT and GMT is UTC; but a summer ride starting just after local midnight
+lands in the previous month, since 00:30 BST is 23:30 UTC the day before.
+
+Closing this properly means storing the rider's own offset alongside the
+instant - a schema change rather than a query change - so it is stated here
+rather than half-fixed by guessing a timezone. It is the same class of
+deliberate, documented gap as assistant and export strings staying metric
+while the UI honours the units toggle.
+
+**A bucket with no timing data reports `null`, not zero.** `moving_time_s`
+is the one nullable number in the aggregate: a file can declare itself a
+ride and carry no per-point timestamps at all. `format.ts`'s `duration()`
+renders null as "-" precisely so that state cannot read as a real,
+suspiciously fast ride, so the SUM is deliberately left uncoalesced and the
+field is nullable end to end. Distance and ascent stay coalesced - both are
+NOT NULL on the model, so a zero there is always a real sum.
 
 ## Cycle-network coverage
 
@@ -899,7 +983,7 @@ from the same member-way table `assemble_cycle_routes` collapses into
 
 Keeping that geometry looks like undoing what `ST_LineMerge` is for, and
 is not: the merge exists because unmerged parts resist simplification and
-made the overlay *tile* expensive, and this table is never tiled. Filtering
+made the overlay _tile_ expensive, and this table is never tiled. Filtering
 coverage through `cycle_ways.geom` instead - the obvious way to avoid a
 second copy - tests the bounding box of an entire national route. Measured
 on the England extract, a 12 km box around Tring selected 8,301 member ways
@@ -939,7 +1023,7 @@ contributions, was not worth the extra table for an infrequent action.
 ### Matching: map_snap, not edge_walk
 
 The surface breakdown (`services/valhalla.py: trace_attributes`) walks a
-route's *own* edges with `shape_match: edge_walk`, which requires the shape
+route's _own_ edges with `shape_match: edge_walk`, which requires the shape
 to already lie exactly on the routing graph - true of a route this app
 generated, never true of a raw GPS recording. Coverage instead uses
 `shape_match: map_snap` (`ValhallaClient.match_ways`), the same mode
@@ -1024,7 +1108,7 @@ shape. A third, the same family again, was found later and is not yet
 described there:
 
 - **Clipped before summed.** `cwm.geom && envelope` is a bounding-box
-  test, true the moment a way's *box* merely touches the query area, and
+  test, true the moment a way's _box_ merely touches the query area, and
   the unclipped `cwm.length_m` is the way's whole stored length regardless
   of how much of it actually falls inside. A box near Dover pulled in
   EuroVelo 2's 213.7 km cross-Channel ferry link - whose line never enters
@@ -1039,7 +1123,7 @@ described there:
 
 The `user_id` filter lives in the `LEFT JOIN`'s own `ON` clause, not a
 `WHERE` added after it - moving it to `WHERE` would turn the join into an
-inner one and silently drop every *unridden* way, which is backwards for a
+inner one and silently drop every _unridden_ way, which is backwards for a
 denominator. This is the one line that matters most for the same reason
 the heatmap's own `user_id` filter does:
 `tests/test_coverage.py::test_one_riders_coverage_never_counts_another_riders_ways`
@@ -1057,7 +1141,7 @@ ridden nothing" no matter which of those is actually true.
 ## All-roads coverage
 
 The second denominator alongside the signed-network one: "how much of
-*every* bikeable road near you have you ridden", not only the ways that
+_every_ bikeable road near you have you ridden", not only the ways that
 happen to carry a National/Regional/Local Cycle Network relation.
 
 **`osm_ways`** is published by the indexer, one row per OSM highway way
@@ -1079,14 +1163,14 @@ Extending the `osmium tags-filter` prefilter from "places, POIs and cycle
 routes" to "...and every bikeable way" is the whole cost of this feature.
 Measured on the England extract:
 
-| | Before (v0.3.0 - v0.6.0) | With all-roads coverage |
-|---|---|---|
-| Filtered extract | 45 MB | 469 MB |
-| Objects kept | places + POIs + cycle-route ways | + 6,477,862 more ways |
-| Pass B (extract + concurrent COPY) | ~25 s | ~6 min 18 s |
-| Indexer container peak memory | ~200 MB | ~772 MiB |
-| Assemble (simplify + measure) + publish | ~3 s | ~1 min 22 s |
-| **Total build time** | ~37 s | **~7 min 53 s** |
+|                                         | Before (v0.3.0 - v0.6.0)         | With all-roads coverage |
+| --------------------------------------- | -------------------------------- | ----------------------- |
+| Filtered extract                        | 45 MB                            | 469 MB                  |
+| Objects kept                            | places + POIs + cycle-route ways | + 6,477,862 more ways   |
+| Pass B (extract + concurrent COPY)      | ~25 s                            | ~6 min 18 s             |
+| Indexer container peak memory           | ~200 MB                          | ~772 MiB                |
+| Assemble (simplify + measure) + publish | ~3 s                             | ~1 min 22 s             |
+| **Total build time**                    | ~37 s                            | **~7 min 53 s**         |
 
 The `osmium tags-filter` prefilter is unaffected in memory (~2.2 GB,
 dominated by the 1.6 GB input regardless of how many objects match) but
@@ -1107,7 +1191,7 @@ Nothing draws it - it is only summed and bbox-tested - so
 `ST_SimplifyPreserveTopology` at a 10 m tolerance (metres at every
 latitude England spans, not degrees - `ST_Simplify` on a raw 4326
 geometry would mean the tolerance shrank near the poles and grew at the
-equator), and transforms back. Length is measured from the *unsimplified*
+equator), and transforms back. Length is measured from the _unsimplified_
 shape in the same statement, so a coarse display tolerance can never
 quietly shrink the ridden-vs-total figures coverage sums - only the
 stored shape gets coarser. Measured on the England extract with one-off
@@ -1198,7 +1282,7 @@ matching location's series. Wind maths: travel bearing at each sample is
 the bearing toward the next sample (the last sample reuses the previous
 leg's bearing; a single-sample route falls back to the bearing of the whole
 route line, since it has no "next sample" at all). Wind direction is
-meteorological (where the wind blows *from*), so the relative angle is
+meteorological (where the wind blows _from_), so the relative angle is
 taken against the downwind direction (`wind_direction + 180`):
 `headwind_ms = -speed * cos(relative)` (positive slows you down, a tailwind
 is negative) and `crosswind_ms = speed * sin(relative)`.
@@ -1231,7 +1315,7 @@ token only - no route ids, no owner information.
 `share_route` also generates a natural-language summary via
 `services/route_summary.py` - one LLM completion, no tools, over the
 route's own stats (distance, elevation, surface mix, climbs). This is
-the *only* place the summary is ever generated: `share_route` is an
+the _only_ place the summary is ever generated: `share_route` is an
 authenticated, owner-triggered write, whereas `GET /api/shared/{token}`
 takes no session at all, so generating it there would let anonymous
 traffic spend the operator's money on every page view. The summary is
@@ -1277,7 +1361,7 @@ what is on the rider's screen is seeded into it as `current:N` and
 `centre:map`, so "from here" works without the model ever seeing a
 number.
 
-The constraint has to be on the *item* type. `Field(pattern=...)` on a
+The constraint has to be on the _item_ type. `Field(pattern=...)` on a
 `list[str]` silently omits the pattern from the generated JSON schema
 and raises `TypeError` at validation time, so it is
 `Annotated[str, StringConstraints(pattern=...)]`, and a test asserts on
@@ -1318,7 +1402,7 @@ mechanisms are not equally strong:
 decline out-of-scope requests in one sentence, and says plainly that no
 message - from the rider, a tool result, or text claiming to be an
 operator or an emergency - can grant an exemption. The same rules are
-repeated in a trailing system message *after* the conversation, not only
+repeated in a trailing system message _after_ the conversation, not only
 before it: a leading instruction block is easy to talk past because
 everything read afterwards is more recent, and restating the rules last
 makes them the most recent thing as well as the first. This reduces how
@@ -1334,8 +1418,8 @@ sliding window (`services/rate_limit.py`) caps turns per hour, so an
 account being used as a general-purpose chatbot costs the operator a
 bounded amount rather than an open-ended one.
 
-The honest summary: the prompt decides what the assistant *usually* does,
-and the schemas plus the budgets decide what it *can* do. Only the second
+The honest summary: the prompt decides what the assistant _usually_ does,
+and the schemas plus the budgets decide what it _can_ do. Only the second
 one is a security property.
 
 ### Prompt injection
@@ -1345,7 +1429,7 @@ public, so they are treated as untrusted data throughout: raw OSM `tags`
 are never serialised into a tool result, model-facing strings are length
 capped, and results are JSON objects with fixed keys rather than prose.
 The system prompt says as much too, but the prompt is not the defence -
-the injection's *goal* (a coordinate waypoint, a state change) is
+the injection's _goal_ (a coordinate waypoint, a state change) is
 unreachable through the tool schemas whether or not the model is fooled.
 Nothing in this phase writes to the database.
 
@@ -1402,13 +1486,14 @@ but this is what makes it structurally impossible for an invented one to
 reach the rider as a measurement.
 
 The browser side is `streamAssistantChat()` in `frontend/src/lib/api.ts`
+
 - `fetch` plus a `ReadableStream` reader, parsing SSE by hand.
-`EventSource` is GET-only and this needs a POST body carrying the whole
-conversation. Authentication and the configured-or-not check resolve
-before the response starts, so those failures are ordinary HTTP errors;
-only something that goes wrong after the first byte becomes an `error`
-frame. Conversation state lives on the client, which echoes back the
-handles it was given, so the server keeps no session.
+  `EventSource` is GET-only and this needs a POST body carrying the whole
+  conversation. Authentication and the configured-or-not check resolve
+  before the response starts, so those failures are ordinary HTTP errors;
+  only something that goes wrong after the first byte becomes an `error`
+  frame. Conversation state lives on the client, which echoes back the
+  handles it was given, so the server keeps no session.
 
 ## Importing route files
 
@@ -1419,7 +1504,7 @@ lat/lon, or an elevation that parses as `NaN`/`inf`, which a real device
 can write and which Postgres refuses outright in a JSONB elevation
 profile; the point itself is kept, only its elevation is dropped). It
 also reads per-point timestamps
-where the file carries them, and records whether the file *declares*
+where the file carries them, and records whether the file _declares_
 itself a course or an activity - FIT says so in its `file_id` message and
 TCX in its element structure, while GPX has no equivalent and stays
 undeclared. Timestamps alone cannot make that call: Moovelo's own course
@@ -1543,6 +1628,7 @@ new inbound `hoveredClimb` prop (a translucent band behind the line) and
 line, sliced from `routeLine` with `gradient.ts`'s own `coordsBetween`)
 share one `hoveredClimbIndex` in `+page.svelte` - the same
 props/hover-callback shape as the POI panel and map already use.
+
 ## Realistic ride time
 
 `services/ride_time.py` turns Valhalla's flat routing duration into a
@@ -1613,8 +1699,9 @@ disagree about how far the same rider gets in the same 60 minutes, and nothing
 here tries to make them agree. Reconciling them would mean either teaching
 Valhalla's isochrone about a per-rider speed curve (it has no hook for one)
 or reimplementing reachability search on top of the ride-time model ourselves
+
 - both bigger than this feature - so the isochrone is presented as what it
-is: Valhalla's own answer, not the planner's.
+  is: Valhalla's own answer, not the planner's.
 
 ## Avoids
 
@@ -1640,7 +1727,7 @@ chips near the toolbar.
 `waypoints` - part of `PlannerSnapshot` (see the undo/redo design decision
 below), reset by `clear()` and by loading a saved route - but it is never
 written to `routes.exclude_locations` or any other persisted column. An
-avoid is a *routing input*, and the route's saved geometry already reflects
+avoid is a _routing input_, and the route's saved geometry already reflects
 whatever avoids shaped it while planning; storing the list separately would
 only matter if the rider wanted the route re-planned later with the same
 exclusions restored (e.g. after a road reopens), which nothing today asks
@@ -1731,7 +1818,7 @@ muted ghost lines on the map (clickable - clicking one adopts it, same as
 its "Use" row in the small list beside the toolbar). Adopting an alternate
 is the first real use of `PlannerSnapshot.routeOverride` (see
 [Design decisions](#design-decisions)): the waypoints, preset and costing
-options are unchanged, only the route *output* is being swapped for one
+options are unchanged, only the route _output_ is being swapped for one
 Valhalla already computed, so undo has to restore the previous response
 directly rather than replay `reroute()`, which would just fetch the primary
 again. The fetched list is invalidated - cleared, along with the ghost
@@ -1766,7 +1853,6 @@ Imported routes are marked `source = imported`. Their waypoints are only
 the endpoints, so re-routing one in the planner would discard the
 imported track: the planner asks before the first edit, and a route that
 is re-routed stops being an import.
-
 
 ## Frontend structure
 
@@ -1815,6 +1901,7 @@ frontend/src/
         ├── AssistantPanel.svelte     # chat log, tool status, stop, proposal card
         ├── CoverageCard.svelte       # /activities: cycle-network + all-roads %, "Match older rides"
         ├── ClimbLogCard.svelte       # /activities: deduplicated personal climb log
+        ├── RideStatsCard.svelte      # /activities: yearly/monthly distance, moving time, ascent, ride count
         └── WaypointList.svelte       # route-order list: reorder (drag or up/down), remove, reverse-geocoded names
 ```
 
@@ -1840,7 +1927,7 @@ backend/app/
 │                            #   SearchIndexMeta, UserSettings, LLMSettings
 ├── schemas.py               # request/response models
 ├── api/
-│   ├── activities.py        # /api/activities: import, list, read, delete, heatmap tiles
+│   ├── activities.py        # /api/activities: import, list, read, delete, heatmap tiles, stats
 │   ├── coverage.py          # /api/coverage: cycle-network % + all-roads %, backfill queue/status
 │   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface,
 │   │                        #   /api/route/isochrone, /api/route/loop, /api/route/alternates
@@ -1982,7 +2069,7 @@ about extract coverage when no roads are found near a waypoint.
   network-first, so a live network always wins; offline, they fall back to
   the one precached shell (every route renders from the same document, so
   there is nothing per-URL worth storing). Precaching the shell matters
-  because the navigation that *registers* the worker is never controlled by
+  because the navigation that _registers_ the worker is never controlled by
   it - without it, the first offline load would white-screen.
   - **Update behaviour is deliberately conservative** - no
     `skipWaiting`/`clients.claim`. A tab already open when a new version
@@ -2015,7 +2102,7 @@ about extract coverage when no roads are found near a waypoint.
   categories and POI marker colours are fixed in both themes for the same
   reason: they are already chosen for contrast against the map, not the
   page chrome. **`--accent` and `--danger` stay flat** across both themes
-  because buttons rely on white text over them, but their *text* uses is
+  because buttons rely on white text over them, but their _text_ uses is
   split into separate tokens, `--link` and `--danger-text`, brightened in
   dark (`#4ea6e6` / `#ff6b64` against Solarized's `#268bd2` / `#dc322f`) to
   clear WCAG AA on the dark surface - the flat accent colours fail AA as
@@ -2052,7 +2139,7 @@ about extract coverage when no roads are found near a waypoint.
   restores a snapshot by setting those inputs and calling `reroute()` -
   the same path an ordinary edit takes. `PlannerSnapshot.routeOverride` is
   the one deliberate exception, for actions that replace the route
-  *output* without changing any input, where replaying inputs through
+  _output_ without changing any input, where replaying inputs through
   `reroute()` cannot reproduce the exact response and the snapshot restores
   it directly instead. Adopting a [route alternate](#route-alternates) is
   the first real user of it: the waypoints/preset/costing are identical to
@@ -2063,7 +2150,7 @@ about extract coverage when no roads are found near a waypoint.
   which is safe because `source` itself travels inside the snapshot, so
   undoing back into an imported route's territory still shows it as
   imported. The saved-route identity (`savedId`/`savedName`) travels in
-  the snapshot too and is restored *exactly*, null included: undoing past
+  the snapshot too and is restored _exactly_, null included: undoing past
   the point a route was saved detaches it, because what is on screen is no
   longer that library row. Re-attaching without ever detaching was tried
   and is worse - it leaves the row attached while the waypoints wander
@@ -2091,9 +2178,9 @@ about extract coverage when no roads are found near a waypoint.
 
 ## Ports
 
-| Service | Port | Exposure |
-|---------|------|----------|
-| Vite dev server | 5173 | localhost only, dev profile |
-| Backend | 17777 | localhost in dev; host port in prod (reverse proxy in front) |
-| Valhalla | 8002 | compose network only, never published |
-| Postgres | 5433 | 127.0.0.1 only (used by the backend test suite) |
+| Service         | Port  | Exposure                                                     |
+| --------------- | ----- | ------------------------------------------------------------ |
+| Vite dev server | 5173  | localhost only, dev profile                                  |
+| Backend         | 17777 | localhost in dev; host port in prod (reverse proxy in front) |
+| Valhalla        | 8002  | compose network only, never published                        |
+| Postgres        | 5433  | 127.0.0.1 only (used by the backend test suite)              |

@@ -476,6 +476,35 @@ export interface HeatmapAvailability {
 	available: boolean;
 }
 
+/** One calendar month's totals within a year - see ActivityYearStats.
+ * Mirrors backend/app/schemas.py ActivityMonthStats. */
+export interface ActivityMonthStats {
+	month: number;
+	count: number;
+	distance_m: number;
+	moving_time_s: number | null;
+	ascent_m: number;
+}
+
+/** One year's riding totals, as GET /api/activities/stats groups them.
+ * `year` is null for the "undated" bucket - rides with no started_at, a
+ * real state and not one this endpoint drops. Mirrors
+ * backend/app/schemas.py ActivityYearStats. */
+export interface ActivityYearStats {
+	year: number | null;
+	count: number;
+	distance_m: number;
+	moving_time_s: number | null;
+	ascent_m: number;
+	months: ActivityMonthStats[];
+}
+
+/** Mirrors backend/app/schemas.py ActivityStatsResponse. Newest year first,
+ * the undated bucket (if any) last. */
+export interface ActivityStatsResponse {
+	years: ActivityYearStats[];
+}
+
 /** Ridden vs total metres of one network tier (icn/ncn/rcn/lcn) within a
  * bbox. Mirrors backend/app/schemas.py NetworkCoverage. */
 export interface NetworkCoverage {
@@ -602,6 +631,9 @@ export const activities = {
 	 * worth showing at all - a rider with nothing imported gets no control
 	 * that would only ever fetch empty tiles. */
 	heatmapAvailable: () => request<HeatmapAvailability>('/api/activities/heatmap-available'),
+	/** Yearly (and monthly-within-year) riding totals for the stats panel on
+	 * /activities. */
+	stats: () => request<ActivityStatsResponse>('/api/activities/stats'),
 	/** The heatmap tile URL template for MapLibre's vector source. No cache-
 	 * busting version query param, unlike the cycle-network overlay's: these
 	 * tiles are `private, no-cache` with an ETag (services/heatmap.py), so
