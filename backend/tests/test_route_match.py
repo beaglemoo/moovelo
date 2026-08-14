@@ -1170,9 +1170,7 @@ async def test_a_due_north_route_matches_its_own_ride(
     assert activity.match_confidence == pytest.approx(1.0, rel=0.03)
 
 
-async def test_a_due_east_route_matches_its_own_ride(
-    client: AsyncClient, db: AsyncSession
-) -> None:
+async def test_a_due_east_route_matches_its_own_ride(client: AsyncClient, db: AsyncSession) -> None:
     """The other axis. The degeneracy is not specific to north - a bearing
     sweep measured covered_len 0 at both 0 and 90 degrees and full coverage
     at every bearing between, so fixing only the one this was first noticed
