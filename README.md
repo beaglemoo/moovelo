@@ -131,6 +131,17 @@ with turn-by-turn cues.
   both from your own activities map-matched onto OpenStreetMap way ids.
   Nothing here leaves your network - see the
   [FAQ](docs/faq.md#does-any-of-my-data-leave-my-network).
+- Ride-to-route matching: an imported ride is automatically linked to the
+  saved route it followed, so /activities can show "this ride was your
+  Canal loop route" without you saying so. Matching is entirely geometric -
+  a cheap bounding-box narrowing over your own routes, confirmed with
+  PostGIS's `ST_FrechetDistance` (line-shape similarity, not just endpoint
+  distance, and checked in both directions so a route ridden backwards
+  still matches) - no external service, and it never looks at another
+  rider's routes. The distance threshold is provisional and will be tuned
+  against real ride data; you can always correct or clear a match by hand
+  (`PUT /api/activities/{id}/route`), which locks it so a later automatic
+  pass never overwrites your choice.
 
 ## Route intelligence
 

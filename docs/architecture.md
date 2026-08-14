@@ -124,12 +124,18 @@ re-importing an overlapping export adds only what is new, while the many
 hand-uploaded rides with no natural identifier do not collide with each
 other.
 
-`/api/activities` covers import, list, read and delete. There is no update
-endpoint: an activity is a record of what happened, and the heatmap and
-coverage built from it would mean nothing in particular if it could be
-rewritten. Reads return the trace as polyline6, the same encoding the
-planner already decodes for route legs, so an activity draws through the
-path everything else on the map uses.
+`/api/activities` covers import, list, read and delete. There is no
+general update endpoint: an activity is a record of what happened, and the
+heatmap and coverage built from it would mean nothing in particular if it
+could be rewritten. Reads return the trace as polyline6, the same encoding
+the planner already decodes for route legs, so an activity draws through
+the path everything else on the map uses.
+
+The one thing an activity *can* be edited to carry is which saved route it
+matches - that does not change what the ride was, only what it is
+associated with, and a rider correcting a wrong or missing automatic match
+is exactly the case the endpoint exists for. See
+[Ride-to-route matching](#ride-to-route-matching).
 
 Parsing runs in a worker thread rather than on the event loop. It is pure
 CPU and it is not cheap - a four-hour ride recorded at 1 Hz measures at
@@ -561,6 +567,76 @@ power rider's mid-zoom tiles are genuinely larger than the cycle
 network's merged, country-wide 50 kB tile. This is worth watching rather
 than ignoring - grid aggregation is the documented fallback if real usage
 turns out worse than this synthetic county-scale rider.
+
+## Ride-to-route matching
+
+`services/route_match.py` links an imported ride to the saved route it
+followed, so `/activities` can say "this was your Canal loop route"
+without the rider telling it so. Two stages, the same shape as the POI
+query's index-narrow-then-exact-test pattern (see
+[POIs along a route](#pois-along-a-route)):
+
+1. **Candidate narrowing**, cheap and index-backed: `routes.geom &&
+   activities.geom` (a bounding-box overlap test, served by the GiST index
+   on each column). `routes.geom`'s own index is named `ix_routes_geom` in
+   the migration but `idx_routes_geom` in the ORM's metadata (see
+   `models.py`'s comment on `Route.geom`) - a harmless divergence that this
+   is the first query to actually depend on the index existing at all,
+   rather than merely on it being named consistently; `&&` is served
+   regardless of what the index is called. Narrowing also applies a
+   distance-ratio prefilter (the candidate route's `distance_m` within
+   roughly half to double the activity's own), capped at 25 candidates so
+   a pathological library cannot make this unbounded.
+2. **Confirmation**, exact, on survivors only: PostGIS's
+   `ST_FrechetDistance`, which measures how far apart two lines are
+   *shaped* rather than merely how close their endpoints land - nothing
+   else in the app used this function before now. It has no geography
+   form, so both lines are projected to EPSG:3857 and simplified
+   (`ST_Simplify`, 20 m tolerance) before the O(n×m) comparison runs.
+
+Two corrections on the raw Frechet result, both required for the number to
+mean what it claims:
+
+- **Web Mercator's scale is not uniform.** It grows as `1 / cos(latitude)`,
+  so a "150 m" Frechet distance computed in EPSG:3857 is really about 93 m
+  on the ground at the UK's ~51.8°N (`1 / cos(51.8°) ≈ 1.62`). The query
+  multiplies by `cos(latitude)` of the activity's own centroid to convert
+  back to true ground metres. `tests/test_route_match.py`'s dedicated
+  Mercator test is built so it only passes with the correction in place -
+  a fixture whose true offset is under the match threshold but whose
+  *uncorrected* EPSG:3857 distance would read over it.
+- **Frechet distance is direction-sensitive** - it walks both lines start
+  to start, so a route ridden in reverse scores as though it were a
+  different shape. The match is computed against both the candidate route
+  and `ST_Reverse(route.geom)`, and the smaller of the two wins.
+
+`MAX_MATCH_DISTANCE_M` (150 m) is a **provisional** threshold - a round
+number comfortably above GPS/routing noise and comfortably below "a
+different road", not yet tuned against real ride/route geometry. Staging
+verification against genuine GPS traces is expected to move it.
+
+Matching runs **inline**, not through a queue, right after an activity
+commits - both in `POST /api/activities/import` and in the Strava archive
+worker. Unlike way-matching (`services/way_matching.py`), which needs a
+Valhalla round trip per chunk and therefore a background worker, route
+matching is a single SQL query against the rider's own already-saved
+routes, so there is nothing here that benefits from being queued - and
+Sprint 1 spent eight review rounds on bugs introduced by queue lifetimes
+that a genuinely queue-free feature does not need to risk. A matching
+failure never fails the import: it is caught, logged, and the ride is kept
+- the ride is the valuable thing, its route link is an enrichment.
+
+A rider can always override the result: `PUT /api/activities/{id}/route`
+sets or clears the link by hand (body `{"route_id": <uuid> | null}`,
+ownership-checked on both the activity and the target route), and
+`POST /api/activities/{id}/rematch` re-runs the automatic match for one
+ride. Either way, setting or clearing a match by hand sets
+`Activity.match_locked`, which `match_activity_to_route` checks first and
+treats as a hard no-op - an automatic pass must never overwrite a human
+decision, including the decision that a ride has no matching route at all.
+`Activity.route_id` is `ON DELETE SET NULL`, not `CASCADE`: deleting the
+route a ride was matched against must not delete the ride itself, it just
+loses its link.
 
 ## Cycle-network coverage
 
