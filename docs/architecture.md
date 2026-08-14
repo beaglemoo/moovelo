@@ -583,10 +583,19 @@ query's index-narrow-then-exact-test pattern (see
    `models.py`'s comment on `Route.geom`) - a harmless divergence that this
    is the first query to actually depend on the index existing at all,
    rather than merely on it being named consistently; `&&` is served
-   regardless of what the index is called. Narrowing also applies a loose
-   distance-ratio prefilter (the candidate route's `distance_m` within
-   roughly half to double the activity's own), capped at 25 candidates so
-   a pathological library cannot make this unbounded.
+   regardless of what the index is called. Narrowing also applies a
+   distance-ratio prefilter - deliberately the *same* band the decision
+   itself uses, since a route outside it could never win, and admitting it
+   would only spend the candidate cap on rows destined to be discarded.
+   The list is capped at 25 so a pathological library cannot make this
+   unbounded, and is **ordered by centroid distance before that cap
+   applies**: a `LIMIT` without an `ORDER BY` lets Postgres return any
+   qualifying rows it likes, so a rider with more overlapping routes than
+   the cap could have the true match cut purely on physical row order - and
+   a dropped candidate is indistinguishable from "nothing matched".
+   Ordering on closeness of *length* does not work, which is worth knowing:
+   variants of the same route usually have near-identical distances, so
+   every candidate ties and the cap goes back to cutting arbitrarily.
 2. **Confirmation**, exact, on survivors only: **bidirectional coverage**,
    not `ST_FrechetDistance` as originally planned - both lines are
    projected to EPSG:3857, simplified, and the fraction of each one's
@@ -683,6 +692,22 @@ decision, including the decision that a ride has no matching route at all.
 `Activity.route_id` is `ON DELETE SET NULL`, not `CASCADE`: deleting the
 route a ride was matched against must not delete the ride itself, it just
 loses its link.
+
+`SET NULL` is pure DDL, though - it nulls `route_id` and touches nothing
+else - so on its own it left `match_confidence` behind: a coverage score
+describing a route that no longer existed. A trigger
+(`activities_clear_match_confidence`, migration 0017, and mirrored on the
+table metadata because the test databases are built by `create_all` rather
+than Alembic) nulls the score whenever `route_id` is null. It lives in the
+database rather than in the delete endpoint so the invariant holds for
+every path that can null the column, including a bulk delete or a psql
+session during an incident.
+
+It deliberately does **not** touch `match_locked`. Clearing a link by hand
+sets `route_id` null and `match_locked` true *together* - that pairing is
+how a rider says "there is no route for this ride, stop guessing" - so a
+trigger that reset the flag whenever `route_id` went null would silently
+undo the rider's own decision and let the next auto-match re-link the ride.
 
 ## Cycle-network coverage
 
