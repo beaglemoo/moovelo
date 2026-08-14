@@ -51,6 +51,7 @@
 	import { beforeNavigate } from '$app/navigation';
 	import { units } from '$lib/units.svelte';
 	import { unsaved } from '$lib/unsaved.svelte';
+	import { panelSize, MIN_PANEL_HEIGHT } from '$lib/panel.svelte';
 	import { onDestroy } from 'svelte';
 
 	let waypoints: Waypoint[] = $state([]);
@@ -279,6 +280,55 @@
 	onDestroy(() => {
 		unsaved.dirty = false;
 	});
+
+	// The bottom info panel is drag-resizable and collapsible so the map can be
+	// given more room for placing waypoints (panelSize, persisted per browser).
+	// Tracked so a height saved on a taller screen is clamped to this viewport.
+	let viewportHeight = $state(1000);
+	// The panel is the last row and sits flush with the viewport bottom, so its
+	// height is the distance from the drag pointer to the bottom edge. Clamp the
+	// top of the range to leave the map at least its 260px floor plus the nav.
+	const maxPanelHeight = $derived(Math.max(MIN_PANEL_HEIGHT, viewportHeight - 320));
+	const effectivePanelHeight = $derived(
+		panelSize.height === null ? null : Math.min(panelSize.height, maxPanelHeight)
+	);
+	let resizing = $state(false);
+
+	// pointermove/up on window, not the handle: a fast drag outruns the element,
+	// and releasing off the thin strip must still end the resize (the same
+	// window-not-element lesson as drag-to-reroute's drop).
+	function startPanelResize(event: PointerEvent) {
+		event.preventDefault();
+		resizing = true;
+		let latest = panelSize.height ?? 260;
+		const onMove = (ev: PointerEvent) => {
+			latest = Math.min(window.innerHeight - ev.clientY, maxPanelHeight);
+			panelSize.previewHeight(latest);
+		};
+		const onUp = () => {
+			resizing = false;
+			panelSize.setHeight(latest); // persist once, on release
+			window.removeEventListener('pointermove', onMove);
+			window.removeEventListener('pointerup', onUp);
+		};
+		window.addEventListener('pointermove', onMove);
+		window.addEventListener('pointerup', onUp);
+	}
+
+	// Keyboard resize for the separator: arrows nudge, Enter/Space collapse.
+	function onPanelHandleKey(event: KeyboardEvent) {
+		const current = effectivePanelHeight ?? 260;
+		if (event.key === 'ArrowUp') {
+			event.preventDefault();
+			panelSize.setHeight(Math.min(current + 24, maxPanelHeight));
+		} else if (event.key === 'ArrowDown') {
+			event.preventDefault();
+			panelSize.setHeight(current - 24);
+		} else if (event.key === 'Enter' || event.key === ' ') {
+			event.preventDefault();
+			panelSize.toggleCollapsed();
+		}
+	}
 
 	// Leaving the planner with unsaved edits discards them: a nav link
 	// unmounts it, and a ?route= load (opening a library route, an import
@@ -1395,7 +1445,7 @@
 	});
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} bind:innerHeight={viewportHeight} />
 
 <div class="app">
 	<div class="map-area">
@@ -1657,67 +1707,107 @@
 	</div>
 
 	{#if route}
-		<div class="panel">
-			<div class="stats">
-				<span><strong>{distance(route.distance_m, units.system)}</strong></span>
-				<span title={route.ride_time.length ? 'Estimated for your rider profile' : undefined}>
-					{formatDuration(
-						route.ride_time.length
-							? route.ride_time[route.ride_time.length - 1].time_s
-							: route.duration_s
-					)}
-				</span>
-				{#if route.ride_time.length}
-					<a class="ride-time-link" href="/settings">rider profile</a>
-				{/if}
-				<span>↗ {elevation(route.ascent_m, units.system)}</span>
-				<span>↘ {elevation(route.descent_m, units.system)}</span>
+		<div
+			class="panel"
+			class:collapsed={panelSize.collapsed}
+			class:resizing
+			style:height={panelSize.collapsed || effectivePanelHeight === null
+				? null
+				: `${effectivePanelHeight}px`}
+			style:max-height={panelSize.collapsed || effectivePanelHeight === null ? null : 'none'}
+		>
+			<!-- Grab strip: drag to resize, click the chevron to collapse. A
+			     focusable separator is the WAI-ARIA window-splitter pattern -
+			     operable by arrow keys (onPanelHandleKey), so the tabindex and
+			     key/pointer handlers are correct here despite the generic rule. -->
+			<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+			<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+			<div
+				class="panel-handle"
+				role="separator"
+				aria-orientation="horizontal"
+				aria-label="Resize route details panel"
+				aria-valuenow={panelSize.collapsed ? 0 : (effectivePanelHeight ?? 260)}
+				tabindex="0"
+				onpointerdown={startPanelResize}
+				onkeydown={onPanelHandleKey}
+			>
+				<span class="grip" aria-hidden="true"></span>
+				<button
+					type="button"
+					class="collapse-btn"
+					onpointerdown={(e) => e.stopPropagation()}
+					onclick={() => panelSize.toggleCollapsed()}
+					aria-label={panelSize.collapsed ? 'Expand route details' : 'Collapse route details'}
+					aria-expanded={!panelSize.collapsed}
+				>
+					{panelSize.collapsed ? '▲' : '▼'}
+				</button>
 			</div>
-			{#if route.surface && route.surface.total_m > 0}
-				<SurfaceBar surface={route.surface} />
-			{/if}
-			<div class="panel-body">
-				<ElevationProfile
-					elevation={route.elevation}
-					onHover={handleElevationHover}
-					{hoveredClimb}
-				/>
-				<WaypointList
-					{waypoints}
-					searchEnabled={config?.search_enabled ?? false}
-					hoveredIndex={hoveredWaypointIndex}
-					onHover={(i) => (hoveredWaypointIndex = i)}
-					onReorder={reorderWaypoint}
-					onRemove={removeWaypoint}
-				/>
-				{#if route.climbs.length > 0}
-					<ClimbsList
-						climbs={route.climbs}
-						hoveredIndex={hoveredClimbIndex}
-						onHover={(i) => (hoveredClimbIndex = i)}
-					/>
-				{/if}
-				{#if config?.search_enabled}
-					<PoiPanel
-						{pois}
-						truncated={poisTruncated}
-						loading={poisLoading}
-						selected={poiGroups}
-						hoveredId={hoveredPoiId}
-						onToggleGroup={togglePoiGroup}
-						onHover={(id) => (hoveredPoiId = id)}
-					/>
-				{/if}
-				{#if config?.weather_enabled}
-					<WeatherPanel
-						startTime={weatherStartTime}
-						onStartTimeChange={(value) => (weatherStartTime = value)}
-						loading={windLoading}
-						error={windError}
-						segments={windSegments}
-						truncated={windTruncated}
-						onShowWind={showWind}
-					/>
+			<div class="panel-scroll">
+				<div class="stats">
+					<span><strong>{distance(route.distance_m, units.system)}</strong></span>
+					<span title={route.ride_time.length ? 'Estimated for your rider profile' : undefined}>
+						{formatDuration(
+							route.ride_time.length
+								? route.ride_time[route.ride_time.length - 1].time_s
+								: route.duration_s
+						)}
+					</span>
+					{#if route.ride_time.length}
+						<a class="ride-time-link" href="/settings">rider profile</a>
+					{/if}
+					<span>↗ {elevation(route.ascent_m, units.system)}</span>
+					<span>↘ {elevation(route.descent_m, units.system)}</span>
+				</div>
+				{#if !panelSize.collapsed}
+					{#if route.surface && route.surface.total_m > 0}
+						<SurfaceBar surface={route.surface} />
+					{/if}
+					<div class="panel-body">
+						<ElevationProfile
+							elevation={route.elevation}
+							onHover={handleElevationHover}
+							{hoveredClimb}
+						/>
+						<WaypointList
+							{waypoints}
+							searchEnabled={config?.search_enabled ?? false}
+							hoveredIndex={hoveredWaypointIndex}
+							onHover={(i) => (hoveredWaypointIndex = i)}
+							onReorder={reorderWaypoint}
+							onRemove={removeWaypoint}
+						/>
+						{#if route.climbs.length > 0}
+							<ClimbsList
+								climbs={route.climbs}
+								hoveredIndex={hoveredClimbIndex}
+								onHover={(i) => (hoveredClimbIndex = i)}
+							/>
+						{/if}
+						{#if config?.search_enabled}
+							<PoiPanel
+								{pois}
+								truncated={poisTruncated}
+								loading={poisLoading}
+								selected={poiGroups}
+								hoveredId={hoveredPoiId}
+								onToggleGroup={togglePoiGroup}
+								onHover={(id) => (hoveredPoiId = id)}
+							/>
+						{/if}
+						{#if config?.weather_enabled}
+							<WeatherPanel
+								startTime={weatherStartTime}
+								onStartTimeChange={(value) => (weatherStartTime = value)}
+								loading={windLoading}
+								error={windError}
+								segments={windSegments}
+								truncated={windTruncated}
+								onShowWind={showWind}
+							/>
+						{/if}
+					</div>
 				{/if}
 			</div>
 		</div>
@@ -2014,13 +2104,76 @@
 		color: #fff;
 	}
 	/* Paired with .map-area's floor: the panel yields first and scrolls
-	   internally, rather than pushing the map out of the viewport. */
+	   internally, rather than pushing the map out of the viewport. A column so
+	   the drag handle stays pinned while .panel-scroll takes the overflow.
+	   `height`/`max-height` are set inline once the rider drags the handle
+	   (panelSize); until then this max-height is the content-driven default. */
 	.panel {
 		background: var(--surface);
 		border-top: 1px solid var(--border);
-		padding: 0.4rem 0.8rem 0.2rem;
+		display: flex;
+		flex-direction: column;
 		max-height: 55vh;
+		min-height: 0;
+	}
+	.panel-scroll {
+		flex: 1 1 auto;
+		min-height: 0;
 		overflow-y: auto;
+		padding: 0 0.8rem 0.2rem;
+	}
+	/* The grab strip. Full width so anywhere along the top edge starts a
+	   resize; `ns-resize` and a centred pill signal the affordance. */
+	.panel-handle {
+		flex: 0 0 auto;
+		position: relative;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 16px;
+		cursor: ns-resize;
+		touch-action: none;
+		border-bottom: 1px solid transparent;
+	}
+	.panel-handle:hover,
+	.panel-handle:focus-visible {
+		border-bottom-color: var(--border);
+		outline: none;
+	}
+	.panel-handle:focus-visible {
+		box-shadow: inset 0 0 0 2px var(--accent);
+	}
+	.panel-handle .grip {
+		width: 44px;
+		height: 4px;
+		border-radius: 2px;
+		background: var(--border-strong, var(--border));
+	}
+	.panel-handle:hover .grip {
+		background: var(--text-muted);
+	}
+	/* Suppresses the scrollbar flicker and text selection while dragging. */
+	.panel.resizing {
+		user-select: none;
+	}
+	.panel.resizing .panel-scroll {
+		overflow-y: hidden;
+	}
+	.collapse-btn {
+		position: absolute;
+		right: 6px;
+		top: 50%;
+		transform: translateY(-50%);
+		background: none;
+		border: 0;
+		color: var(--text-muted);
+		cursor: pointer;
+		font-size: 0.7rem;
+		line-height: 1;
+		padding: 4px 6px;
+	}
+	.collapse-btn:hover {
+		color: var(--text);
 	}
 	/* Chart and POI list side by side on a desktop, stacked on a phone -
 	   the chart needs width, the list needs height, and neither wins on a
