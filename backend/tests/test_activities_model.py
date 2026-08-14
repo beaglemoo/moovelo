@@ -15,7 +15,9 @@ from app.services.activities import (
     strava_activity_id,
     track_geometry,
 )
-from app.services.importer import parse_route_file
+from app.services.climbs import detect_climbs
+from app.services.geo import destination_point
+from app.services.importer import ImportedTrack, TrackPoint, elevation_profile, parse_route_file
 
 GPX_RIDE = b"""<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
@@ -38,6 +40,38 @@ GPX_NO_TIME = b"""<?xml version="1.0" encoding="UTF-8"?>
   </trkseg></trk>
 </gpx>
 """
+
+
+def _climbing_track() -> ImportedTrack:
+    """A synthetic 5 km @ 6% climb - the same shape test_climbs.py's own
+    detection fixtures use - built as an ImportedTrack rather than parsed
+    from a file, since GPX_RIDE above is far too short and shallow to
+    detect anything (below climbs.py's own length/gain minimums)."""
+    start = (51.8000, -0.6500)
+    points = []
+    dist, elev = 0.0, 100.0
+    while dist <= 5000.0:
+        lat, lon = destination_point(start, 0.0, dist)
+        points.append(TrackPoint(lat=lat, lon=lon, ele=elev))
+        dist += 100.0
+        elev += 100.0 * 0.06
+    return ImportedTrack(name="Climb", points=points, source_format="gpx")
+
+
+def test_activity_from_track_stores_detected_climbs() -> None:
+    """Both import paths - POST /api/activities/import
+    (api/activities.py) and the Strava archive worker
+    (services/activity_import.py) - build their Activity through this one
+    function, so wiring detect_climbs in here rather than at either call
+    site covers both at once. Checked against detect_climbs' own output
+    over the same elevation profile, not a hand-picked category, so this
+    breaks if the wiring - or the profile it is fed - ever diverges."""
+    track = _climbing_track()
+    activity = activity_from_track(track, user_id=uuid.uuid4(), fallback_name="ride")
+
+    expected = [climb.model_dump() for climb in detect_climbs(elevation_profile(track))]
+    assert expected, "fixture must actually produce a detectable climb"
+    assert activity.climbs == expected
 
 
 async def _user(db: AsyncSession, email: str = "rider@example.com") -> User:
