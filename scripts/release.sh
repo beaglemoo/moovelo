@@ -34,15 +34,26 @@ fi
 
 # Refuse to build a release whose version manifests disagree with the tag -
 # a stale backend/pyproject.toml or frontend/package.json must never reach
-# an image tagged $VERSION. The lockfile carries the version twice
+# an image tagged $VERSION. The npm lockfile carries the version twice
 # (top-level and packages[""]) and the two can drift independently; it sat
 # at 0.1.0 for six releases before this check. Regenerate it with
 # `npm install --package-lock-only` after bumping package.json.
+#
+# backend/uv.lock is the fifth, added after it was found sitting at 0.7.1
+# while pyproject.toml said 0.8.1 - stale since v0.8.0 and missed because
+# this list only knew about four. Regenerate it with `uv lock` from
+# backend/. The recurring lesson is that the count keeps being wrong: it
+# was "three manifests" until v0.7.1, four until now. Before adding a
+# sixth, prefer a check that finds version-bearing files rather than one
+# that lists them.
 PY_V=$(grep -m1 '^version = ' backend/pyproject.toml | cut -d'"' -f2)
+UV_LOCK_V=$(grep -A2 '^name = "moovelo-backend"$' backend/uv.lock |
+	grep -m1 '^version = ' | cut -d'"' -f2)
 FE_V=$(node -p "require('./frontend/package.json').version")
 LOCK_TOP_V=$(node -p "require('./frontend/package-lock.json').version")
 LOCK_PKG_V=$(node -p "require('./frontend/package-lock.json').packages[''].version")
-for pair in "backend/pyproject.toml:$PY_V" "frontend/package.json:$FE_V" \
+for pair in "backend/pyproject.toml:$PY_V" "backend/uv.lock:$UV_LOCK_V" \
+	"frontend/package.json:$FE_V" \
 	"frontend/package-lock.json (version):$LOCK_TOP_V" \
 	"frontend/package-lock.json (packages[\"\"].version):$LOCK_PKG_V"; do
 	f="${pair%%:*}"
