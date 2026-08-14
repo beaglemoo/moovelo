@@ -926,3 +926,41 @@ async def test_an_explicit_rematch_clears_a_stale_match_and_it_persists(
         select(Activity.match_confidence).where(Activity.id == activity_id)
     )
     assert confidence is None
+
+
+async def test_a_failing_commit_does_not_escape_the_matcher(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "Never raises" has to include the commit, which is the risky part.
+
+    The attribute assignments do not flush until the commit runs, so that one
+    call is the most exposed to a real operational failure - a dropped
+    connection, a deadlock, a statement timeout - and it briefly sat outside
+    the try/except that makes this function safe to call.
+
+    It matters because _rematch_linked_activities iterates this with no
+    try/except of its own, from a PATCH whose route save has already
+    committed: an escape there 500s a request that actually succeeded and
+    silently abandons every remaining ride's re-derive.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id = activity.id
+
+    original = AsyncSession.commit
+
+    async def _boom(self: AsyncSession) -> None:
+        raise RuntimeError("simulated commit failure")
+
+    monkeypatch.setattr(AsyncSession, "commit", _boom)
+    try:
+        matched = await match_activity_to_route(db, activity_id)
+    finally:
+        monkeypatch.setattr(AsyncSession, "commit", original)
+
+    assert matched is None, "a failed commit is a failed match, not an exception"

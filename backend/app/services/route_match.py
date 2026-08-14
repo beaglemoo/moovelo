@@ -366,12 +366,37 @@ async def match_activity_to_route(
                 changed = True
     except Exception:  # noqa: BLE001 - see the "Never raises" docstring note above
         logger.warning("route match failed for activity %s", activity_id, exc_info=True)
+        # Deliberately no rollback here: exiting the SAVEPOINT has already
+        # unwound the failed statement, and a plain rollback would expire every
+        # object the caller had loaded - which is the bug the SAVEPOINT was
+        # introduced to avoid in the first place, documented above.
         return None
 
-    # get_db (app/db.py) has no auto-commit, so without this the write is lost
-    # on rollback-at-close the way any other would be. Guarded on `changed` so
-    # a no-op match does not commit a caller's unrelated pending work as a
-    # side effect of asking a question.
+    # Its own try, because a failed COMMIT is a different failure from a failed
+    # query and needs the opposite handling. Nothing flushes until this runs,
+    # so it is the statement most exposed to a real operational fault - a
+    # dropped connection, a deadlock, a statement timeout - and it briefly sat
+    # outside the block above, which made "never raises" false for exactly the
+    # call most likely to fail. _rematch_linked_activities iterates this with
+    # no try/except of its own, from a PATCH whose route save has already
+    # committed, so an escape there 500s a request that actually succeeded and
+    # silently abandons every remaining ride's re-derive.
+    #
+    # Guarded on `changed` so a no-op match does not commit a caller's
+    # unrelated pending work as a side effect of asking a question.
     if changed:
-        await db.commit()
+        try:
+            await db.commit()
+        except Exception:  # noqa: BLE001 - the contract above
+            logger.warning("route match commit failed for activity %s", activity_id, exc_info=True)
+            # Here a rollback IS required: a failed commit leaves the
+            # transaction unusable, so the caller cannot continue without one,
+            # and there is no half-applied state worth preserving. Guarded
+            # because rollback can itself raise on a dead connection.
+            try:
+                await db.rollback()
+            except Exception:  # noqa: BLE001
+                logger.warning("rollback after a failed match commit also failed", exc_info=True)
+            return None
+
     return route_id
