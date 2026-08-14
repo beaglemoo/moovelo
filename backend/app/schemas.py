@@ -163,6 +163,19 @@ class UserSettingsPatch(BaseModel):
         return value
 
 
+class RideTimeSuggestion(BaseModel):
+    """GET /api/settings/ride-time-suggestion: a flat_speed_kmh value the
+    rider's own matched rides imply, offered - never applied - alongside
+    their current setting. Applying it is the existing PATCH /api/settings;
+    this endpoint has no write path of its own. Absent (the endpoint
+    returns null) below services/ride_calibration.py's floor of usable
+    rides."""
+
+    suggested_kmh: float
+    sample_size: int
+    current_kmh: float
+
+
 class SurfaceBreakdown(BaseModel):
     """Aggregated Valhalla /trace_attributes edges over a route's own shape.
 
