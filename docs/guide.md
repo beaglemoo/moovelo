@@ -591,6 +591,31 @@ shipped says so rather than reporting 0% - see
 to OSM ways, which the same **Match older rides** button backfills for
 both percentages in one pass.
 
+### Your climb log
+
+A **Climbs** card on the Activities page lists every hill you have
+recognisably climbed, deduplicated: ride the same hill on five different
+occasions and it is one entry with a count of 5, not five separate lines.
+Each entry shows the climb's category (HC down to 4, the same
+categorisation as [Climb detection](#reading-the-panel) on an individual
+route), its length and gain, and how many times you have ridden it.
+
+Deduplication is geometric - it recognises the same hill by where it
+starts and roughly how long it is, not by name (OpenStreetMap does not
+name most hills) - so the tolerances are deliberately generous rather than
+exact. They are provisional and expected to be tuned as this sees more
+real riding history; if two rides up what is obviously the same hill ever
+show as separate entries, or two different hills merge into one, that is
+exactly the kind of thing worth reporting.
+
+The per-ascent time shown for each ride up a climb is an estimate, not a
+recording: Moovelo does not keep a timestamp for every point along a ride,
+only the ride's total moving time, so a climb's time is that total spread
+over the climb's share of the ride's distance. It assumes your average
+speed on the climb matched your average speed for the whole ride, which is
+never quite true - climbs are slower than the flat and the descents - so
+treat it as a reasonable guess rather than a stopwatch split.
+
 ## Export
 
 Every saved route (and the planner toolbar, once a route is saved) offers

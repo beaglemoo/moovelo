@@ -189,6 +189,16 @@ class Activity(Base):
     # Same shape as Route.elevation, so the existing profile chart renders an
     # activity without knowing it is one.
     elevation: Mapped[list[Any]] = mapped_column(JSONB)
+    # Climbs detected from `elevation` by services/climbs.py, same shape as
+    # Route.climbs. Computed once at import time
+    # (services/activities.py:activity_from_track) rather than on every
+    # read: unlike a saved Route, an activity never gets re-routed, so
+    # there is nothing that could invalidate a stored value the way a
+    # planner edit invalidates Route.climbs. Backfilled for every activity
+    # that existed before this column did by migration 0018.
+    climbs: Mapped[list[Any]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
     # The trace as recorded, not map-matched. A heatmap of where you rode
     # should show where you rode, and matching is only introduced where
     # coverage genuinely needs it.

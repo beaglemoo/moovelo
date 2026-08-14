@@ -408,6 +408,37 @@ export interface ActivityQuery {
 	source?: string;
 }
 
+/** One ride up a clustered climb - see backend/app/services/climb_log.py.
+ * Mirrors backend/app/schemas.py ClimbAscent. */
+export interface ClimbAscent {
+	activity_id: string;
+	started_at: string | null;
+	/** Estimated from the ride's own moving time (or elapsed time) spread
+	 * proportionally over the climb's share of the ride's distance - not a
+	 * per-point measurement. Null when the ride carries neither. */
+	time_s: number | null;
+}
+
+/** One climb the rider has recognisably ridden, possibly several times -
+ * the deduplicated personal climb log. category/length_m/gain_m/
+ * avg_grade_pct are the earliest ascent's own numbers, not an average
+ * across ascents. Mirrors backend/app/schemas.py ClimbLogEntry. */
+export interface ClimbLogEntry {
+	lat: number;
+	lon: number;
+	category: string;
+	length_m: number;
+	gain_m: number;
+	avg_grade_pct: number;
+	ascent_count: number;
+	/** Oldest first. */
+	ascents: ClimbAscent[];
+}
+
+export interface ClimbLogResponse {
+	climbs: ClimbLogEntry[];
+}
+
 /** Body of PUT /api/activities/{id}/route. `route_id` null clears the link -
  * both a set and a clear lock out the auto-matcher. Mirrors
  * backend/app/schemas.py ActivityRouteLinkRequest. */
@@ -575,7 +606,10 @@ export const activities = {
 	 * busting version query param, unlike the cycle-network overlay's: these
 	 * tiles are `private, no-cache` with an ETag (services/heatmap.py), so
 	 * the browser always revalidates rather than trusting a long max-age. */
-	heatmapTileUrl: () => `${location.origin}/api/activities/heatmap/{z}/{x}/{y}.mvt`
+	heatmapTileUrl: () => `${location.origin}/api/activities/heatmap/{z}/{x}/{y}.mvt`,
+	/** The rider's own deduplicated climb log - see
+	 * backend/app/services/climb_log.py. */
+	climbLog: () => request<ClimbLogResponse>('/api/activities/climbs')
 };
 
 export const coverage = {

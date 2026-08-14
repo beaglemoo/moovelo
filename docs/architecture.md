@@ -797,6 +797,96 @@ isolation does not depend on `route_match.py` or `set_activity_route`
 never changing. Only the caller's own rides and routes are ever
 considered.
 
+## Personal climb log
+
+`GET /api/activities/climbs` answers "what hills do I keep climbing":
+`services/climb_log.py`'s `climb_log` reads every `Climb` (see
+[Climb detection](#climb-detection)) any of the caller's activities carry
+and deduplicates the same hill across many rides into one entry -
+`ClimbLogEntry` (category/length/gain/grade plus `ascent_count` and every
+`ClimbAscent`), rendered as a card on `/activities`.
+
+**Activities carry their own `climbs` column now** (migration 0018,
+mirroring `Route.climbs`, migration 0009) - `detect_climbs` runs once, in
+`services/activities.py`'s `activity_from_track`, the one function both
+import paths (`POST /api/activities/import` and the Strava archive worker
+in `services/activity_import.py`) build every `Activity` through. Wiring it
+there rather than at each call site means both paths get it for free, and
+it is cheap: pure resampling/smoothing over at most `MAX_ELEVATION_SAMPLES`
+(500) points, not a second pass over the raw track. Migration 0018
+backfills every activity that existed before the column did, running
+`detect_climbs` over each row's stored `elevation` in a Python loop (the
+same reasoning as any other data migration that touches nontrivial logic:
+reimplementing the scoring in SQL would be a second, divergence-prone copy
+of `services/climbs.py`) - defensively, so a row whose `elevation` is
+missing, not a list, or otherwise unparseable gets `climbs = []` rather
+than failing the whole migration. Prod and staging both carry zero
+activities as of this migration, so the backfill is a no-op there; it
+matters for any install that imported a Strava archive first.
+
+**Recovering a position.** A `Climb` carries no coordinates - it is purely
+two cumulative distances into one ride's own elevation profile - so
+`_CLIMB_ROWS_SQL` asks PostGIS to walk the activity's own recorded line:
+`ST_LineInterpolatePoint(a.geom, start_dist_m / a.distance_m)`. This is an
+approximation, not an exact arc-length position (the function parameterises
+by 2D Cartesian length in the geometry's own SRID-4326 degree space, while
+`start_dist_m` is a true-ground haversine distance) - close enough to place
+a climb on a map and cluster it against nearby ones, not a distance
+decision in its own right. Unlike `services/route_match.py`, nothing here
+is ever projected to EPSG:3857, so there is no Mercator correction to
+apply: clustering measures the distance between two already-recovered
+lat/lon points with `services/geo.py`'s `haversine`, which is true ground
+metres by construction.
+
+**Clustering is geometric, not exact-match.** Two climbs collapse into one
+log entry when their recovered start points are within
+`CLUSTER_DISTANCE_TOLERANCE_M` (200 m) of each other **and** their lengths
+are within `CLUSTER_LENGTH_TOLERANCE_PCT` (20%) - both provisional, chosen
+to read as "obviously the same hill, ridden again" rather than tuned
+against real ride/route geometry, the same caveat `services/route_match.py`
+carries for `COVERAGE_BUFFER_M`/`MIN_COVERAGE`. Staging verification with
+genuine GPS traces is expected to move both. The length check exists
+because two climbs can start at the same junction and be entirely
+different hills - a short punchy ramp and a long valley road sharing a
+start point should not merge just because they are geometrically close at
+the bottom.
+
+**Bounded, not quadratic.** A naive "compare every climb to every other
+climb" is exactly the shape PR1 of this phase measured crashing Postgres at
+14,000 points - here it would be a rider's whole climb history squared.
+`climb_log.py` buckets recovered points onto a grid sized so any two points
+within the cluster tolerance always land in the same cell or an adjacent
+one, and a new climb only ever compares against the cluster representatives
+already sitting in its own 9-cell neighbourhood - not against every climb
+seen so far. Once a hill has one cluster, every later ascent of it costs
+one comparison (the cluster it already matches), so a hill ridden 500 times
+stays `O(500)`, not `O(500²)`. `MAX_CLIMB_ROWS` (20,000) is a safety net on
+top of that, not the mechanism that keeps this fast - comfortably beyond
+"years of history" (a rider who rode daily for a decade and found three
+climbs a ride is under 11,000 rows).
+
+**Per-ascent time is an estimate, not a measurement.** `Activity` stores an
+aggregate `moving_time_s`/`elapsed_time_s` and a `distance_m`, never a
+per-point timestamp series (those exist transiently on the parsed
+`TrackPoint` in `services/importer.py`, but are not persisted), so
+`_ascent_time_s` spreads the ride's own moving time (falling back to
+elapsed time) proportionally over the climb's share of the ride's total
+distance. This assumes the rider's average speed on the climb matches their
+average speed over the whole ride, which is false in the direction that
+matters - climbs are slower than flat and downhill sections - so the
+estimate systematically *underestimates* real time spent climbing. It is a
+coarse first cut, not a per-climb speed model, and is documented as such
+rather than presented as measured.
+
+Ownership is a `WHERE a.user_id = :user_id` in `_CLIMB_ROWS_SQL` itself,
+the same "the filter lives in the query, not a wrapper around it" pattern
+`route_match.py` and `coverage.py` use -
+`test_climb_log.py::test_a_strangers_activity_is_excluded_even_though_it_matches_geometrically`
+seeds a stranger's activity at the identical location through the session
+(not the API) specifically to pin it, after Sprint 1's PR3 shipped a
+`user_id` filter with 14 passing tests behind it that none of them actually
+exercised.
+
 ## Cycle-network coverage
 
 "You have ridden 38% of the National Cycle Network near you" needs two new
@@ -1688,7 +1778,7 @@ frontend/src/
 │   ├── +page.svelte             # planner: state, reroute + save + wahoo orchestration
 │   ├── login/+page.svelte       # password and/or SSO login
 │   ├── library/+page.svelte     # saved routes, exports, wahoo, share
-│   ├── activities/+page.svelte  # activity list, import, coverage card (heatmap toggle lives on the map itself)
+│   ├── activities/+page.svelte  # activity list, import, coverage + climb log cards (heatmap toggle lives on the map itself)
 │   ├── settings/+page.svelte    # rider settings (weight, flat-road speed, FTP) for ride time
 │   ├── admin/+page.svelte       # users/stats/config (admins)
 │   └── s/[token]/+page.svelte   # public read-only shared route
@@ -1724,6 +1814,7 @@ frontend/src/
         ├── LLMSettingsPanel.svelte   # /admin: endpoint, model browser, provider routing, test
         ├── AssistantPanel.svelte     # chat log, tool status, stop, proposal card
         ├── CoverageCard.svelte       # /activities: cycle-network + all-roads %, "Match older rides"
+        ├── ClimbLogCard.svelte       # /activities: deduplicated personal climb log
         └── WaypointList.svelte       # route-order list: reorder (drag or up/down), remove, reverse-geocoded names
 ```
 
@@ -1783,6 +1874,7 @@ backend/app/
     ├── heatmap.py           # personal heatmap tiles: per-user MVT + ETag
     ├── places.py            # place search, reverse geocode, POIs along a route
     ├── climbs.py            # profile segmentation + HC/1-4 categorisation
+    ├── climb_log.py         # personal climb log: recover coordinates, cluster across rides
     ├── geo.py               # shape concatenation and distance helpers
     ├── weather.py           # Open-Meteo-compatible forecast client (env-gated)
     ├── rate_limit.py        # in-process sliding window for the login endpoint

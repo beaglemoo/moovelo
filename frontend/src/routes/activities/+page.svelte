@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { activities, type ActivityQuery, type ActivitySummary } from '$lib/api';
 	import { Latest } from '$lib/latest';
+	import ClimbLogCard from '$lib/components/ClimbLogCard.svelte';
 	import CoverageCard from '$lib/components/CoverageCard.svelte';
 	import ImportResults from '$lib/components/ImportResults.svelte';
 	import { distance, duration, elevation } from '$lib/format';
@@ -217,6 +218,7 @@
 	<ImportResults queue={activityImportQueue} />
 
 	<CoverageCard />
+	<ClimbLogCard />
 
 	{#if loaded && items.length > 0}
 		<div class="controls">

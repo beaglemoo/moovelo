@@ -464,6 +464,47 @@ class ActivityDetail(ActivitySummary):
     elevation: list[ElevationPoint] = []
 
 
+class ClimbAscent(BaseModel):
+    """One ride up a clustered climb - see services/climb_log.py."""
+
+    activity_id: uuid.UUID
+    started_at: datetime | None = None
+    # Estimated from the ride's own moving time (falling back to elapsed
+    # time when moving time is unknown) spread proportionally over the
+    # climb's share of the ride's total distance - services/climb_log.py's
+    # module docstring says plainly why this, not per-point timestamps.
+    # None when the ride carries neither.
+    time_s: float | None = None
+
+
+class ClimbLogEntry(BaseModel):
+    """One climb the rider has recognisably ridden, possibly several times -
+    services/climb_log.py's geometric clustering of every detected Climb
+    across every one of their activities. category/length_m/gain_m/
+    avg_grade_pct are the earliest ascent's own detect_climbs numbers, not
+    an average across ascents: every ride's own elevation sampling and
+    smoothing shifts these slightly, and picking one real ascent to
+    describe the hill is simpler - and no less honest - than inventing a
+    synthetic composite.
+    """
+
+    lat: float
+    lon: float
+    category: str
+    length_m: float
+    gain_m: float
+    avg_grade_pct: float
+    ascent_count: int
+    # Oldest ascent first - the order services/climb_log.py's own query
+    # returns activities in (a.started_at, undated rides last by
+    # created_at), preserved rather than re-sorted.
+    ascents: list[ClimbAscent]
+
+
+class ClimbLogResponse(BaseModel):
+    climbs: list[ClimbLogEntry]
+
+
 class ActivityRouteLinkRequest(BaseModel):
     """Body of PUT /api/activities/{id}/route. `route_id` null clears the
     link - both a set and a clear are a human decision, so both lock out

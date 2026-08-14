@@ -161,6 +161,12 @@ with turn-by-turn cues.
   hidden entirely below the 5-ride floor. The fit combines rides with the
   median rather than the mean, so one outlier ride (a long cafe stop, a GPS
   hiccup) cannot move it much.
+- Personal climb log on `/activities`: every climb detected across your
+  rides (see [Climb detection](#route-intelligence)), deduplicated so the
+  same hill collapses into one entry however many times you have ridden
+  it - category, length, gain and how many ascents, entirely geometric
+  (recovered from each ride's own recorded line, clustered by proximity
+  and similar length) and computed from data already on your own server.
 
 ## Route intelligence
 
