@@ -8,8 +8,9 @@ Narrowing is a bounding-box overlap (`routes.geom && activities.geom`,
 GiST-backed - Route.geom's index is `ix_routes_geom` in the migration but
 `idx_routes_geom` in the ORM's own metadata, a harmless naming divergence
 noted on Activity.geom's index in models.py; `&&` is served regardless of
-what the index is called) plus a loose distance-ratio pre-filter, capped so
-a pathological library cannot make this unbounded.
+what the index is called) plus a distance-ratio pre-filter on the same band
+the decision itself uses, ordered by closeness of distance and capped so a
+pathological library cannot make this unbounded.
 
 Confirmation was originally going to be ST_FrechetDistance thresholded
 against a fixed distance. Measured against real dev Postgres before
@@ -92,17 +93,20 @@ logger = logging.getLogger(__name__)
 COVERAGE_BUFFER_M = 40.0
 MIN_COVERAGE = 0.80
 
-# A route within roughly half to double the activity's own distance is
-# plausible; anything further out is cheap to discard before any geometric
-# work runs at all. Looser than MATCH_DISTANCE_RATIO_* below on purpose -
-# this is the cheap prefilter, not the decision.
-CANDIDATE_DISTANCE_RATIO_MIN = 0.5
-CANDIDATE_DISTANCE_RATIO_MAX = 2.0
-
-# Part of the decision itself, not just the prefilter: bidirectional
-# coverage alone would accept an out-and-back ride over a one-way route (or
-# vice versa) at ~100% coverage both ways despite being roughly double the
-# distance. A tighter ratio at match time catches what coverage cannot.
+# Part of the decision itself, and - deliberately - the prefilter too:
+# bidirectional coverage alone would accept an out-and-back ride over a
+# one-way route (or vice versa) at ~100% coverage both ways despite being
+# roughly double the distance, so a distance ratio catches what coverage
+# cannot.
+#
+# There was briefly a second, looser pair of constants here for the
+# prefilter. That is what a candidate cap plus two bands buys you: routes
+# outside this band can never win the final SELECT, so admitting them to
+# the candidate list only spent the LIMIT below on rows destined to be
+# discarded - and, with more than MAX_CANDIDATES of them, could crowd the
+# true match out of the list entirely. One band, used in both places, means
+# the two can never drift apart and a fetched candidate is always one that
+# could actually win.
 MATCH_DISTANCE_RATIO_MIN = 0.8
 MATCH_DISTANCE_RATIO_MAX = 1.25
 
@@ -137,8 +141,24 @@ MAX_SIMPLIFIED_VERTICES = 1000
 # a single oversized route drops only that candidate, not the whole match.
 #
 # `candidates` is the cheap, index-backed prefilter stage: `&&` uses the
-# GiST index on each geom column, and the loose distance-ratio filter
-# discards obvious non-matches before anything geometric runs.
+# GiST index on each geom column, and the distance-ratio filter - the same
+# band the final SELECT decides on, see MATCH_DISTANCE_RATIO_* - discards
+# everything that could not win before anything geometric runs.
+#
+# The ORDER BY is load-bearing, not tidiness. `LIMIT` without it lets
+# Postgres return any qualifying rows it likes, so for a rider with more
+# than MAX_CANDIDATES overlapping routes the true match could be cut purely
+# on physical row order - and a dropped candidate is indistinguishable from
+# "nothing matched".
+#
+# It orders on centroid distance rather than on closeness of length, which
+# was the first attempt and does not work: variants of the same route
+# usually have near-identical distances, so every candidate ties at zero and
+# the cap goes back to cutting arbitrarily. A route the rider actually rode
+# has a centroid essentially on top of the ride's, so this puts the likeliest
+# candidates first and the cap drops the least plausible rather than an
+# arbitrary set. ST_Centroid is linear in vertex count and runs on at most
+# MAX_CANDIDATES rows, long before the buffering that actually costs.
 #
 # `coverage` computes both directions - what fraction of the (simplified)
 # route lies within a buffered corridor around the (simplified) ride, and
@@ -188,7 +208,9 @@ _MATCH_SQL = text("""
         WHERE r.user_id = act.user_id
           AND r.geom && act.geom
           AND r.distance_m BETWEEN
-              act.distance_m * :ratio_min AND act.distance_m * :ratio_max
+              act.distance_m * :match_ratio_min AND act.distance_m * :match_ratio_max
+        ORDER BY ST_Distance(ST_Centroid(r.geom), ST_Centroid(act.geom)),
+                 abs(r.distance_m - act.distance_m)
         LIMIT :max_candidates
     ),
     route_tol AS (
@@ -297,8 +319,6 @@ async def match_activity_to_route(db: AsyncSession, activity_id: uuid.UUID) -> u
                     _MATCH_SQL,
                     {
                         "activity_id": activity_id,
-                        "ratio_min": CANDIDATE_DISTANCE_RATIO_MIN,
-                        "ratio_max": CANDIDATE_DISTANCE_RATIO_MAX,
                         "match_ratio_min": MATCH_DISTANCE_RATIO_MIN,
                         "match_ratio_max": MATCH_DISTANCE_RATIO_MAX,
                         "max_candidates": MAX_CANDIDATES,
