@@ -49,17 +49,24 @@ ST_Buffer/ST_Intersection run on something that size. Skipping is the
 correct failure mode here: a missing match is an enrichment not delivered,
 a dead database is an outage.
 
-One correction survives from the original plan: Web Mercator's scale is
-not uniform - it grows as 1/cos(latitude), so a "40m" buffer expressed
-directly in EPSG:3857 units is really only about 25m on the ground at the
-UK's ~51.8N (1/cos(51.8 deg) =~ 1.62). Dividing the buffer distance by
-cos(latitude) of the activity's own centroid before building it in 3857 is
-what makes it a genuine `COVERAGE_BUFFER_M` on the ground. This only has to
-apply to the buffer distance, not to the coverage ratio itself: numerator
-and denominator are both lengths measured in the same projected geometry
-at the same rough latitude, so the distortion cancels out of the ratio on
-its own - see test_route_match.py's dedicated test, which fails if the
-correction is dropped from the buffer.
+One correction survives from the original plan, and applies in two places
+now rather than one: Web Mercator's scale is not uniform - it grows as
+1/cos(latitude), so a "40m" buffer (or a "20m" simplify tolerance)
+expressed directly in EPSG:3857 units is really only about 25m (or 12m)
+on the ground at the UK's ~51.8N (1/cos(51.8 deg) =~ 1.62). Both
+COVERAGE_BUFFER_M and every rung of SIMPLIFY_TOLERANCE_LADDER_M are
+divided by cos(latitude) of the activity's own centroid before being
+handed to ST_Buffer/ST_Simplify, so each one means what its name in true
+ground metres claims. Missing this on the simplify tolerance specifically
+would make every rung of the ladder ~1.6x weaker than it claims at UK
+latitudes - simplifying less aggressively than intended, and needing more
+rungs to bring a large trace under the cap than the constant's own name
+would suggest. This only has to apply to the buffer/tolerance distances
+themselves, not to the coverage ratio: numerator and denominator are both
+lengths measured in the same projected geometry at the same rough
+latitude, so the distortion cancels out of the ratio on its own - see
+test_route_match.py's dedicated test, which fails if the correction is
+dropped from the buffer.
 
 Coverage is direction-agnostic by construction - a route ridden backwards
 buffers and intersects exactly the same as one ridden forwards - so there
@@ -121,8 +128,9 @@ MAX_SIMPLIFIED_VERTICES = 1000
 # separate ownership filter to forget.
 #
 # `act_tol`/`act_simplified` pick the smallest ladder tolerance that brings
-# the activity under the vertex cap; if none of them do, act_simplified has
-# no rows at all, `scored` below (which CROSS JOINs it) is empty, and
+# the activity under the vertex cap (dividing by lat_cos, same correction as
+# the buffer - see the module docstring); if none of them do, act_simplified
+# has no rows at all, `scored` below (which CROSS JOINs it) is empty, and
 # nothing downstream ever runs ST_Buffer or ST_Intersection on the
 # oversized geometry - the whole activity is skipped rather than risking
 # the query. `route_tol` does the same per candidate route, independently:
@@ -161,7 +169,7 @@ _MATCH_SQL = text("""
         SELECT act.id,
                (
                    SELECT tol FROM unnest(CAST(:tolerances AS float8[])) AS tol
-                   WHERE ST_NPoints(ST_Simplify(act.geom_m, tol)) <= :max_vertices
+                   WHERE ST_NPoints(ST_Simplify(act.geom_m, tol / act.lat_cos)) <= :max_vertices
                    ORDER BY tol
                    LIMIT 1
                ) AS tol
@@ -169,13 +177,13 @@ _MATCH_SQL = text("""
     ),
     act_simplified AS (
         SELECT act.id, act.distance_m, act.lat_cos,
-               ST_Simplify(act.geom_m, act_tol.tol) AS geom_s
+               ST_Simplify(act.geom_m, act_tol.tol / act.lat_cos) AS geom_s
         FROM act
         JOIN act_tol ON act_tol.id = act.id
         WHERE act_tol.tol IS NOT NULL
     ),
     candidates AS (
-        SELECT r.id, r.distance_m, ST_Transform(r.geom, 3857) AS geom_m
+        SELECT r.id, r.distance_m, ST_Transform(r.geom, 3857) AS geom_m, act.lat_cos AS lat_cos
         FROM routes r, act
         WHERE r.user_id = act.user_id
           AND r.geom && act.geom
@@ -187,7 +195,7 @@ _MATCH_SQL = text("""
         SELECT c.id,
                (
                    SELECT tol FROM unnest(CAST(:tolerances AS float8[])) AS tol
-                   WHERE ST_NPoints(ST_Simplify(c.geom_m, tol)) <= :max_vertices
+                   WHERE ST_NPoints(ST_Simplify(c.geom_m, tol / c.lat_cos)) <= :max_vertices
                    ORDER BY tol
                    LIMIT 1
                ) AS tol
@@ -199,7 +207,7 @@ _MATCH_SQL = text("""
                act_s.distance_m AS activity_distance_m,
                act_s.lat_cos AS lat_cos,
                act_s.geom_s AS act_geom_s,
-               ST_Simplify(c.geom_m, rt.tol) AS route_geom_s
+               ST_Simplify(c.geom_m, rt.tol / c.lat_cos) AS route_geom_s
         FROM candidates c
         JOIN route_tol rt ON rt.id = c.id AND rt.tol IS NOT NULL
         CROSS JOIN act_simplified act_s
@@ -247,33 +255,73 @@ async def match_activity_to_route(db: AsyncSession, activity_id: uuid.UUID) -> u
     this time" is not evidence the previous match was wrong. `match_confidence`
     is stored as a 0-1 score (the lower of the two coverage fractions), not
     a distance - higher is better.
+
+    Never raises. Every caller's contract is "a matching failure must never
+    fail the import", and that guarantee has to live here rather than at
+    each call site - and it took two attempts to actually deliver it,
+    reproduced directly against real Postgres both times:
+
+    A failed statement leaves the whole session's Postgres transaction
+    *aborted*, so catching the exception at the call site and carrying on
+    is not enough by itself - the very next query on the same session
+    (typically the caller re-reading the activity for its response) fails
+    too, with "current transaction is aborted, commands ignored until end
+    of transaction block", turning a missing enrichment into a 500 for the
+    whole request.
+
+    The first fix - catch here and call `db.rollback()` - clears the abort,
+    but a plain rollback also *expires every object already loaded in the
+    session*, matching real transactional semantics (their state may no
+    longer be valid). The caller's own `activity` object - fetched before
+    this function was ever called - is one of them, so its very next
+    attribute access anywhere in the caller triggers an implicit lazy
+    reload, and `AsyncSession` refuses to do that reload outside an
+    explicit `await` ("MissingGreenlet: ... Was IO attempted in an
+    unexpected place?"). Swapping the plain rollback for a `SAVEPOINT`
+    (`db.begin_nested()`) is what actually fixes both problems at once: a
+    failure inside it only undoes work done inside it, so the caller's
+    already-loaded objects are never touched. This is the same mechanism
+    Sprint 1's C8/G3 fix used for the identical shape of bug (see
+    CLAUDE.md) - a plain rollback trashing a caller's transaction is not a
+    new failure mode in this codebase, it is a recurring one.
     """
-    activity = await db.get(Activity, activity_id)
-    if activity is None or activity.match_locked:
+    route_id: uuid.UUID | None = None
+    try:
+        async with db.begin_nested():
+            activity = await db.get(Activity, activity_id)
+            if activity is None or activity.match_locked:
+                return None
+
+            row = (
+                await db.execute(
+                    _MATCH_SQL,
+                    {
+                        "activity_id": activity_id,
+                        "ratio_min": CANDIDATE_DISTANCE_RATIO_MIN,
+                        "ratio_max": CANDIDATE_DISTANCE_RATIO_MAX,
+                        "match_ratio_min": MATCH_DISTANCE_RATIO_MIN,
+                        "match_ratio_max": MATCH_DISTANCE_RATIO_MAX,
+                        "max_candidates": MAX_CANDIDATES,
+                        "min_coverage": MIN_COVERAGE,
+                        "buffer_m": COVERAGE_BUFFER_M,
+                        "tolerances": SIMPLIFY_TOLERANCE_LADDER_M,
+                        "max_vertices": MAX_SIMPLIFIED_VERTICES,
+                    },
+                )
+            ).first()
+            if row is None or row.confidence is None:
+                return None
+
+            route_id = row.id
+            activity.route_id = route_id
+            activity.match_confidence = float(row.confidence)
+    except Exception:  # noqa: BLE001 - see the "Never raises" docstring note above
+        logger.warning("route match failed for activity %s", activity_id, exc_info=True)
         return None
 
-    row = (
-        await db.execute(
-            _MATCH_SQL,
-            {
-                "activity_id": activity_id,
-                "ratio_min": CANDIDATE_DISTANCE_RATIO_MIN,
-                "ratio_max": CANDIDATE_DISTANCE_RATIO_MAX,
-                "match_ratio_min": MATCH_DISTANCE_RATIO_MIN,
-                "match_ratio_max": MATCH_DISTANCE_RATIO_MAX,
-                "max_candidates": MAX_CANDIDATES,
-                "min_coverage": MIN_COVERAGE,
-                "buffer_m": COVERAGE_BUFFER_M,
-                "tolerances": SIMPLIFY_TOLERANCE_LADDER_M,
-                "max_vertices": MAX_SIMPLIFIED_VERTICES,
-            },
-        )
-    ).first()
-    if row is None or row.confidence is None:
-        return None
-
-    route_id: uuid.UUID = row.id
-    activity.route_id = route_id
-    activity.match_confidence = float(row.confidence)
+    # Releasing the SAVEPOINT above only merges the change into the still-
+    # open outer transaction; nothing is durable until this commits it -
+    # get_db (app/db.py) has no auto-commit, so a caller that never commits
+    # loses the match on rollback-at-close the way any other write would.
     await db.commit()
     return route_id

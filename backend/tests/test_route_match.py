@@ -14,7 +14,17 @@ outliers (a single ~300m detour) and, unsimplified, to be able to kill the
 Postgres backend process outright on a real multi-thousand-point trace.
 Both findings have a dedicated test below: test_a_single_detour_does_not_
 break_the_match and test_a_huge_trace_is_simplified_rather_than_crashing_
-postgres.
+postgres. test_a_large_relative_detour_on_a_short_route_does_not_match
+documents a boundary of the coverage approach found while testing it: a
+fixed-size detour's tolerance is proportional to the route's own length,
+not absolute.
+
+test_a_match_query_failure_does_not_break_the_import_response guards a
+third, unrelated finding: a failed match query leaves the session's
+transaction in a state a plain try/except at the call site cannot safely
+carry on from - see match_activity_to_route's own docstring for both fixes
+it took to actually deliver "a matching failure must never fail the
+import".
 """
 
 import uuid
@@ -24,6 +34,7 @@ from httpx import AsyncClient
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.services.route_match as route_match
 from app.models import Activity, Route, User
 from app.services.geo import Point, destination_point
 from app.services.route_match import (
@@ -32,6 +43,7 @@ from app.services.route_match import (
     match_activity_to_route,
 )
 from tests.conftest import register
+from tests.test_activities_api import GPX_RIDE
 
 # Same Chilterns point test_coverage.py uses, deliberately: it sits at
 # ~51.8N, close to the UK's centre of population, which is exactly the
@@ -254,6 +266,89 @@ async def test_a_single_detour_does_not_break_the_match(
     await db.refresh(activity)
     assert activity.match_confidence is not None
     assert activity.match_confidence >= MIN_COVERAGE
+
+
+async def test_a_large_relative_detour_on_a_short_route_does_not_match(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """A documented boundary, not a bug: bidirectional coverage's tolerance
+    to a fixed-size detour is proportional to how large the detour is
+    *relative to the route*, not absolute. The same 300m excursion that
+    comfortably passes on the 4000m route above (7.5% of its length) does
+    not clear MIN_COVERAGE on a 2400m route (12.5% of its length) - measured
+    directly against real Postgres at ride_covered=0.668, route_covered=0.723
+    (both under the 0.80 bar) for this exact fixture: a single mid-ride
+    waypoint pushed 300m sideways rather than a there-and-back spike, on a
+    6-leg/2400m route.
+
+    This is deliberately NOT "fixed" by widening COVERAGE_BUFFER_M to
+    whatever this fixture needs (~150m, measured separately) - that would
+    directly undermine the buffer's other job, keeping it "tight enough to
+    separate parallel roads". A 40m corridor that also had to swallow a
+    150m excursion could no longer tell a rider on the road next to their
+    planned route from a rider on the route itself. The fixture the
+    algorithm change was justified against (test_a_single_detour_does_not_
+    break_the_match above) represents a detour as a small fraction of a
+    real-length ride, matching the "3 points out of 100" scale of the
+    finding that motivated the change; this one is a stress case at the
+    opposite end, kept here so the boundary is measured and pinned rather
+    than merely asserted.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    leg_m = 400.0
+    points = [(LAT, LON)]
+    for _ in range(6):
+        points.append(destination_point(points[-1], RUN_BEARING_DEG, leg_m))
+    total = leg_m * 6
+    detoured = list(points)
+    mid = len(detoured) // 2
+    detoured[mid] = destination_point(detoured[mid], 90.0, 300.0)
+
+    route = _route(user_id, points, total)
+    activity = _activity(user_id, detoured, total + 600.0)
+    db.add_all([route, activity])
+    await db.commit()
+
+    matched = await match_activity_to_route(db, activity.id)
+
+    assert matched is None
+    await db.refresh(activity)
+    assert activity.route_id is None
+    assert activity.match_confidence is None
+
+
+async def test_a_match_query_failure_does_not_break_the_import_response(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reproduced against real Postgres twice, in two different ways, before
+    this passed: catching the exception at the call site alone was not
+    enough (a failed statement leaves the session's transaction *aborted*,
+    so the response's own re-read of the activity failed too, 500ing the
+    request), and neither was a plain `db.rollback()` inside
+    match_activity_to_route (it expires every already-loaded object in the
+    session, including the caller's own `activity` reference, so the very
+    next attribute access on it tried an implicit lazy reload outside an
+    async context and raised `MissingGreenlet`). Only a SAVEPOINT
+    (`db.begin_nested()`) actually delivers "a matching failure must never
+    fail the import" - see match_activity_to_route's own docstring."""
+    monkeypatch.setattr(route_match, "_MATCH_SQL", text("SELECT 1/0"))
+    await register(client)
+
+    response = await client.post(
+        "/api/activities/import",
+        files={"file": ("ride.gpx", GPX_RIDE, "application/gpx+xml")},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["route_id"] is None
+
+    # The session must still be usable afterward - proves the transaction
+    # was never left aborted and no already-loaded object was left stranded.
+    listed = await client.get("/api/activities")
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
 
 
 async def test_the_best_covering_candidate_wins(client: AsyncClient, db: AsyncSession) -> None:
