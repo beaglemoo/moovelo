@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Climb } from '$lib/api';
 	import { categoryColour, categoryLabel } from '$lib/climbs';
+	import { readableText } from '$lib/contrast';
 	import { distance, elevation, shortLength } from '$lib/format';
 	import { units } from '$lib/units.svelte';
 
@@ -31,7 +32,9 @@
 					>
 						<span
 							class="badge"
-							style="background: {categoryColour(climb.category)}"
+							style="background: {categoryColour(climb.category)}; color: {readableText(
+								categoryColour(climb.category)
+							)}"
 							title="{distance(climb.length_m, units.system)} at {climb.avg_grade_pct.toFixed(1)}%"
 						>
 							{categoryLabel(climb.category)}

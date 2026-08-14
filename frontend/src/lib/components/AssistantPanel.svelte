@@ -595,7 +595,9 @@
 		margin: 0;
 		width: 100%;
 		font-size: 0.8rem;
-		color: var(--warning);
+		/* Readable body text: --warning on the pale warning tint is only ~3.2:1.
+		   The warning cue is carried by the card's --warning border and tint. */
+		color: var(--text);
 	}
 	.assistant-proposal {
 		display: flex;
@@ -630,7 +632,9 @@
 	.assistant-proposal-buttons .primary {
 		background: var(--success);
 		border-color: var(--success);
-		color: #fff;
+		/* Black, not white: --success is a fixed light green (both themes) on
+		   which white text is only 3.2:1; black clears AA at 6.5:1. */
+		color: #000000;
 	}
 	.assistant-ask {
 		display: flex;

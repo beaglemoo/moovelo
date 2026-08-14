@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { PoiResult } from '$lib/api';
 	import { distance, shortLength } from '$lib/format';
+	import { readableText } from '$lib/contrast';
 	import { categoryColour, categoryLabel, POI_GROUPS } from '$lib/pois';
 	import { units } from '$lib/units.svelte';
 
@@ -27,7 +28,7 @@
 				class="chip"
 				class:on={selected.includes(group.key)}
 				aria-pressed={selected.includes(group.key)}
-				style="--chip: {group.colour}"
+				style="--chip: {group.colour}; --chip-text: {readableText(group.colour)}"
 				onclick={() => onToggleGroup(group.key)}
 			>
 				{group.label}
@@ -110,7 +111,7 @@
 	.chip.on {
 		background: var(--chip);
 		border-color: var(--chip);
-		color: #fff;
+		color: var(--chip-text);
 	}
 	.results {
 		height: 150px;

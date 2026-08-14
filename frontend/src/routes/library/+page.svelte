@@ -504,7 +504,7 @@
 	.toggle.on {
 		background: color-mix(in srgb, var(--warning) 18%, var(--surface));
 		border-color: var(--warning);
-		color: var(--warning);
+		color: var(--text);
 	}
 	.link {
 		border: none;
@@ -558,7 +558,7 @@
 	.imported {
 		font-size: 0.7rem;
 		background: color-mix(in srgb, var(--success) 18%, var(--surface));
-		color: var(--success);
+		color: var(--text);
 		border-radius: 10px;
 		padding: 0.05rem 0.45rem;
 		margin-left: 0.35rem;
@@ -622,17 +622,18 @@
 		letter-spacing: 0.03em;
 	}
 	.badge.pending {
-		/* Accent alpha-tint highlight fill - deliberately left literal. */
+		/* Accent alpha-tint highlight fill - deliberately left literal. The
+		   coloured tint carries the status cue; the text is neutral for AA. */
 		background: #b5890033;
-		color: var(--warning);
+		color: var(--text);
 	}
 	.badge.ok {
 		background: #85990033;
-		color: var(--success);
+		color: var(--text);
 	}
 	.badge.bad {
 		background: #dc322f33;
-		color: var(--danger-text);
+		color: var(--text);
 	}
 	table {
 		width: 100%;
