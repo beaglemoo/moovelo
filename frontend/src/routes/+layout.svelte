@@ -252,6 +252,11 @@
 		--shadow: rgba(0, 0, 0, 0.12);
 		--overlay-scrim: rgba(7, 54, 66, 0.75);
 		--accent: #268bd2;
+		/* A darker blue for accent-filled buttons carrying white text: white on
+		   --accent is only 3.68:1, but 5.32:1 on this. --accent itself stays the
+		   brighter blue for borders/indicators (which pass the 3:1 UI bar). Flat
+		   across themes - it is a fill with white text either way. */
+		--accent-fill: #1a6fb0;
 		--danger: #dc322f;
 		--success: #859900;
 		--warning: #b58900;

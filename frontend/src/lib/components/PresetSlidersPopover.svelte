@@ -319,9 +319,10 @@
 		gap: 4px;
 	}
 	.presets-list li.active .name {
-		/* Route-brand magenta, same literal MapView uses for the route line -
-		   deliberately not tokenised, see step 3. */
-		color: #d33682;
+		/* Was route-brand magenta (#d33682), but as text on the dark popover
+		   surface that is 2.86:1; --link clears AA in both themes and still reads
+		   as the selected/active accent. Bold keeps it distinct. */
+		color: var(--link);
 		font-weight: 600;
 	}
 	.presets-list .name {
@@ -372,8 +373,8 @@
 		color: var(--text);
 	}
 	.save-as button {
-		border: 1px solid var(--accent);
-		background: var(--accent);
+		border: 1px solid var(--accent-fill);
+		background: var(--accent-fill);
 		color: #fff;
 		border-radius: 4px;
 		padding: 4px 8px;

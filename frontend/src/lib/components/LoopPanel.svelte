@@ -165,8 +165,8 @@
 		border-radius: 5px;
 	}
 	.target button {
-		border: 1px solid var(--accent);
-		background: var(--accent);
+		border: 1px solid var(--accent-fill);
+		background: var(--accent-fill);
 		color: #fff;
 		border-radius: 5px;
 		padding: 0.35rem 0.7rem;
