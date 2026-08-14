@@ -380,3 +380,65 @@ def test_migration_0018_backfills_climbs_and_is_defensive_about_garbage() -> Non
         assert by_id[empty_id] == []
     finally:
         asyncio.run(_drop_scratch_db(dbname))
+
+
+@pytest.mark.parametrize("nudge_m", [0.0, 30.0, 60.0, 90.0, 120.0, 150.0])
+async def test_two_ascents_just_inside_the_tolerance_always_cluster(
+    client: AsyncClient, db: AsyncSession, nudge_m: float
+) -> None:
+    """The grid must not lose a match to its own cell size, anywhere.
+
+    The same-hill test puts both ascents on identical coordinates and the
+    different-hills test puts them far apart, so neither exercises the
+    boundary the grid actually decides. A degree of longitude is
+    111_320 * cos(latitude) metres, so a longitude cell sized from the
+    latitude constant alone is only ~124 m wide here against a 200 m
+    tolerance, and a 190 m gap spans ~1.5 of them - so whether the two
+    ascents land one cell apart (found) or two (missed, and logged twice)
+    depends purely on where they happen to sit relative to the grid lines.
+
+    A single fixed pair therefore proves nothing: the first version of this
+    test passed against the unfixed code because its coordinates happened to
+    fall in a lucky phase. Sweeping the pair across a full cell width makes
+    the property hold everywhere or not at all.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    start = destination_point((LAT, LON), 90.0, nudge_m)
+    # Due east, so the gap lands entirely in longitude - the axis whose cell
+    # width the latitude-only constant gets wrong.
+    shifted = destination_point(start, 90.0, 190.0)
+    assert haversine(start, shifted) < CLUSTER_DISTANCE_TOLERANCE_M
+
+    climb = _climb()
+    db.add_all(
+        [
+            _activity(
+                user_id,
+                [start, destination_point(start, 0.0, 1000.0)],
+                1000.0,
+                [climb],
+                started_at=datetime(2026, 3, 1, tzinfo=UTC),
+                moving_time_s=200.0,
+            ),
+            _activity(
+                user_id,
+                [shifted, destination_point(shifted, 0.0, 1000.0)],
+                1000.0,
+                [climb],
+                started_at=datetime(2026, 4, 1, tzinfo=UTC),
+                moving_time_s=210.0,
+            ),
+        ]
+    )
+    await db.commit()
+
+    entries = await climb_log(db, user_id)
+
+    assert len(entries) == 1, (
+        f"two ascents {haversine(start, shifted):.0f}m apart (nudged "
+        f"{nudge_m}m) must be one entry - the longitude cell is narrower "
+        "than the tolerance unless divided by cos(latitude)"
+    )
+    assert entries[0].ascent_count == 2
