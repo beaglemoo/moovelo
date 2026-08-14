@@ -10,9 +10,11 @@ from app.models import UserSettings
 from app.schemas import (
     DEFAULT_FLAT_SPEED_KMH,
     DEFAULT_WEIGHT_KG,
+    RideTimeSuggestion,
     UserSettingsPatch,
     UserSettingsResponse,
 )
+from app.services.ride_calibration import suggest_flat_speed_kmh
 from app.version import APP_VERSION
 
 router = APIRouter(prefix="/api/settings")
@@ -42,6 +44,24 @@ async def get_or_default_settings(db: AsyncSession, user_id: uuid.UUID) -> UserS
 @router.get("")
 async def get_settings(db: DbDep, user: UserDep) -> UserSettingsResponse:
     return await get_or_default_settings(db, user.id)
+
+
+@router.get("/ride-time-suggestion")
+async def ride_time_suggestion(db: DbDep, user: UserDep) -> RideTimeSuggestion | None:
+    """A flat_speed_kmh value the caller's own matched rides imply, or null
+    under services/ride_calibration.py's floor of usable rides. Only ever
+    considers the caller's own rides and routes - suggest_flat_speed_kmh
+    filters on user.id itself. Applying stays PATCH /api/settings; this
+    endpoint has no write path."""
+    settings = await get_or_default_settings(db, user.id)
+    suggestion = await suggest_flat_speed_kmh(db, user.id, settings)
+    if suggestion is None:
+        return None
+    return RideTimeSuggestion(
+        suggested_kmh=suggestion.suggested_kmh,
+        sample_size=suggestion.sample_size,
+        current_kmh=suggestion.current_kmh,
+    )
 
 
 @router.patch("")

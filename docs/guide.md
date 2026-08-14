@@ -209,6 +209,23 @@ At `/settings`, three fields feed the ride-time estimate:
 
 None of this changes routing itself - only the displayed time.
 
+### Calibrating flat-road speed from your rides
+
+Once at least 5 of your rides have been [matched to a route you
+planned](#planned-vs-actual), `/settings` shows a card: "Your rides
+suggest 24.1 km/h (from 17 rides). Apply?" It is a suggestion, not a
+change - nothing updates until you press **Apply**, and pressing it does
+exactly what typing a number into the flat-road speed field and saving
+would. The card is not shown at all below the 5-ride floor; a fit from one
+or two rides is closer to noise than to a calibration.
+
+The fit works per ride: for every matched ride, it asks "what flat-road
+speed would have made the model predict this ride's actual moving time,
+over the route it followed?" and combines the answers with the **median**
+rather than the average, so a single odd ride - a long unplanned stop
+folded into your moving time, a GPS dropout - cannot pull the number by
+itself the way an average could.
+
 ## Place search and POIs
 
 Search, points of interest along a route, reverse-geocoded place names,
@@ -452,6 +469,10 @@ The same comparison appears the other way round, on the route's own page
 (`/library/{id}` - see [Saving and the library](#saving-and-the-library)):
 every ride that has been matched to it, each linking back to that ride's
 own page.
+
+Enough matched rides also feed a flat-road speed suggestion at
+`/settings` - see
+[Calibrating flat-road speed from your rides](#calibrating-flat-road-speed-from-your-rides).
 
 ### Importing a Strava export
 

@@ -750,6 +750,53 @@ table's existing GPX/FIT export links - the library row's own name button
 is untouched, since it opens the route in the planner for editing, a
 different action from viewing it.
 
+## Ride-time calibration
+
+`GET /api/settings/ride-time-suggestion` fits a `flat_speed_kmh` value
+from the rider's own matched rides and offers it - it never applies
+anything. `services/ride_time.py`'s `compute_ride_time` stays the single
+source of ride-time predictions; `services/ride_calibration.py` only ever
+proposes a value the rider applies themselves, through the existing
+`PATCH /api/settings`. There is no new write path.
+
+For every ride the caller can use - `route_id` set (so there is a matched
+route's `elevation`/`surface` to compute over) and `moving_time_s` present
+- `solve_flat_speed_kmh` finds the `flat_speed_kmh` that would make
+`compute_ride_time`'s total, over that route's own elevation and surface,
+equal the ride's actual moving time. The obvious closed form -
+`suggested = reference_speed * predicted_total / actual_total` - assumes
+total time is exactly proportional to `1/flat_speed_kmh`, and it is not:
+`compute_ride_time` floors segment speed at `MIN_SPEED_KMH` and
+`effective_flat_speed` rescales by FTP. The fit is instead **numerical**:
+`compute_ride_time` is treated as a black box and bisected over
+`flat_speed_kmh`'s own valid range, 5-60 (`UserSettingsPatch`'s bounds,
+`app/schemas.py`), until the predicted total is within a second of the
+actual. Bisection is valid because the predicted total is monotonically
+decreasing in `flat_speed_kmh` across that whole range - raising the
+flat-road speed can only shorten a segment, never lengthen one, since
+every other factor (gradient, surface, the floor) is unchanged -
+`test_ride_calibration.py` asserts this directly rather than assuming it.
+A ride slower or faster than the model can express at either end of the
+range clamps to that end rather than being excluded: the range boundary
+is the closest representable answer, not a failure to solve.
+
+Per-ride results are combined with the **median**, not the mean, so one
+outlier ride - a long cafe stop folded into `moving_time_s`, a GPS
+dropout, a stopped-clock quirk in the source file - cannot drag the
+suggestion by itself; a flat mean would let a single bad ride move the
+number as much as five good ones. A floor of `MIN_USABLE_RIDES` (5) is
+required before anything is offered at all - a suggestion from one or two
+rides is closer to noise than to a calibration, and the endpoint returns
+`null` rather than a number under that floor.
+
+The query behind it (`suggest_flat_speed_kmh`) joins `Activity` to `Route`
+on `Route.id == Activity.route_id`, which already excludes rides with no
+match, filtered on **both** tables' `user_id` - the same belt-and-braces
+pattern `GET /api/routes/{id}/activities` uses, so this endpoint's
+isolation does not depend on `route_match.py` or `set_activity_route`
+never changing. Only the caller's own rides and routes are ever
+considered.
+
 ## Cycle-network coverage
 
 "You have ridden 38% of the National Cycle Network near you" needs two new
@@ -1710,7 +1757,7 @@ backend/app/
 │   ├── auth.py              # register/login/logout/me + OIDC flow
 │   ├── routes.py            # route CRUD, GPX/FIT export, share links, ride-time wiring
 │   ├── custom_presets.py    # CRUD for saved costing-slider bundles
-│   ├── settings.py          # GET/PATCH /api/settings, get_or_default_settings
+│   ├── settings.py          # GET/PATCH /api/settings, ride-time-suggestion, get_or_default_settings
 │   ├── deps.py              # DbDep / UserDep - session and current-user dependencies
 │   ├── assistant.py         # /api/assistant: chat, chat/stream (SSE), suggest-name
 │   ├── llm_admin.py         # /api/admin/llm: settings, model + provider browser, test probe
@@ -1722,6 +1769,7 @@ backend/app/
     ├── valhalla.py          # httpx client, error mapping, elevation, ascent calc, _parse_trip
     │                        #   (route/alternates), match_ways (map_snap, both coverage denominators)
     ├── ride_time.py         # gradient/surface/FTP model, computed on read only
+    ├── ride_calibration.py  # fits flat_speed_kmh from matched rides; suggest-only, never writes
     ├── loop.py              # "N km loop from here": bearing search + scoring + dedup
     ├── auth.py, oidc.py     # password hashing, sessions, OIDC client
     ├── gpx.py, fit.py       # exporters (FIT embeds maneuvers as course points)

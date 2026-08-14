@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { settings as settingsApi, type UserSettings } from '$lib/api';
+	import { settings as settingsApi, type RideTimeSuggestion, type UserSettings } from '$lib/api';
 
 	let weightKg: number = $state(78);
 	let flatSpeedKmh: number = $state(22);
@@ -12,6 +12,12 @@
 	let saving = $state(false);
 	let saved = $state(false);
 	let error: string | null = $state(null);
+
+	// Null when there are fewer than services/ride_calibration.py's floor of
+	// usable rides - the card is hidden entirely in that case, not shown
+	// empty or disabled.
+	let suggestion: RideTimeSuggestion | null = $state(null);
+	let applyingSuggestion = $state(false);
 
 	function apply(data: UserSettings) {
 		weightKg = data.weight_kg;
@@ -27,6 +33,14 @@
 			error = err instanceof Error ? err.message : 'Failed to load settings';
 		} finally {
 			loading = false;
+		}
+		// A separate call, and never allowed to fail page load: a rider whose
+		// suggestion query errors (or who simply has too few matched rides)
+		// still gets a working settings page, just without the card.
+		try {
+			suggestion = await settingsApi.rideTimeSuggestion();
+		} catch {
+			suggestion = null;
 		}
 	}
 	load();
@@ -47,6 +61,24 @@
 			error = err instanceof Error ? err.message : 'Failed to save settings';
 		} finally {
 			saving = false;
+		}
+	}
+
+	async function applySuggestion() {
+		if (!suggestion) return;
+		applyingSuggestion = true;
+		error = null;
+		try {
+			const updated = await settingsApi.update({ flat_speed_kmh: suggestion.suggested_kmh });
+			apply(updated);
+			saved = true;
+			// The rider's own current speed just changed to the suggested one -
+			// re-fetching would only echo the same value back as "suggested".
+			suggestion = null;
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to apply the suggestion';
+		} finally {
+			applyingSuggestion = false;
 		}
 	}
 </script>
@@ -71,6 +103,18 @@
 				<span>Flat-road speed (km/h)</span>
 				<input type="number" min="5" max="60" step="0.5" bind:value={flatSpeedKmh} required />
 			</label>
+
+			{#if suggestion}
+				<div class="suggestion">
+					<p>
+						Your rides suggest {suggestion.suggested_kmh} km/h (from {suggestion.sample_size} rides).
+						Apply?
+					</p>
+					<button type="button" onclick={applySuggestion} disabled={applyingSuggestion}>
+						{applyingSuggestion ? 'Applying…' : 'Apply'}
+					</button>
+				</div>
+			{/if}
 
 			<label>
 				<span>FTP (W, optional)</span>
@@ -136,6 +180,24 @@
 		border-radius: 6px;
 		background: var(--input-bg);
 		color: var(--text);
+	}
+	.suggestion {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.8rem;
+		padding: 0.6rem 0.8rem;
+		border: 1px solid var(--input-border);
+		border-radius: 6px;
+		background: var(--surface);
+	}
+	.suggestion p {
+		margin: 0;
+		font-size: 0.85rem;
+		color: var(--text);
+	}
+	.suggestion button {
+		flex-shrink: 0;
 	}
 	.actions {
 		display: flex;
