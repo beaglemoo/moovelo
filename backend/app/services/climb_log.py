@@ -27,6 +27,7 @@ enough to visibly move a climb marker, and irrelevant to the tolerance
 `CLUSTER_DISTANCE_TOLERANCE_M` clusters at.
 """
 
+import asyncio
 import math
 import uuid
 from collections.abc import Iterator, Sequence
@@ -55,15 +56,40 @@ MAX_CLIMB_ROWS = 20_000
 
 # Sized so any two points within CLUSTER_DISTANCE_TOLERANCE_M of each other
 # always land in the same grid cell or an adjacent one - `_candidate_keys`
-# below always searches the full 3x3 neighbourhood, so a cell edge can never
-# hide a real match. Degrees of latitude do not shrink towards the poles the
-# way degrees of longitude do, so sizing the grid uniformly from this
-# latitude-only constant makes each cell slightly *wider* than the
-# tolerance in longitude at any latitude away from the equator - harmless:
-# an oversized cell only ever costs a few extra (correctly rejected)
-# comparisons, never a missed match, which an undersized cell risks.
+# below searches the full 3x3 neighbourhood, so a cell edge can never hide a
+# real match.
+#
+# The latitude and longitude cells are NOT the same number of degrees, and
+# getting that wrong is a missed match rather than a wasted comparison. A
+# degree of longitude is `111_320 * cos(latitude)` metres, so a cell sized
+# from the latitude constant alone is *narrower* than the tolerance in
+# longitude everywhere away from the equator - about 124 m against a 200 m
+# tolerance at the UK's ~51.8N, the same 1.62x factor that has now bitten
+# this phase three times (the Frechet result in route_match.py, then its
+# simplify tolerance, then here). Two ascents of one hill 190 m apart hashed
+# two cells apart and were logged as two separate climbs.
+#
+# The longitude cell is therefore derived from the point's own latitude, and
+# only ever made larger. `_MIN_COS_LATITUDE` floors the divisor so a point
+# near a pole cannot produce an absurd cell (or a division by zero at 90),
+# and an oversized cell only ever costs extra comparisons that are then
+# correctly rejected.
 _METRES_PER_DEGREE_LATITUDE = 111_320.0
-_GRID_CELL_DEG = CLUSTER_DISTANCE_TOLERANCE_M / _METRES_PER_DEGREE_LATITUDE
+_GRID_CELL_LAT_DEG = CLUSTER_DISTANCE_TOLERANCE_M / _METRES_PER_DEGREE_LATITUDE
+_MIN_COS_LATITUDE = 0.05
+
+
+def _grid_cell_lon_deg(lat: float) -> float:
+    """The longitude cell width, in degrees, that spans
+    CLUSTER_DISTANCE_TOLERANCE_M of real ground at this latitude.
+
+    Two points close enough to cluster differ in latitude by at most
+    `_GRID_CELL_LAT_DEG` (~0.0018 degrees), over which cos(latitude) is
+    constant to five decimal places, so both sides of a comparison agree on
+    the cell width and the neighbourhood search stays symmetric.
+    """
+    return _GRID_CELL_LAT_DEG / max(math.cos(math.radians(lat)), _MIN_COS_LATITUDE)
+
 
 # `jsonb_array_elements` explodes each activity's own `climbs` column - one
 # row per detected climb, joined back to the activity that carries it via a
@@ -132,11 +158,14 @@ class _Cluster:
 
 def _bucket_key(point: Point) -> tuple[int, int]:
     lat, lon = point
-    return (math.floor(lat / _GRID_CELL_DEG), math.floor(lon / _GRID_CELL_DEG))
+    return (
+        math.floor(lat / _GRID_CELL_LAT_DEG),
+        math.floor(lon / _grid_cell_lon_deg(lat)),
+    )
 
 
 def _candidate_keys(key: tuple[int, int]) -> Iterator[tuple[int, int]]:
-    """The 3x3 neighbourhood of grid cells - see `_GRID_CELL_DEG`'s own
+    """The 3x3 neighbourhood of grid cells - see `_GRID_CELL_LAT_DEG`'s own
     comment for why searching just these guarantees nothing within
     CLUSTER_DISTANCE_TOLERANCE_M is ever missed."""
     bi, bj = key
@@ -258,4 +287,14 @@ async def climb_log(db: AsyncSession, user_id: uuid.UUID) -> list[ClimbLogEntry]
     # zero or missing (NULLIF above), which ST_LineInterpolatePoint cannot
     # place anywhere - skipped rather than clustered against nothing.
     usable = [row for row in rows if row.start_lat is not None and row.start_lon is not None]
-    return _cluster(usable)
+    # Off the event loop. The grid keeps the common case near-linear, but it
+    # only bounds comparisons against *distinct* clusters sharing a cell:
+    # climbs packed into one neighbourhood whose lengths differ by more than
+    # CLUSTER_LENGTH_TOLERANCE_PCT never merge, so each new one still scans
+    # the ones already there. Measured on synthetic worst-case rows, 1,000
+    # such climbs took 0.07s and 2,000 took 0.30s - quadratic, and bounded
+    # only by MAX_CLIMB_ROWS at the far end. That is survivable for one
+    # rider's own request; what is not survivable is doing it inline on the
+    # loop, where it stalls every other request in the process. This is the
+    # same trade the activity parser already makes (api/activities.py:76).
+    return await asyncio.to_thread(_cluster, usable)
