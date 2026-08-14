@@ -429,6 +429,17 @@ class ActivitySummary(BaseModel):
     descent_m: float
     source: str
     created_at: datetime
+    # The saved route this ride matched to, if any - see
+    # services/route_match.py. route_name is carried alongside so the UI can
+    # show it without a second call per row.
+    route_id: uuid.UUID | None = None
+    route_name: str | None = None
+    # The Frechet distance, in true ground metres, that produced an
+    # auto-match. Null for a manual link or no match at all.
+    match_confidence: float | None = None
+    # True once a rider has picked or cleared the match by hand - the
+    # auto-matcher will not touch it again.
+    match_locked: bool = False
 
 
 class ActivityDetail(ActivitySummary):
@@ -437,6 +448,14 @@ class ActivityDetail(ActivitySummary):
     # polyline6, same encoding the planner already decodes for route legs.
     shape: str
     elevation: list[ElevationPoint] = []
+
+
+class ActivityRouteLinkRequest(BaseModel):
+    """Body of PUT /api/activities/{id}/route. `route_id` null clears the
+    link - both a set and a clear are a human decision, so both lock out
+    the auto-matcher the same way."""
+
+    route_id: uuid.UUID | None = None
 
 
 class HeatmapAvailability(BaseModel):
