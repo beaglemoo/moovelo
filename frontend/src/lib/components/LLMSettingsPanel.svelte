@@ -438,7 +438,7 @@
 	}
 	button.primary {
 		background: var(--accent-fill);
-		border-color: var(--accent);
+		border-color: var(--accent-fill);
 		color: #fff;
 	}
 	.modes {

@@ -261,7 +261,7 @@
 		--success: #859900;
 		--warning: #b58900;
 		--link: #1a6fb0;
-		--danger-text: #dc322f;
+		--danger-text: #d02c28;
 	}
 	@media (prefers-color-scheme: dark) {
 		:global(:root:not([data-theme='light'])) {
@@ -311,7 +311,7 @@
 		--shadow: rgba(0, 0, 0, 0.12);
 		--overlay-scrim: rgba(7, 54, 66, 0.75);
 		--link: #1a6fb0;
-		--danger-text: #dc322f;
+		--danger-text: #d02c28;
 	}
 	:global(html, body) {
 		margin: 0;
