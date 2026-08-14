@@ -12,6 +12,7 @@ import uuid
 from geoalchemy2 import WKTElement
 
 from app.models import Activity
+from app.services.climbs import detect_climbs
 from app.services.geo import cumulative_distances
 from app.services.importer import ImportedTrack, elevation_profile
 from app.services.valhalla import ascent_descent
@@ -47,6 +48,13 @@ def activity_from_track(
     elevation = elevation_profile(track)
     ascent, descent = ascent_descent(elevation)
     distances = cumulative_distances(track.shape)
+    # Shared by both import paths - this function is the only place either
+    # one builds an Activity - so wiring detect_climbs in here rather than
+    # at each call site covers POST /api/activities/import and the Strava
+    # archive worker (services/activity_import.py) in one place. Cheap: it
+    # is pure O(n) resampling/smoothing over at most MAX_ELEVATION_SAMPLES
+    # points, not a second pass over the raw track.
+    climbs = detect_climbs(elevation)
 
     name = (track.name or fallback_name).strip()[:NAME_MAX] or fallback_name[:NAME_MAX]
     return Activity(
@@ -63,6 +71,7 @@ def activity_from_track(
         ascent_m=ascent,
         descent_m=descent,
         elevation=[point.model_dump() for point in elevation],
+        climbs=[climb.model_dump() for climb in climbs],
         geom=track_geometry(track),
         source=source,
         source_ref=source_ref,
