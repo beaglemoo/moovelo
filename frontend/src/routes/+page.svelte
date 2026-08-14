@@ -1798,7 +1798,7 @@
 		border-color: #d33682;
 	}
 	.toolbar > .wahoo {
-		background: var(--accent);
+		background: var(--accent-fill);
 		color: #fff;
 		border-color: var(--accent);
 	}
@@ -1983,7 +1983,7 @@
 		cursor: pointer;
 	}
 	.isochrone-prompt-buttons .primary {
-		background: var(--accent);
+		background: var(--accent-fill);
 		border-color: var(--accent);
 		color: #fff;
 	}

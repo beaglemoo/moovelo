@@ -1339,7 +1339,7 @@
 		border-left: 1px solid var(--border);
 	}
 	.basemap-switch button.active {
-		background: var(--accent);
+		background: var(--accent-fill);
 		color: #fff;
 	}
 	.overlay-toggle {
@@ -1358,7 +1358,7 @@
 		z-index: 5;
 	}
 	.overlay-toggle.active {
-		background: var(--accent);
+		background: var(--accent-fill);
 		border-color: var(--accent);
 		color: #fff;
 	}

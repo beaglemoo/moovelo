@@ -437,7 +437,7 @@
 		cursor: default;
 	}
 	button.primary {
-		background: var(--accent);
+		background: var(--accent-fill);
 		border-color: var(--accent);
 		color: #fff;
 	}

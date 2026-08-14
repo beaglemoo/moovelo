@@ -111,8 +111,8 @@
 		padding: 2px 6px;
 	}
 	.controls button {
-		border: 1px solid var(--accent);
-		background: var(--accent);
+		border: 1px solid var(--accent-fill);
+		background: var(--accent-fill);
 		color: #fff;
 		border-radius: 4px;
 		padding: 2px 10px;
