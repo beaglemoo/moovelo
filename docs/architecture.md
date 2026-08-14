@@ -1864,7 +1864,9 @@ frontend/src/
 │   ├── +page.svelte             # planner: state, reroute + save + wahoo orchestration
 │   ├── login/+page.svelte       # password and/or SSO login
 │   ├── library/+page.svelte     # saved routes, exports, wahoo, share
-│   ├── activities/+page.svelte  # activity list, import, coverage + climb log cards (heatmap toggle lives on the map itself)
+│   ├── library/[id]/+page.svelte    # route detail: the rides of this route, planned vs actual
+│   ├── activities/+page.svelte  # activity list, import, coverage + climb log + riding totals cards (heatmap toggle lives on the map itself)
+│   ├── activities/[id]/+page.svelte # ride detail: matched route, actual vs predicted, manual match picker
 │   ├── settings/+page.svelte    # rider settings (weight, flat-road speed, FTP) for ride time
 │   ├── admin/+page.svelte       # users/stats/config (admins)
 │   └── s/[token]/+page.svelte   # public read-only shared route
@@ -1954,6 +1956,8 @@ backend/app/
     ├── importer.py          # GPX/TCX/FIT parsing for uploaded files
     ├── import_routes.py     # map matching an imported track back onto the network
     ├── activities.py        # a parsed track into a stored ride
+    ├── route_match.py       # links a ride to the route it followed: bidirectional coverage,
+    │                        #   not Frechet - see "Ride-to-route matching" above
     ├── activity_import.py   # Strava bulk-export zip: manifest, caps, background worker
     ├── way_matching.py      # map_snap matching + WayMatchQueue (new imports + backfill)
     ├── coverage.py          # ridden vs total metres per network tier and per highway class,
