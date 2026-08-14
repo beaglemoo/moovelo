@@ -33,8 +33,8 @@ import uuid
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import delete, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.services.route_match as route_match
 from app.models import Activity, Route, User
@@ -431,13 +431,17 @@ async def test_a_match_commit_failure_does_not_break_the_import_response(
         # Two frames up, not one: this helper is called BY failing_commit /
         # failing_get, so f_back is the patch and f_back.f_back is the code
         # that called the patched method.
+        #
+        # Keyed on the FILE, not on match_activity_to_route by name. It was
+        # keyed on the name, and then the TOCTOU fix moved the commit into
+        # _store_match in the same module - at which point the injection
+        # stopped firing and this test would have gone silently vacuous. The
+        # commit_failures assertion below is what caught that; the predicate
+        # is now written so an ordinary refactor within the module cannot
+        # disarm it again.
         outer = frame.f_back if (frame := inspect.currentframe()) else None
         caller = outer.f_back if outer else None
-        return (
-            caller is not None
-            and caller.f_code.co_name == "match_activity_to_route"
-            and caller.f_code.co_filename.endswith("route_match.py")
-        )
+        return caller is not None and caller.f_code.co_filename.endswith("route_match.py")
 
     async def failing_commit(self: AsyncSession, *args: object, **kwargs: object) -> None:
         nonlocal commit_failures
@@ -1261,3 +1265,76 @@ async def test_the_candidate_ranking_is_not_distorted_by_longitude(
     matched = await match_activity_to_route(activity.id)
 
     assert matched == true_route.id
+
+
+async def test_a_manual_pick_during_a_running_match_is_not_clobbered(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rider locking the activity mid-match must win.
+
+    match_locked used to be read once, immediately after the activity was
+    loaded, and the write then went ahead unconditionally - with the whole
+    bidirectional-coverage query (simplify, buffer and intersect over up to
+    MAX_CANDIDATES routes) sitting in between. A manual PUT .../route
+    landing in that window was lost, and lost invisibly: SQLAlchemy's unit
+    of work only emits columns it saw change, so the rider's
+    match_locked=true survived while their route_id was overwritten by the
+    auto-matcher's guess. The result is a row nothing can tell from a
+    genuine manual pick - locked against every future pass, pointing at the
+    wrong route. The guard now lives in the UPDATE's WHERE clause, so there
+    is no window to lose.
+
+    The race is driven for real, not simulated: a second independent
+    session commits the manual pick from inside the coverage query itself.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    auto_route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    manual_route = _route(user_id, _north_leg(offset_east_m=5000.0), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([auto_route, manual_route, activity])
+    await db.commit()
+    activity_id, manual_id = activity.id, manual_route.id
+
+    real_execute = AsyncSession.execute
+    raced = False
+
+    async def racing_execute(self: AsyncSession, statement: object, *a: object, **k: object):  # type: ignore[no-untyped-def]
+        result = await real_execute(self, statement, *a, **k)  # type: ignore[arg-type]
+        nonlocal raced
+        # Fire once, after the coverage CTE has run but before the write -
+        # exactly the window the old read-once check left open.
+        if not raced and "act_tol" in str(statement):
+            raced = True
+            async with db_factory() as other:
+                await other.execute(
+                    update(Activity)
+                    .where(Activity.id == activity_id)
+                    .values(route_id=manual_id, match_locked=True, match_confidence=None)
+                )
+                await other.commit()
+        return result
+
+    monkeypatch.setattr(AsyncSession, "execute", racing_execute)
+    matched = await match_activity_to_route(activity_id)
+    monkeypatch.undo()
+
+    assert raced, "the manual pick never landed; the race was not reproduced"
+    # Nothing of ours was written, so nothing of ours may be reported.
+    assert matched is None
+
+    async with db_factory() as check:
+        row = (
+            await check.execute(
+                select(Activity.route_id, Activity.match_locked, Activity.match_confidence).where(
+                    Activity.id == activity_id
+                )
+            )
+        ).one()
+    assert row.route_id == manual_id, "the rider's pick was overwritten"
+    assert row.match_locked is True
+    assert row.match_confidence is None

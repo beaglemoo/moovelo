@@ -77,8 +77,13 @@ whole bug family is retired rather than patched.
 
 import logging
 import uuid
+from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import text
+from sqlalchemy import text, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from sqlalchemy import CursorResult
 
 from app.db import session_factory
 from app.models import Activity
@@ -290,6 +295,42 @@ _MATCH_SQL = text("""
 """)
 
 
+async def _store_match(
+    db: AsyncSession,
+    activity_id: uuid.UUID,
+    route_id: uuid.UUID | None,
+    confidence: float | None,
+) -> bool:
+    """Write a match result, but only while the rider has not locked it.
+
+    `match_locked = false` lives in the UPDATE's own WHERE clause rather
+    than in a Python check, and that placement is the whole point. Reading
+    the flag and then writing leaves a window, and the window here is wide:
+    between the two sits the bidirectional-coverage query, which simplifies
+    and buffers up to MAX_CANDIDATES routes. A rider picking a route by hand
+    in that window used to lose it - and lose it invisibly, because
+    SQLAlchemy's unit of work only emits the columns it saw change, so the
+    manual write's `match_locked = true` survived while its `route_id` was
+    overwritten. That leaves a row no code can tell from a genuine manual
+    pick: locked against all future passes, pointing at the auto-matcher's
+    guess. Silent, permanent, and the exact inversion of what the flag is
+    for.
+
+    Returns whether the row was actually written, so a caller cannot report
+    a match it did not get to make.
+    """
+    result = cast(
+        "CursorResult[Any]",
+        await db.execute(
+            update(Activity)
+            .where(Activity.id == activity_id, Activity.match_locked.is_(False))
+            .values(route_id=route_id, match_confidence=confidence)
+        ),
+    )
+    await db.commit()
+    return bool(result.rowcount)
+
+
 async def match_activity_to_route(
     activity_id: uuid.UUID, *, clear_if_unmatched: bool = False
 ) -> uuid.UUID | None:
@@ -396,15 +437,15 @@ async def match_activity_to_route(
                 # and silently feeds a nonsensical implied speed into
                 # ride-time calibration.
                 if clear_if_unmatched and activity.route_id is not None:
-                    activity.route_id = None
-                    activity.match_confidence = None
-                    await db.commit()
+                    await _store_match(db, activity_id, None, None)
                 return None
 
+            if not await _store_match(db, activity_id, row.id, float(row.confidence)):
+                # A rider locked this activity while the coverage query was
+                # running. Their pick stands and we did not write, so there is
+                # no match of ours to report.
+                return None
             route_id = row.id
-            activity.route_id = route_id
-            activity.match_confidence = float(row.confidence)
-            await db.commit()
     except Exception:  # noqa: BLE001 - see the "Never raises" docstring note above
         logger.warning("route match failed for activity %s", activity_id, exc_info=True)
         # No rollback needed and none possible to get wrong: leaving the
