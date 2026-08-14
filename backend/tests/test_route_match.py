@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.services.route_match as route_match
 from app.models import Activity, Route, User
+from app.schemas import RouteResponse
 from app.services.geo import Point, destination_point
 from app.services.route_match import (
     COVERAGE_BUFFER_M,
@@ -45,6 +46,7 @@ from app.services.route_match import (
 )
 from tests.conftest import register
 from tests.test_activities_api import GPX_RIDE
+from tests.test_auth_routes import WAYPOINTS
 
 # Same Chilterns point test_coverage.py uses, deliberately: it sits at
 # ~51.8N, close to the UK's centre of population, which is exactly the
@@ -699,3 +701,175 @@ async def test_list_activities_carries_the_matched_route_name(
     row = next(item for item in response.json() if item["id"] == str(activity.id))
     assert row["route_id"] == str(route.id)
     assert row["route_name"] == route.name
+
+
+async def test_a_cross_linked_row_never_leaks_the_other_users_route_name(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, db: AsyncSession
+) -> None:
+    """The list and detail reads filter the route's owner as well as the ride's.
+
+    Nothing in the app can produce this row: PUT .../route checks both sides
+    (the test above pins that) and auto-matching only ever considers the
+    rider's own routes. The foreign key permits it though, so it is one bad
+    query or one future endpoint away - and these are read paths, which do
+    not get to depend on every present and future writer staying correct.
+    GET /api/routes/{id}/activities and services/ride_calibration.py already
+    filter both tables for this reason; these two were the pair that did not,
+    and without the filter a stranger's private route name is handed to
+    whoever owns the ride.
+
+    Seeded through the session because the API cannot create it.
+    """
+    monkeypatch.setattr("app.api.auth.settings.signups_enabled", True)
+    await register(client, "stranger@example.com")
+    stranger_id = await _user_id(db, "stranger@example.com")
+    secret = _route(stranger_id, _north_leg(), RUN_LENGTH_M)
+    secret.name = "SECRET-STRANGER-ROUTE"
+    db.add(secret)
+    await db.commit()
+    await client.post("/api/auth/logout")
+
+    await register(client, "owner@example.com")
+    owner_id = await _user_id(db, "owner@example.com")
+    activity = _activity(owner_id, _north_leg(), RUN_LENGTH_M)
+    activity.route_id = secret.id
+    db.add(activity)
+    await db.commit()
+
+    listed = await client.get("/api/activities")
+    assert listed.status_code == 200
+    row = next(item for item in listed.json() if item["id"] == str(activity.id))
+    assert row["route_name"] != "SECRET-STRANGER-ROUTE"
+    assert row["route_name"] is None
+
+    detail = await client.get(f"/api/activities/{activity.id}")
+    assert detail.status_code == 200
+    assert detail.json()["route_name"] != "SECRET-STRANGER-ROUTE"
+    assert detail.json()["route_name"] is None
+
+
+async def test_re_routing_a_saved_route_clears_the_matches_it_invalidated(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """A saved route is re-routed in place, so its matches go stale silently.
+
+    Nothing else re-derives them: the import-time pass only runs when a ride
+    arrives, and its "no candidate qualified means leave the link alone"
+    policy is exactly wrong once the geometry the match was made against no
+    longer exists. Left stale, planned-vs-actual shows the old confidence
+    beside a predicted time computed from the new shape, and ride-time
+    calibration solves that new elevation against this ride's real moving
+    time - corrupting the rider's suggested speed with no visible error.
+    """
+    from app.api.routes import _rematch_linked_activities
+
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id, route_id = activity.id, route.id
+    assert await match_activity_to_route(db, activity_id) == route_id
+
+    # The rider re-routes the saved route somewhere else entirely and saves;
+    # same row, same id, different road.
+    far = destination_point((LAT, LON), 90.0, 5_000.0)
+    route.geom = _line_wkt([far, destination_point(far, RUN_BEARING_DEG, RUN_LENGTH_M)])
+    await db.commit()
+
+    await _rematch_linked_activities(route_id, db)
+
+    db.expire_all()
+    row = (
+        await db.execute(
+            select(Activity.route_id, Activity.match_confidence).where(Activity.id == activity_id)
+        )
+    ).one()
+    assert row.route_id is None, "a match against geometry that no longer exists must not survive"
+    assert row.match_confidence is None
+
+
+async def test_re_routing_leaves_a_hand_picked_match_alone(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """match_locked is the rider's decision, and re-routing is not a reason to
+    overrule it - the re-derive goes through match_activity_to_route precisely
+    so it inherits that check rather than reimplementing it."""
+    from app.api.routes import _rematch_linked_activities
+
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id, route_id = activity.id, route.id
+
+    linked = await client.put(
+        f"/api/activities/{activity_id}/route", json={"route_id": str(route_id)}
+    )
+    assert linked.status_code == 200
+    assert linked.json()["match_locked"] is True
+
+    far = destination_point((LAT, LON), 90.0, 5_000.0)
+    route.geom = _line_wkt([far, destination_point(far, RUN_BEARING_DEG, RUN_LENGTH_M)])
+    await db.commit()
+    # The PUT above went through the API's own session, so this one still
+    # holds the pre-lock Activity; without expiring it the re-derive reads a
+    # stale match_locked and the assertion below passes or fails for the
+    # wrong reason. In the app both run on the same session, so this is a
+    # test artifact rather than the behaviour under test.
+    db.expire_all()
+
+    await _rematch_linked_activities(route_id, db)
+
+    db.expire_all()
+    stored = await db.scalar(select(Activity.route_id).where(Activity.id == activity_id))
+    assert stored == route_id
+
+
+async def test_saving_a_re_routed_route_triggers_the_re_derive(
+    client: AsyncClient, snapshot: RouteResponse, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PATCH with a new snapshot must actually call the re-derive.
+
+    The two tests above pin what `_rematch_linked_activities` does; this one
+    pins that the endpoint calls it, which is a separate failure - the helper
+    could be perfect and simply never run. It also pins the other half: a
+    PATCH that only renames a route changes no geometry, so nothing needs
+    re-deriving and the matches must be left alone.
+    """
+    import app.api.routes as routes_api
+
+    await register(client, "rider@example.com")
+    saved = await client.post(
+        "/api/routes",
+        json={
+            "name": "Re-routed",
+            "waypoints": WAYPOINTS,
+            "preset": "gravel",
+            "snapshot": snapshot.model_dump(),
+        },
+    )
+    assert saved.status_code == 201, saved.text
+    created = saved.json()
+
+    called: list[uuid.UUID] = []
+
+    async def _spy(route_id: uuid.UUID, db: object) -> None:
+        called.append(route_id)
+
+    monkeypatch.setattr(routes_api, "_rematch_linked_activities", _spy)
+
+    renamed = await client.patch(f"/api/routes/{created['id']}", json={"name": "Just a rename"})
+    assert renamed.status_code == 200
+    assert called == [], "a rename changes no geometry, so nothing is stale"
+
+    resaved = await client.patch(
+        f"/api/routes/{created['id']}", json={"snapshot": snapshot.model_dump()}
+    )
+    assert resaved.status_code == 200
+    assert called == [uuid.UUID(created["id"])]
