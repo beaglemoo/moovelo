@@ -38,15 +38,34 @@ test('a matched ride and its route show planned-vs-actual on both detail pages',
 	const routeLink = row.locator('td[data-label="Route"] a');
 	await expect(routeLink).toHaveText('E2E import fixture', { timeout: 30_000 });
 
+	// The ride's own distance, as this list renders it. Used below to pin
+	// which column of the comparison table is which: asserting only that the
+	// rows are labelled Time/Distance/Ascent leaves the Actual and Planned
+	// columns free to be swapped, and a swapped table still passed.
+	const rideDistance = (await row.locator('td[data-label="Distance"]').innerText()).trim();
+
 	// Ride detail: the comparison table and a working link to the route.
 	await row.getByRole('link', { name: 'E2E ride fixture' }).click();
 	await expect(page).toHaveURL(/\/activities\/[0-9a-f-]+$/);
 	await expect(page.getByRole('heading', { name: 'E2E ride fixture' })).toBeVisible();
 	const matchedRouteLink = page.locator('.route-link a');
 	await expect(matchedRouteLink).toHaveText('E2E import fixture');
-	await expect(page.locator('table.comparison')).toContainText('Time');
-	await expect(page.locator('table.comparison')).toContainText('Distance');
-	await expect(page.locator('table.comparison')).toContainText('Ascent');
+	const comparison = page.locator('table.comparison');
+	await expect(comparison).toContainText('Time');
+	await expect(comparison).toContainText('Distance');
+	await expect(comparison).toContainText('Ascent');
+
+	// Pin the columns, not just the row labels. The Actual cell must be the
+	// ride's own distance - the same number and formatting the list showed -
+	// and Planned must be the route's, which differs. Without both of these a
+	// swapped Actual/Planned pair passes the spec unchanged.
+	const distanceRow = comparison.locator('tr', { hasText: 'Distance' });
+	const actualDistance = (await distanceRow.locator('td').nth(1).innerText()).trim();
+	const plannedDistance = (await distanceRow.locator('td').nth(2).innerText()).trim();
+	expect(actualDistance).toBe(rideDistance);
+	// If the fixtures ever coincide, the assertion above stops discriminating
+	// and this says so out loud rather than passing quietly.
+	expect(plannedDistance).not.toBe(actualDistance);
 
 	// Follow it to the route detail page, and back again.
 	await matchedRouteLink.click();
@@ -59,4 +78,55 @@ test('a matched ride and its route show planned-vs-actual on both detail pages',
 	await rideLinkOnRoutePage.click();
 	await expect(page).toHaveURL(/\/activities\/[0-9a-f-]+$/);
 	await expect(page.getByRole('heading', { name: 'E2E ride fixture' })).toBeVisible();
+});
+
+test('a failed route pick puts the picker back rather than mixing two routes', async ({ page }) => {
+	await registerOrSkip(page, 'e2e-pick-fail', password);
+
+	// TWO distinct routes: the picker needs something else to switch to, and
+	// switching to the route already matched would prove nothing.
+	await page.goto('/library');
+	await windowDropReady(page);
+	await page.locator('input[type="file"]').setInputFiles(routeFile);
+	await expect(page.locator('.results li').first()).toContainText('turn cues', {
+		timeout: 60_000
+	});
+	await page.locator('input[type="file"]').setInputFiles(rideFile);
+	await expect(page.locator('.results li')).toHaveCount(2, { timeout: 60_000 });
+
+	await page.goto('/activities');
+	await windowDropReady(page);
+	await page.locator('input[type="file"]').setInputFiles(rideFile);
+	await expect(page.locator('.results li').first()).toContainText('tring-ride.gpx', {
+		timeout: 60_000
+	});
+
+	const row = page.locator('tbody tr', { hasText: 'E2E ride fixture' });
+	await expect(row).toBeVisible({ timeout: 60_000 });
+	await row.getByRole('link', { name: 'E2E ride fixture' }).click();
+	await expect(page).toHaveURL(/\/activities\/[0-9a-f-]+$/);
+
+	const select = page.locator('.picker select');
+	await expect(select.locator('option')).toHaveCount(3, { timeout: 20_000 });
+	const before = await select.inputValue();
+	const nameBefore = await page.locator('.route-link a').innerText();
+
+	const values = await select
+		.locator('option')
+		.evaluateAll((nodes) => nodes.map((n) => (n as HTMLOptionElement).value));
+	const other = values.find((v) => v && v !== before);
+	expect(other, 'fixture must offer a second, different route').toBeTruthy();
+
+	// The PUT lands; fetching the newly picked route then fails.
+	await page.route('**/api/routes/*', (r) => r.abort());
+	await select.selectOption(other!);
+	await expect(page.locator('.picker-error, .error')).toBeVisible({ timeout: 10_000 });
+
+	// The select is bound one way, so nothing re-renders it when the state it
+	// reads is unchanged - without putting it back by hand it keeps showing the
+	// route the rider picked while the panel below still describes the old one.
+	// Getting the state right is necessary but not sufficient here, and this
+	// assertion is the part that only a browser can make.
+	expect(await select.inputValue()).toBe(before);
+	await expect(page.locator('.route-link a')).toHaveText(nameBefore);
 });
