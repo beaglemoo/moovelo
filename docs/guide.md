@@ -360,6 +360,11 @@ you've saved, with:
   "cafe at 12km" written in a note is findable later), filter by tag,
   favourite, or planned/imported, and sort by date, name, distance or
   climbing.
+- **Details** - opens the route's own page (`/library/{id}`), showing its
+  map, elevation profile and, once you have imported a ride that followed
+  it, every one of those rides with actual moving time, distance and
+  ascent set against what was planned. See
+  [Planned vs actual](#planned-vs-actual) below.
 - **Duplicate** - copies the route exactly as saved.
 - **Reverse** - creates a *new* route ridden the other way. This
   deliberately re-routes between the reversed waypoints rather than just
@@ -426,6 +431,27 @@ A few details worth knowing:
 - **Elevation** comes from the file itself. Your own barometer is a
   better record of the ride than a lookup would be.
 - The same 20 MB and 100,000-point limits apply as to route import.
+
+### Planned vs actual
+
+Click a ride's name to open its own page (`/activities/{id}`): the
+recorded trace on the map, its elevation profile, and - when it has been
+matched to a saved route - that route's name (linking to its own page),
+your actual moving time, distance and ascent set against what the route
+predicted or planned. The predicted time is the same rider-settings-aware
+model shown everywhere else in the app, not a separate estimate for this
+page.
+
+Matching happens automatically on import (see below), but you know your
+own ride better than any geometry ever will. A dropdown on the ride page
+lets you pick a different route, or clear the match entirely - either
+choice is remembered, and Moovelo will not try to auto-match that ride
+again unless you clear it back.
+
+The same comparison appears the other way round, on the route's own page
+(`/library/{id}` - see [Saving and the library](#saving-and-the-library)):
+every ride that has been matched to it, each linking back to that ride's
+own page.
 
 ### Importing a Strava export
 

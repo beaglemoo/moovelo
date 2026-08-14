@@ -709,6 +709,47 @@ how a rider says "there is no route for this ride, stop guessing" - so a
 trigger that reset the flag whenever `route_id` went null would silently
 undo the rider's own decision and let the next auto-match re-link the ride.
 
+## Planned vs actual
+
+`GET /api/routes/{id}/activities` is the read side of the match above: the
+rides linked to one route, ownership-checked the same way every other
+`/api/routes/{id}/*` endpoint is (`get_owned_route`, 404 for another
+user's route), plus the route's own predicted ride time. That total is
+**not a new computation** - it is `_ride_time_for`'s existing
+`compute_ride_time` model (`services/ride_time.py`, over the route's
+`elevation`/`surface` and the viewer's own rider settings) with the total
+simply the last `RideTimePoint.time_s`, the same series `SavedRoute.
+ride_time` already carries on every route read. It sits once at the top of
+the response, not once per ride, because it is a property of the route,
+not of any one ride against it.
+
+Two new SvelteKit pages, both read-only reuses of `MapView.svelte` in the
+same no-op-callback shape the anonymous share page (`/s/[token]`)
+established - `waypoints`/`legStartIndices` fixed to empty arrays declared
+once outside the reactive graph (fresh literals on every render would
+retrigger the map's own sync effects), every edit callback a shared
+`noop`:
+
+- `/activities/{id}` - the recorded trace, the ride's own stats, its
+  elevation profile, and - when matched - the route it followed
+  (`SavedRoute.ride_time`'s last point is the predicted time, read straight
+  off the existing `GET /api/activities/{id}` + `GET /api/routes/{id}`
+  calls rather than a third endpoint) set against the ride's actual moving
+  time, distance and ascent. A `<select>` populated from `GET /api/routes`
+  is the manual override PR1 shipped an endpoint for but no UI: picking an
+  entry calls `PUT /api/activities/{id}/route`, clearing it back to "No
+  matched route" sends `route_id: null`.
+- `/library/{id}` - the route itself plus `GET /api/routes/{id}/
+  activities`'s list, each row the same actual-vs-planned comparison,
+  linking back to that ride's own detail page. Empty state points at
+  `/activities` rather than explaining the matching algorithm again.
+
+Both pages are linked from their list page: the activities table's ride
+name and matched-route name, and a "Details" link alongside the library
+table's existing GPX/FIT export links - the library row's own name button
+is untouched, since it opens the route in the planner for editing, a
+different action from viewing it.
+
 ## Cycle-network coverage
 
 "You have ridden 38% of the National Cycle Network near you" needs two new
