@@ -39,6 +39,7 @@ from app.models import Activity, Route, User
 from app.services.geo import Point, destination_point
 from app.services.route_match import (
     COVERAGE_BUFFER_M,
+    MAX_CANDIDATES,
     MIN_COVERAGE,
     match_activity_to_route,
 )
@@ -421,6 +422,96 @@ async def test_deleting_a_route_leaves_the_ride_intact_with_a_null_link(
     # identity-mapped instance cannot hide a FK that never actually cleared.
     route_id_after = await db.scalar(select(Activity.route_id).where(Activity.id == activity_id))
     assert route_id_after is None
+
+    # ON DELETE SET NULL is pure DDL - it nulls route_id and touches nothing
+    # else - so without the migration's trigger the score describing the
+    # now-deleted route survives it. A confidence for a route that does not
+    # exist is a lie the UI would eventually render.
+    confidence_after = await db.scalar(
+        select(Activity.match_confidence).where(Activity.id == activity_id)
+    )
+    assert confidence_after is None
+
+
+async def test_a_hand_cleared_link_keeps_its_lock_when_confidence_is_cleared(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The trigger must clear match_confidence without touching match_locked.
+
+    Clearing a link by hand sets `route_id = NULL` and `match_locked = True`
+    together - that pairing is how a rider says "there is no route for this
+    ride, stop guessing". A trigger that also reset the flag would silently
+    undo the decision and let the next auto-match re-link the ride.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    # Held as a plain value: the expire_all() below would otherwise make
+    # reading activity.id an implicit lazy load outside async context.
+    activity_id = activity.id
+    assert await match_activity_to_route(db, activity_id) == route.id
+
+    cleared = await client.put(f"/api/activities/{activity_id}/route", json={"route_id": None})
+    assert cleared.status_code == 200, cleared.text
+
+    row = (
+        await db.execute(
+            select(Activity.route_id, Activity.match_confidence, Activity.match_locked).where(
+                Activity.id == activity_id
+            )
+        )
+    ).one()
+    assert row.route_id is None
+    assert row.match_confidence is None
+    assert row.match_locked is True
+
+    # And the lock genuinely still holds the auto-matcher off. The PUT above
+    # went through the API's own session, so this one's identity map still
+    # holds the pre-clear Activity - expire it, or the matcher reads a stale
+    # match_locked and the assertion passes or fails for the wrong reason.
+    db.expire_all()
+    assert await match_activity_to_route(db, activity_id) is None
+
+
+async def test_the_true_route_wins_even_when_many_candidates_qualify(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """`LIMIT` without `ORDER BY` lets Postgres return any qualifying rows.
+
+    With more overlapping same-length routes than MAX_CANDIDATES, the true
+    match could be cut purely on physical row order - and a dropped
+    candidate is indistinguishable from "nothing matched". The decoys are
+    inserted FIRST here, which is the ordering that reproduced the failure.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    # Comfortably more than MAX_CANDIDATES, all overlapping the ride's bbox
+    # (offsets stay under RUN_WIDTH_M) and all inside the distance band, so
+    # every one is a genuine candidate that must be fetched and scored. They
+    # sit well beyond COVERAGE_BUFFER_M, though, so none of them can actually
+    # win - which is the point: only the true route should come back, and it
+    # cannot if the cap dropped it before scoring.
+    #
+    # Each decoy's distance_m is nudged slightly further from the activity's
+    # own than the true route's exact match - not tied with it - so the
+    # ORDER BY genuinely discriminates rather than relying on how Postgres
+    # happens to break a tie. distance_m is independent of the offset
+    # geometry above; it is what the query actually sorts candidates by.
+    decoys = [
+        _route(user_id, _north_leg(offset_east_m=100.0 + i * 4.0), RUN_LENGTH_M + 50.0 + i * 2.0)
+        for i in range(MAX_CANDIDATES + 10)
+    ]
+    true_route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([*decoys, true_route, activity])
+    await db.commit()
+
+    assert await match_activity_to_route(db, activity.id) == true_route.id
 
 
 async def test_a_huge_trace_is_simplified_rather_than_crashing_postgres(
