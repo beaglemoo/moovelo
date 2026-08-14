@@ -391,12 +391,29 @@ async def match_activity_to_route(
             logger.warning("route match commit failed for activity %s", activity_id, exc_info=True)
             # Here a rollback IS required: a failed commit leaves the
             # transaction unusable, so the caller cannot continue without one,
-            # and there is no half-applied state worth preserving. Guarded
-            # because rollback can itself raise on a dead connection.
+            # and there is no half-applied state worth preserving.
+            #
+            # It has to heal what it breaks, though. A rollback expires EVERY
+            # object in the session - that is true regardless of
+            # expire_on_commit, which only governs the success path - including
+            # the Activity the caller loaded before calling this and goes on
+            # using afterwards. import_activity does exactly that: it calls
+            # this and then builds its response from the same object, so an
+            # expired one turns the next attribute read into an implicit lazy
+            # load, which AsyncSession refuses outside a greenlet. The ride is
+            # already durably committed at that point, so the rider would get a
+            # 500 for an import that genuinely succeeded - the very bug the
+            # SAVEPOINT above exists to avoid, reintroduced on the other path.
+            #
+            # Re-loading it here repopulates that same identity-mapped
+            # instance, so the caller's reference is usable again. Both calls
+            # are guarded: on a dead connection either can raise, and this
+            # function's whole contract is that it does not.
             try:
                 await db.rollback()
+                await db.get(Activity, activity_id)
             except Exception:  # noqa: BLE001
-                logger.warning("rollback after a failed match commit also failed", exc_info=True)
+                logger.warning("recovery after a failed match commit also failed", exc_info=True)
             return None
 
     return route_id

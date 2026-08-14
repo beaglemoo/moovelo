@@ -964,3 +964,47 @@ async def test_a_failing_commit_does_not_escape_the_matcher(
         monkeypatch.setattr(AsyncSession, "commit", original)
 
     assert matched is None, "a failed commit is a failed match, not an exception"
+
+
+async def test_a_failed_match_commit_leaves_the_caller_object_usable(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rollback must not strand the caller holding an expired object.
+
+    A rollback expires every object in the session - true regardless of
+    expire_on_commit, which only governs the success path - including the
+    Activity the caller loaded before calling this and goes on using
+    afterwards. import_activity does exactly that: it matches, then builds its
+    response from the same object. An expired one turns the next attribute
+    read into an implicit lazy load, which AsyncSession refuses outside a
+    greenlet, so the rider gets a 500 for a ride that was already durably
+    committed - the very bug the SAVEPOINT exists to prevent, reintroduced on
+    the commit-failure path when that path learned to roll back.
+
+    The matcher therefore re-loads the activity after rolling back,
+    repopulating the caller's own identity-mapped instance.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+
+    real_commit = AsyncSession.commit
+
+    async def _boom(self: AsyncSession) -> None:
+        raise RuntimeError("simulated commit failure")
+
+    monkeypatch.setattr(AsyncSession, "commit", _boom)
+    try:
+        matched = await match_activity_to_route(db, activity.id)
+    finally:
+        monkeypatch.setattr(AsyncSession, "commit", real_commit)
+
+    assert matched is None
+
+    # The caller's own reference, used the way import_activity uses it. This
+    # raises MissingGreenlet if the rollback left it expired.
+    assert activity.name == "Test ride"
+    assert activity.user_id == user_id

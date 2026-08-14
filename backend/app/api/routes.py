@@ -454,9 +454,14 @@ async def _rematch_linked_activities(route_id: uuid.UUID, db: AsyncSession) -> N
         )
         linked = linked[:MAX_REDERIVE]
     for activity_id in linked:
+        # No commit of our own afterwards. match_activity_to_route commits each
+        # change durably itself, so a trailing one here did no useful work -
+        # but it was a bare, unguarded commit sitting directly under a
+        # docstring promising that a failure here cannot fail the save. That
+        # promise covers match_activity_to_route, which never raises; it never
+        # covered this line. A transient fault on it would have 500'd a PATCH
+        # whose route snapshot and every re-derived match were already durable.
         await match_activity_to_route(db, activity_id, clear_if_unmatched=True)
-    if linked:
-        await db.commit()
 
 
 def _suffixed(name: str, suffix: str) -> str:
