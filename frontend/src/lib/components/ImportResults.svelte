@@ -114,7 +114,7 @@
 		color: var(--danger-text);
 	}
 	.warn {
-		color: var(--warning);
+		color: var(--warning-text);
 	}
 	li.failed .file {
 		color: var(--danger-text);

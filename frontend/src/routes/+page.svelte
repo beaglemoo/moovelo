@@ -1800,7 +1800,7 @@
 	.toolbar > .wahoo {
 		background: var(--accent-fill);
 		color: #fff;
-		border-color: var(--accent-fill);
+		border-color: var(--accent);
 	}
 	.route-name {
 		background: var(--surface);
@@ -1984,7 +1984,7 @@
 	}
 	.isochrone-prompt-buttons .primary {
 		background: var(--accent-fill);
-		border-color: var(--accent-fill);
+		border-color: var(--accent);
 		color: #fff;
 	}
 	.isochrone-prompt-buttons .primary:disabled {

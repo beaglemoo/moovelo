@@ -373,7 +373,7 @@
 		color: var(--text);
 	}
 	.save-as button {
-		border: 1px solid var(--accent-fill);
+		border: 1px solid var(--accent);
 		background: var(--accent-fill);
 		color: #fff;
 		border-radius: 4px;

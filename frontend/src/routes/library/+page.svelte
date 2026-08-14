@@ -525,7 +525,7 @@
 		line-height: 1;
 	}
 	.star.on {
-		color: var(--warning);
+		color: var(--warning-text);
 	}
 	.tags {
 		display: flex;

@@ -111,7 +111,7 @@
 		padding: 2px 6px;
 	}
 	.controls button {
-		border: 1px solid var(--accent-fill);
+		border: 1px solid var(--accent);
 		background: var(--accent-fill);
 		color: #fff;
 		border-radius: 4px;
@@ -173,7 +173,7 @@
 		color: var(--danger-text);
 	}
 	.label.tail {
-		color: var(--success);
+		color: var(--success-text);
 	}
 	.label.cross {
 		color: var(--text-muted);

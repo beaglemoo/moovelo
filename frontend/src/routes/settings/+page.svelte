@@ -161,7 +161,7 @@
 		cursor: default;
 	}
 	.saved {
-		color: var(--success);
+		color: var(--success-text);
 		font-size: 0.9rem;
 	}
 	.error {

@@ -1359,7 +1359,7 @@
 	}
 	.overlay-toggle.active {
 		background: var(--accent-fill);
-		border-color: var(--accent-fill);
+		border-color: var(--accent);
 		color: #fff;
 	}
 	/* Offset past "Cycle routes" - fixed rather than flow-based, matching how
