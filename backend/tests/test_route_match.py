@@ -27,6 +27,7 @@ it took to actually deliver "a matching failure must never fail the
 import".
 """
 
+import inspect
 import uuid
 
 import pytest
@@ -139,7 +140,7 @@ async def test_a_ride_following_a_route_matches(client: AsyncClient, db: AsyncSe
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched == route.id
     await db.refresh(activity)
@@ -166,7 +167,7 @@ async def test_a_ride_on_a_different_road_does_not_match(
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched is None
     await db.refresh(activity)
@@ -192,7 +193,7 @@ async def test_a_route_ridden_in_reverse_still_matches(
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched == route.id
     await db.refresh(activity)
@@ -223,7 +224,7 @@ async def test_mercator_distortion_is_corrected_to_true_ground_metres(
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched == route.id, (
         "with the cos(latitude) correction removed, a 40m buffer only reaches "
@@ -263,7 +264,7 @@ async def test_a_single_detour_does_not_break_the_match(
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched == route.id
     await db.refresh(activity)
@@ -314,7 +315,7 @@ async def test_a_large_relative_detour_on_a_short_route_does_not_match(
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched is None
     await db.refresh(activity)
@@ -354,6 +355,130 @@ async def test_a_match_query_failure_does_not_break_the_import_response(
     assert len(listed.json()) == 1
 
 
+def _tilted_points() -> list[Point]:
+    """The RUN_BEARING_DEG leg as three points, for building a GPX body.
+
+    Not due north, and the reason is load-bearing rather than cosmetic: a
+    perfectly north-south line has zero width in longitude, and a route
+    seeded on exactly the ride's own due-north points does NOT match - the
+    coverage maths degenerates and returns no candidate. Measured through
+    the real import endpoint while writing the test below, which is why this
+    fixture exists instead of reusing GPX_RIDE.
+    """
+    mid = destination_point((LAT, LON), RUN_BEARING_DEG, RUN_LENGTH_M / 2)
+    end = destination_point((LAT, LON), RUN_BEARING_DEG, RUN_LENGTH_M)
+    return [(LAT, LON), mid, end]
+
+
+def _gpx_of(points: list[Point]) -> bytes:
+    trkpts = "".join(
+        f'<trkpt lat="{lat:.6f}" lon="{lon:.6f}"><ele>100.0</ele>'
+        f"<time>2026-05-03T08:0{i}:00Z</time></trkpt>"
+        for i, (lat, lon) in enumerate(points)
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">'
+        f"<trk><name>Tilted</name><trkseg>{trkpts}</trkseg></trk></gpx>"
+    ).encode()
+
+
+async def test_a_match_commit_failure_does_not_break_the_import_response(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The commit path, which took three further rounds to get right.
+
+    Failing the match's COMMIT is a different fault from failing its query
+    and it broke the import three separate times, each fix uncovering the
+    next case one branch deeper: a bare commit outside the guard; then a
+    guarded commit whose `rollback()` expired the caller's `activity` and
+    turned `_detail`'s next attribute read into a `MissingGreenlet`; then a
+    rollback-plus-reload to repopulate that object, which still stranded the
+    caller whenever the RELOAD itself failed - the ordinary behaviour of a
+    dropped connection, since it is the very next statement after the commit
+    that dropped it.
+
+    So this simulates the double fault: the match's commit fails, AND any
+    recovery read it attempts afterwards fails too. The fix is not another
+    branch but a mechanism - match_activity_to_route owns a private session,
+    so no failure inside it can reach the caller's objects at all.
+
+    Deliberately driven through the real endpoint rather than by calling the
+    service, so it pins the observable contract (the rider gets their ride)
+    rather than an implementation shape, and stays a valid reproduction
+    across the mechanism change.
+
+    Failures are selected by CALL SITE, not by a global call counter: the
+    WayMatchQueue worker commits concurrently on its own session, so a
+    counter races it and misses.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    # A route the imported ride genuinely matches. Without one the match
+    # finds no candidate, writes nothing and never reaches its commit at
+    # all - the first version of this test omitted it and passed against
+    # the very code it was meant to catch.
+    db.add(_route(user_id, _tilted_points(), RUN_LENGTH_M))
+    await db.commit()
+
+    real_commit = AsyncSession.commit
+    real_get = AsyncSession.get
+    commit_failures = 0
+    gets_from_match = 0
+
+    def _called_by_match() -> bool:
+        # Two frames up, not one: this helper is called BY failing_commit /
+        # failing_get, so f_back is the patch and f_back.f_back is the code
+        # that called the patched method.
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        caller = outer.f_back if outer else None
+        return (
+            caller is not None
+            and caller.f_code.co_name == "match_activity_to_route"
+            and caller.f_code.co_filename.endswith("route_match.py")
+        )
+
+    async def failing_commit(self: AsyncSession, *args: object, **kwargs: object) -> None:
+        nonlocal commit_failures
+        if _called_by_match():
+            commit_failures += 1
+            raise RuntimeError("simulated dropped connection on the match commit")
+        await real_commit(self)
+
+    async def failing_get(self: AsyncSession, *args: object, **kwargs: object) -> object:
+        nonlocal gets_from_match
+        if _called_by_match():
+            gets_from_match += 1
+            # The first get is the match's own initial load, which succeeds;
+            # any later one is a recovery attempt, and the connection that
+            # just killed the commit kills that too.
+            if gets_from_match > 1:
+                raise RuntimeError("simulated dead connection on the recovery reload")
+        return await real_get(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncSession, "commit", failing_commit)
+    monkeypatch.setattr(AsyncSession, "get", failing_get)
+
+    response = await client.post(
+        "/api/activities/import",
+        files={"file": ("ride.gpx", _gpx_of(_tilted_points()), "application/gpx+xml")},
+    )
+
+    # Pinned explicitly: if the injection ever stops firing - a rename, a
+    # refactor that moves the commit to a helper - the assertions below would
+    # all still pass while proving nothing at all.
+    assert commit_failures == 1, "the match's commit was never reached; test proves nothing"
+
+    # The ride was durably committed before the match ran, so anything other
+    # than a 201 hands the rider an error for an import that actually worked.
+    assert response.status_code == 201, response.text
+    assert response.json()["route_id"] is None
+
+    listed = await client.get("/api/activities")
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+
+
 async def test_the_best_covering_candidate_wins(client: AsyncClient, db: AsyncSession) -> None:
     """Two candidates that both clear MIN_COVERAGE, with a large gap between
     their scores - a perfect match (confidence ~1.0) and a route covering
@@ -375,7 +500,7 @@ async def test_the_best_covering_candidate_wins(client: AsyncClient, db: AsyncSe
     db.add_all([perfect, partial, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched == perfect.id
     await db.refresh(activity)
@@ -394,7 +519,7 @@ async def test_match_locked_blocks_auto_match(client: AsyncClient, db: AsyncSess
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched is None
     await db.refresh(activity)
@@ -415,7 +540,7 @@ async def test_deleting_a_route_leaves_the_ride_intact_with_a_null_link(
     db.add_all([route, activity])
     await db.commit()
     activity_id = activity.id
-    assert await match_activity_to_route(db, activity_id) == route.id
+    assert await match_activity_to_route(activity_id) == route.id
 
     await db.execute(delete(Route).where(Route.id == route.id))
     await db.commit()
@@ -455,7 +580,7 @@ async def test_a_hand_cleared_link_keeps_its_lock_when_confidence_is_cleared(
     # Held as a plain value: the expire_all() below would otherwise make
     # reading activity.id an implicit lazy load outside async context.
     activity_id = activity.id
-    assert await match_activity_to_route(db, activity_id) == route.id
+    assert await match_activity_to_route(activity_id) == route.id
 
     cleared = await client.put(f"/api/activities/{activity_id}/route", json={"route_id": None})
     assert cleared.status_code == 200, cleared.text
@@ -476,7 +601,7 @@ async def test_a_hand_cleared_link_keeps_its_lock_when_confidence_is_cleared(
     # holds the pre-clear Activity - expire it, or the matcher reads a stale
     # match_locked and the assertion passes or fails for the wrong reason.
     db.expire_all()
-    assert await match_activity_to_route(db, activity_id) is None
+    assert await match_activity_to_route(activity_id) is None
 
 
 async def test_the_true_route_wins_even_when_many_candidates_qualify(
@@ -513,7 +638,7 @@ async def test_the_true_route_wins_even_when_many_candidates_qualify(
     db.add_all([*decoys, true_route, activity])
     await db.commit()
 
-    assert await match_activity_to_route(db, activity.id) == true_route.id
+    assert await match_activity_to_route(activity.id) == true_route.id
 
 
 async def test_a_huge_trace_is_simplified_rather_than_crashing_postgres(
@@ -556,7 +681,7 @@ async def test_a_huge_trace_is_simplified_rather_than_crashing_postgres(
     activity_id = activity.id
 
     # Must not raise, and must not take the connection down with it.
-    result = await match_activity_to_route(db, activity_id)
+    result = await match_activity_to_route(activity_id)
 
     assert result == route.id
     # A fresh query on the same session - proves the backend process
@@ -584,7 +709,7 @@ async def test_auto_match_never_crosses_users(
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched is None
     await db.refresh(activity)
@@ -693,7 +818,7 @@ async def test_list_activities_carries_the_matched_route_name(
     activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
     db.add_all([route, activity])
     await db.commit()
-    assert await match_activity_to_route(db, activity.id) == route.id
+    assert await match_activity_to_route(activity.id) == route.id
 
     response = await client.get("/api/activities")
 
@@ -771,7 +896,7 @@ async def test_re_routing_a_saved_route_clears_the_matches_it_invalidated(
     db.add_all([route, activity])
     await db.commit()
     activity_id, route_id = activity.id, route.id
-    assert await match_activity_to_route(db, activity_id) == route_id
+    assert await match_activity_to_route(activity_id) == route_id
 
     # The rider re-routes the saved route somewhere else entirely and saves;
     # same row, same id, different road.
@@ -901,7 +1026,7 @@ async def test_an_explicit_rematch_clears_a_stale_match_and_it_persists(
     db.add_all([route, activity])
     await db.commit()
     activity_id = activity.id
-    assert await match_activity_to_route(db, activity_id) == route.id
+    assert await match_activity_to_route(activity_id) == route.id
 
     # The route is re-routed somewhere else entirely, so the stored match no
     # longer describes anything.
@@ -959,7 +1084,7 @@ async def test_a_failing_commit_does_not_escape_the_matcher(
 
     monkeypatch.setattr(AsyncSession, "commit", _boom)
     try:
-        matched = await match_activity_to_route(db, activity_id)
+        matched = await match_activity_to_route(activity_id)
     finally:
         monkeypatch.setattr(AsyncSession, "commit", original)
 
@@ -998,7 +1123,7 @@ async def test_a_failed_match_commit_leaves_the_caller_object_usable(
 
     monkeypatch.setattr(AsyncSession, "commit", _boom)
     try:
-        matched = await match_activity_to_route(db, activity.id)
+        matched = await match_activity_to_route(activity.id)
     finally:
         monkeypatch.setattr(AsyncSession, "commit", real_commit)
 
