@@ -1,9 +1,14 @@
 """Rides that happened: import, list, read, delete.
 
-No update endpoint, deliberately. An activity is a record of what happened,
-and letting it be rewritten would make the heatmap and coverage built from it
-mean nothing in particular. Renaming is the one thing a rider plausibly wants
-and is not worth the ambiguity yet.
+No general update endpoint, deliberately. An activity is a record of what
+happened, and letting it be rewritten would make the heatmap and coverage
+built from it mean nothing in particular. Renaming is the one thing a rider
+plausibly wants and is not worth the ambiguity yet.
+
+Linking a ride to the route it followed is different: it does not change
+what the ride *was*, only what it is associated with, and a rider correcting
+a wrong or missing auto-match is exactly the case services/route_match.py's
+`match_locked` exists for - see set_activity_route below.
 """
 
 import asyncio
@@ -17,9 +22,10 @@ from geoalchemy2.functions import ST_AsText
 from sqlalchemy import delete, exists, func, select
 
 from app.api.deps import DbDep, UserDep
-from app.models import Activity
+from app.models import Activity, Route
 from app.schemas import (
     ActivityDetail,
+    ActivityRouteLinkRequest,
     ActivitySummary,
     ArchiveImportStatus,
     ElevationPoint,
@@ -37,6 +43,7 @@ from app.services.geo import coords_from_wkt
 from app.services.heatmap import MAX_HEATMAP_ZOOM, MIN_HEATMAP_ZOOM, heatmap_etag, heatmap_tile
 from app.services.importer import MAX_FILE_BYTES, RouteImportError, parse_route_file
 from app.services.polyline import encode_polyline6
+from app.services.route_match import match_activity_to_route
 from app.services.way_matching import queue as match_queue
 
 router = APIRouter(prefix="/api/activities", tags=["activities"])
@@ -85,6 +92,14 @@ async def import_activity(
         # ways_matched_at is still null, so a later backfill picks it up -
         # refusing under a submission burst must not fail the import itself.
         logger.warning("match queue full; activity %s left for backfill", activity.id)
+    # Route matching is one SQL query, not a Valhalla round trip, so it runs
+    # inline rather than through a queue - see services/route_match.py.
+    # Never allowed to fail the import itself: the ride is the valuable
+    # thing, its route link is an enrichment.
+    try:
+        await match_activity_to_route(db, activity.id)
+    except Exception:  # noqa: BLE001 - see comment above
+        logger.warning("route match failed for activity %s", activity.id, exc_info=True)
     return await _detail(activity, db)
 
 
@@ -171,7 +186,13 @@ async def list_activities(
     source: Annotated[str | None, Query(max_length=16)] = None,
 ) -> list[ActivitySummary]:
     """One rider's activities, newest first."""
-    query = select(Activity).where(Activity.user_id == user.id)
+    # Outer-joined so a ride with no match still comes back (route_name
+    # None) rather than being dropped from the list.
+    query = (
+        select(Activity, Route.name)
+        .outerjoin(Route, Route.id == Activity.route_id)
+        .where(Activity.user_id == user.id)
+    )
     if year is not None:
         query = query.where(func.extract("year", Activity.started_at) == year)
     if source is not None:
@@ -180,8 +201,8 @@ async def list_activities(
     # Rides with no timestamp sort by when they were imported rather than
     # falling to the bottom of the list forever.
     ordering = func.coalesce(Activity.started_at, Activity.created_at)
-    rows = (await db.execute(query.order_by(ordering.desc()))).scalars().all()
-    return [_summary(activity) for activity in rows]
+    rows = (await db.execute(query.order_by(ordering.desc()))).all()
+    return [_summary(activity, route_name) for activity, route_name in rows]
 
 
 @router.get("/heatmap-available")
@@ -241,6 +262,51 @@ async def get_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> Acti
     return await _detail(await _owned(activity_id, db, user.id), db)
 
 
+@router.put("/{activity_id}/route")
+async def set_activity_route(
+    activity_id: uuid.UUID,
+    body: ActivityRouteLinkRequest,
+    db: DbDep,
+    user: UserDep,
+) -> ActivityDetail:
+    """Set or clear the route this ride is matched to, by hand.
+
+    Ownership is checked on both sides: the activity has to be the caller's
+    own, and so does the route being linked to it - otherwise a rider could
+    link their ride to someone else's saved route (or learn that a given id
+    exists at all). Either way, this is a human decision, so it locks out
+    the auto-matcher the same way a set and a clear both do.
+    """
+    activity = await _owned(activity_id, db, user.id)
+    if body.route_id is not None:
+        route = (
+            await db.execute(
+                select(Route).where(Route.id == body.route_id, Route.user_id == user.id)
+            )
+        ).scalar_one_or_none()
+        if route is None:
+            raise HTTPException(status_code=404, detail="Route not found")
+    activity.route_id = body.route_id
+    activity.match_locked = True
+    activity.match_confidence = None
+    await db.commit()
+    return await _detail(activity, db)
+
+
+@router.post("/{activity_id}/rematch")
+async def rematch_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> ActivityDetail:
+    """Re-run auto-matching for one ride.
+
+    A no-op if the rider has already picked or cleared the match by hand -
+    see match_activity_to_route's own match_locked check, which this relies
+    on rather than duplicating.
+    """
+    activity = await _owned(activity_id, db, user.id)
+    await match_activity_to_route(db, activity.id)
+    await db.refresh(activity)
+    return await _detail(activity, db)
+
+
 @router.delete("/{activity_id}", status_code=204)
 async def delete_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> None:
     await _owned(activity_id, db, user.id)
@@ -296,7 +362,7 @@ async def _owned(activity_id: uuid.UUID, db: DbDep, user_id: uuid.UUID) -> Activ
     return activity
 
 
-def _summary(activity: Activity) -> ActivitySummary:
+def _summary(activity: Activity, route_name: str | None = None) -> ActivitySummary:
     return ActivitySummary(
         id=activity.id,
         name=activity.name,
@@ -308,6 +374,10 @@ def _summary(activity: Activity) -> ActivitySummary:
         descent_m=activity.descent_m,
         source=activity.source,
         created_at=activity.created_at,
+        route_id=activity.route_id,
+        route_name=route_name,
+        match_confidence=activity.match_confidence,
+        match_locked=activity.match_locked,
     )
 
 
@@ -319,8 +389,11 @@ async def _detail(activity: Activity, db: DbDep) -> ActivityDetail:
     same path as everything else on the map.
     """
     wkt = await db.scalar(select(ST_AsText(Activity.geom)).where(Activity.id == activity.id))
+    route_name = None
+    if activity.route_id is not None:
+        route_name = await db.scalar(select(Route.name).where(Route.id == activity.route_id))
     return ActivityDetail(
-        **_summary(activity).model_dump(),
+        **_summary(activity, route_name).model_dump(),
         shape=encode_polyline6(coords_from_wkt(wkt)),
         elevation=[ElevationPoint(**point) for point in activity.elevation],
     )

@@ -385,6 +385,16 @@ export interface ActivitySummary {
 	descent_m: number;
 	source: string;
 	created_at: string;
+	/** The saved route this ride matched to, if any - see
+	 * backend/app/services/route_match.py. route_name travels alongside so
+	 * the list can show it without a second call per row. */
+	route_id: string | null;
+	route_name: string | null;
+	/** A 0-1 bidirectional coverage score that produced an auto-match -
+	 * higher is better. Null for a manual link or no match at all. */
+	match_confidence: number | null;
+	/** True once a rider has picked or cleared the match by hand. */
+	match_locked: boolean;
 }
 
 export interface ActivityDetail extends ActivitySummary {

@@ -31,6 +31,7 @@ from app.db import session_factory
 from app.models import Activity
 from app.services.activities import activity_from_track, name_from_filename, strava_activity_id
 from app.services.importer import MAX_FILE_BYTES, RouteImportError, parse_route_file
+from app.services.route_match import match_activity_to_route
 from app.services.way_matching import queue as match_queue
 
 logger = logging.getLogger(__name__)
@@ -420,6 +421,17 @@ class ArchiveImportQueue:
                         seen.add(ref)
                     job.imported += 1
                     created.append(activity.id)
+                    # One SQL query, not a Valhalla round trip, so it runs
+                    # right here rather than through a queue - see
+                    # services/route_match.py. Never allowed to fail an
+                    # otherwise-successful import: the ride already landed,
+                    # its route link is an enrichment.
+                    try:
+                        await match_activity_to_route(db, activity.id)
+                    except Exception:  # noqa: BLE001 - see comment above
+                        logger.warning(
+                            "route match failed for activity %s", activity.id, exc_info=True
+                        )
 
         # Off the request path, same reasoning as the single-file import
         # endpoint: map matching is Valhalla round trips per ride, and a

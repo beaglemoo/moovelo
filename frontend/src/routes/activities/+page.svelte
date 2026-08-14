@@ -251,6 +251,7 @@
 				<tr>
 					<th>Date</th>
 					<th>Name</th>
+					<th>Route</th>
 					<th>Distance</th>
 					<th>Moving</th>
 					<th>Ascent</th>
@@ -262,6 +263,13 @@
 					<tr>
 						<td data-label="Date">{rideDate(item)}</td>
 						<td data-label="Name">{item.name}</td>
+						<td data-label="Route">
+							{#if item.route_name}
+								<span class="route-name">{item.route_name}</span>
+							{:else}
+								<span class="route-none">-</span>
+							{/if}
+						</td>
 						<td data-label="Distance">{distance(item.distance_m, units.system)}</td>
 						<td data-label="Moving">{duration(item.moving_time_s)}</td>
 						<td data-label="Ascent">{elevation(item.ascent_m, units.system)}</td>
@@ -368,6 +376,12 @@
 	}
 	.actions {
 		text-align: right;
+	}
+	.route-name {
+		color: var(--text);
+	}
+	.route-none {
+		color: var(--text-muted);
 	}
 	.empty {
 		color: var(--text-muted);

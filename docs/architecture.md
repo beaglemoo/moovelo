@@ -124,12 +124,18 @@ re-importing an overlapping export adds only what is new, while the many
 hand-uploaded rides with no natural identifier do not collide with each
 other.
 
-`/api/activities` covers import, list, read and delete. There is no update
-endpoint: an activity is a record of what happened, and the heatmap and
-coverage built from it would mean nothing in particular if it could be
-rewritten. Reads return the trace as polyline6, the same encoding the
-planner already decodes for route legs, so an activity draws through the
-path everything else on the map uses.
+`/api/activities` covers import, list, read and delete. There is no
+general update endpoint: an activity is a record of what happened, and the
+heatmap and coverage built from it would mean nothing in particular if it
+could be rewritten. Reads return the trace as polyline6, the same encoding
+the planner already decodes for route legs, so an activity draws through
+the path everything else on the map uses.
+
+The one thing an activity *can* be edited to carry is which saved route it
+matches - that does not change what the ride was, only what it is
+associated with, and a rider correcting a wrong or missing automatic match
+is exactly the case the endpoint exists for. See
+[Ride-to-route matching](#ride-to-route-matching).
 
 Parsing runs in a worker thread rather than on the event loop. It is pure
 CPU and it is not cheap - a four-hour ride recorded at 1 Hz measures at
@@ -561,6 +567,147 @@ power rider's mid-zoom tiles are genuinely larger than the cycle
 network's merged, country-wide 50 kB tile. This is worth watching rather
 than ignoring - grid aggregation is the documented fallback if real usage
 turns out worse than this synthetic county-scale rider.
+
+## Ride-to-route matching
+
+`services/route_match.py` links an imported ride to the saved route it
+followed, so `/activities` can say "this was your Canal loop route"
+without the rider telling it so. Two stages, the same shape as the POI
+query's index-narrow-then-exact-test pattern (see
+[POIs along a route](#pois-along-a-route)):
+
+1. **Candidate narrowing**, cheap and index-backed: `routes.geom &&
+   activities.geom` (a bounding-box overlap test, served by the GiST index
+   on each column). `routes.geom`'s own index is named `ix_routes_geom` in
+   the migration but `idx_routes_geom` in the ORM's metadata (see
+   `models.py`'s comment on `Route.geom`) - a harmless divergence that this
+   is the first query to actually depend on the index existing at all,
+   rather than merely on it being named consistently; `&&` is served
+   regardless of what the index is called. Narrowing also applies a
+   distance-ratio prefilter - deliberately the *same* band the decision
+   itself uses, since a route outside it could never win, and admitting it
+   would only spend the candidate cap on rows destined to be discarded.
+   The list is capped at 25 so a pathological library cannot make this
+   unbounded, and is **ordered by centroid distance before that cap
+   applies**: a `LIMIT` without an `ORDER BY` lets Postgres return any
+   qualifying rows it likes, so a rider with more overlapping routes than
+   the cap could have the true match cut purely on physical row order - and
+   a dropped candidate is indistinguishable from "nothing matched".
+   Ordering on closeness of *length* does not work, which is worth knowing:
+   variants of the same route usually have near-identical distances, so
+   every candidate ties and the cap goes back to cutting arbitrarily.
+2. **Confirmation**, exact, on survivors only: **bidirectional coverage**,
+   not `ST_FrechetDistance` as originally planned - both lines are
+   projected to EPSG:3857, simplified, and the fraction of each one's
+   length that falls within a buffered corridor around the other is
+   computed both ways.
+
+**The plan changed after measuring `ST_FrechetDistance` against real dev
+Postgres, and the finding is worth keeping.** Frechet distance (and
+Hausdorff, which has the same shape) is a *maximum*-based metric - a
+single outlier sets the whole score. A ride that followed its route
+exactly except for one ~300 m detour (a shop stop, a wrong turn, a loop
+round a car park) measured a 300.6 m Frechet distance against it - over
+any sane threshold - despite over 85% of the ride genuinely being on the
+route. Shipping a maximum-based decider means ordinary rides with ordinary
+outliers silently fail to match, which is the feature failing at its one
+job. Coverage does not have this failure mode: a short detour drags the
+ratio down without being able to veto the rest of the ride on its own.
+Bidirectional matters on its own too - one direction alone would pass a
+ride that only covered half its route (ride-coverage near 100%, route
+half-covered) or an out-and-back over a one-way route (both directions
+near 100%, roughly double the real distance); requiring **both** fractions
+over the threshold, plus a tighter distance-ratio check at decision time
+(`MATCH_DISTANCE_RATIO_MIN/MAX`, 0.8-1.25, separate from the looser 0.5-2.0
+prefilter above), catches what a single coverage number cannot.
+
+Two provisional constants decide a match, neither yet tuned against real
+ride/route geometry - staging verification with genuine GPS traces is
+expected to move both:
+
+- `COVERAGE_BUFFER_M` (40 m) - the corridor width either line is tested
+  against.
+- `MIN_COVERAGE` (0.80) - both directions have to clear this.
+
+**Web Mercator's scale is not uniform.** It grows as `1 / cos(latitude)`,
+so a "40 m" buffer built directly in EPSG:3857 units is really only about
+25 m on the ground at the UK's ~51.8°N (`1 / cos(51.8°) ≈ 1.62`). The
+query divides `COVERAGE_BUFFER_M` by `cos(latitude)` of the activity's own
+centroid before building the buffer, so it represents a genuine ground
+distance. This only has to apply to the buffer distance, not to the
+coverage ratio itself - numerator and denominator are both lengths in the
+same (if locally distorted) projected geometry, so the distortion cancels
+out of the ratio on its own. `tests/test_route_match.py`'s dedicated
+Mercator test is built so it only passes with the correction in place - a
+fixture whose true offset is under the buffer but whose *uncorrected*
+EPSG:3857 buffer would fail to reach it.
+
+**Coverage is direction-agnostic by construction**, so unlike the Frechet
+plan there is no `ST_Reverse` arm to maintain - a route ridden backwards
+buffers and intersects exactly the same as one ridden forwards. That whole
+bug family is retired rather than patched, which is why `ST_FrechetDistance`
+does not appear in the shipped query at all.
+
+**An unsimplified real trace can crash the database, not merely run
+slowly - this is the severe finding, and it applies regardless of which
+metric ended up deciding the match.** A 14,000-point activity (an ordinary
+four-hour ride recorded at 1Hz) run through `ST_FrechetDistance` against
+itself - a ~196M-cell comparison - killed the Postgres backend process
+outright ("server closed the connection unexpectedly / server terminated
+abnormally"). `ST_Simplify`'s tolerance alone is not a sufficient guard:
+it has no vertex-count bound, and a noisy real GPS trace does not
+simplify nearly as well as a smooth synthetic line does. `services/
+route_match.py` enforces a hard cap instead - `MAX_SIMPLIFIED_VERTICES`
+(1000), tried against an ascending ladder of tolerances
+(`SIMPLIFY_TOLERANCE_LADDER_M`, 20 m up to 1280 m) until either geometry -
+the activity, or a given candidate route - is safely under it. If nothing
+on the ladder gets a geometry under the cap, that geometry is left out of
+matching entirely (the whole activity, if it is the one too large; just
+that one candidate, if it is a route) rather than ever letting
+`ST_Buffer`/`ST_Intersection` run on something that size.
+`tests/test_route_match.py` has a dedicated regression test building a
+~14,000-point trace (via `generate_series`, the same technique used to
+find the crash) that asserts this completes and the database connection
+is still alive afterward - a match is a bonus, not the point of that test.
+
+Matching runs **inline**, not through a queue, right after an activity
+commits - both in `POST /api/activities/import` and in the Strava archive
+worker. Unlike way-matching (`services/way_matching.py`), which needs a
+Valhalla round trip per chunk and therefore a background worker, route
+matching is a single SQL query against the rider's own already-saved
+routes, so there is nothing here that benefits from being queued - and
+Sprint 1 spent eight review rounds on bugs introduced by queue lifetimes
+that a genuinely queue-free feature does not need to risk. A matching
+failure never fails the import: it is caught, logged, and the ride is kept
+- the ride is the valuable thing, its route link is an enrichment.
+
+A rider can always override the result: `PUT /api/activities/{id}/route`
+sets or clears the link by hand (body `{"route_id": <uuid> | null}`,
+ownership-checked on both the activity and the target route), and
+`POST /api/activities/{id}/rematch` re-runs the automatic match for one
+ride. Either way, setting or clearing a match by hand sets
+`Activity.match_locked`, which `match_activity_to_route` checks first and
+treats as a hard no-op - an automatic pass must never overwrite a human
+decision, including the decision that a ride has no matching route at all.
+`Activity.route_id` is `ON DELETE SET NULL`, not `CASCADE`: deleting the
+route a ride was matched against must not delete the ride itself, it just
+loses its link.
+
+`SET NULL` is pure DDL, though - it nulls `route_id` and touches nothing
+else - so on its own it left `match_confidence` behind: a coverage score
+describing a route that no longer existed. A trigger
+(`activities_clear_match_confidence`, migration 0017, and mirrored on the
+table metadata because the test databases are built by `create_all` rather
+than Alembic) nulls the score whenever `route_id` is null. It lives in the
+database rather than in the delete endpoint so the invariant holds for
+every path that can null the column, including a bulk delete or a psql
+session during an incident.
+
+It deliberately does **not** touch `match_locked`. Clearing a link by hand
+sets `route_id` null and `match_locked` true *together* - that pairing is
+how a rider says "there is no route for this ride, stop guessing" - so a
+trigger that reset the flag whenever `route_id` went null would silently
+undo the rider's own decision and let the next auto-match re-link the ride.
 
 ## Cycle-network coverage
 

@@ -4,6 +4,7 @@ from typing import Any
 
 from geoalchemy2 import Geography, Geometry
 from sqlalchemy import (
+    DDL,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     func,
     text,
 )
@@ -212,6 +214,20 @@ class Activity(Base):
     ways_matched_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
+    # The saved route this ride followed - found automatically by
+    # services/route_match.py, or set by hand. SET NULL, not CASCADE:
+    # deleting the route must not delete the ride that happened, it just
+    # loses its link. index=True names it ix_activities_route_id, matching
+    # the migration.
+    route_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("routes.id", ondelete="SET NULL"), nullable=True, default=None, index=True
+    )
+    # The Frechet distance (services/route_match.py), in true ground metres,
+    # that produced an auto-match. Null for a manual link or no match.
+    match_confidence: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    # Set true the moment a rider picks or clears the matched route by hand,
+    # so a later auto-match run never overwrites a human decision.
+    match_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     __table_args__ = (
         # The library's own query: one user's rides, newest first.
@@ -231,6 +247,54 @@ class Activity(Base):
             postgresql_where=text("source_ref IS NOT NULL"),
         ),
     )
+
+
+# `match_confidence` describes a match to a route, so it must not outlive the
+# route it describes. ON DELETE SET NULL is pure DDL - it nulls `route_id` and
+# touches nothing else - so a deleted route would otherwise leave its score
+# behind, and the endpoints are not the only thing that can null the column.
+# Enforcing it here holds for every path: the API, a bulk delete, a psql
+# session during an incident.
+#
+# It deliberately leaves `match_locked` alone. Clearing a link by hand sets
+# `route_id = NULL` and `match_locked = true` together - that pairing is how a
+# rider says "there is no route for this ride, stop guessing" - so resetting
+# the flag whenever `route_id` went null would undo the rider's own decision.
+#
+# Declared against the table's metadata as well as in migration 0017 because
+# the test databases are built by `Base.metadata.create_all`, not by Alembic
+# (see tests/conftest.py, which mirrors migrations the same way). The two must
+# be kept in step by hand; the SQL text below is the same in both places.
+_CLEAR_MATCH_CONFIDENCE_FN = """
+CREATE FUNCTION activities_clear_match_confidence() RETURNS trigger AS $$
+BEGIN
+    IF NEW.route_id IS NULL THEN
+        NEW.match_confidence := NULL;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql
+"""
+
+_CLEAR_MATCH_CONFIDENCE_TRIGGER = """
+CREATE TRIGGER activities_clear_match_confidence
+BEFORE INSERT OR UPDATE OF route_id, match_confidence ON activities
+FOR EACH ROW EXECUTE FUNCTION activities_clear_match_confidence()
+"""
+
+event.listen(
+    Activity.__table__,
+    "after_create",
+    # DDL's constructor carries no type annotations in sqlalchemy itself
+    # (unlike the rest of Core), so this is a genuine gap in the library's
+    # own stubs, not a call worth leaving untyped by choice.
+    DDL(_CLEAR_MATCH_CONFIDENCE_FN).execute_if(dialect="postgresql"),  # type: ignore[no-untyped-call]
+)
+event.listen(
+    Activity.__table__,
+    "after_create",
+    DDL(_CLEAR_MATCH_CONFIDENCE_TRIGGER).execute_if(dialect="postgresql"),  # type: ignore[no-untyped-call]
+)
 
 
 class CustomPreset(Base):
