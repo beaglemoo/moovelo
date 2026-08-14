@@ -14,7 +14,10 @@
 	import { distance, duration, elevation } from '$lib/format';
 	import { units } from '$lib/units.svelte';
 
-	const id = page.params.id ?? '';
+	// $derived, not a one-time read: SvelteKit reuses this component when one
+	// /library/[id] navigates to another, so a captured id leaves the page
+	// showing the previous route under the new URL.
+	const id = $derived(page.params.id ?? '');
 
 	// Stable empty props for the read-only map, matching the share page's own
 	// convention - fresh inline literals would retrigger MapView's effects on
@@ -33,19 +36,38 @@
 
 	fetchConfig().then((config) => (cyclosmTileUrl = config.tile_url_cyclosm));
 
-	async function load() {
+	// Every load owns a token, and a superseded one applies nothing. Two
+	// quick navigations race otherwise: the first route's response can land
+	// after the second's and overwrite it, leaving the older route on screen
+	// under the newer URL - the same ownership mechanism the planner uses on
+	// `route` for the identical reason.
+	let loadToken = 0;
+
+	async function load(target: string) {
+		if (!target) return;
+		const token = ++loadToken;
 		loading = true;
 		error = null;
 		try {
-			[route, matched] = await Promise.all([routes.get(id), routes.activities(id)]);
+			const [nextRoute, nextMatched] = await Promise.all([
+				routes.get(target),
+				routes.activities(target)
+			]);
+			if (token !== loadToken) return;
+			route = nextRoute;
+			matched = nextMatched;
 			fitTrigger += 1;
 		} catch (err) {
+			if (token !== loadToken) return;
 			error = err instanceof Error ? err.message : 'Failed to load route';
 		} finally {
-			loading = false;
+			if (token === loadToken) loading = false;
 		}
 	}
-	load();
+
+	$effect(() => {
+		load(id);
+	});
 
 	const routeLine = $derived.by(() =>
 		route ? mergeLegLines(route.legs.map((leg) => decodePolyline6(leg.geometry))) : []

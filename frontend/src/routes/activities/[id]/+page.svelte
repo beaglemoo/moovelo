@@ -15,7 +15,10 @@
 	import { distance, duration, elevation } from '$lib/format';
 	import { units } from '$lib/units.svelte';
 
-	const id = page.params.id ?? '';
+	// $derived, not a one-time read: SvelteKit reuses this component when one
+	// /activities/[id] navigates to another, so a captured id leaves the page
+	// showing the previous ride under the new URL.
+	const id = $derived(page.params.id ?? '');
 
 	// Stable empty props for the read-only map - the share page's own
 	// convention. Fresh inline literals would retrigger MapView's effects on
@@ -59,19 +62,32 @@
 		return [next, next.route_id ? await routes.get(next.route_id) : null];
 	}
 
-	async function load() {
+	// Token-owned, so a superseded load applies nothing: two quick
+	// navigations otherwise race, and the first ride's response can land
+	// after the second's and leave the older ride under the newer URL.
+	let loadToken = 0;
+
+	async function load(target: string) {
+		if (!target) return;
+		const token = ++loadToken;
 		loading = true;
 		error = null;
 		try {
-			[activity, matchedRoute] = await fetchPair(id);
+			const pair = await fetchPair(target);
+			if (token !== loadToken) return;
+			[activity, matchedRoute] = pair;
 			fitTrigger += 1;
 		} catch (err) {
+			if (token !== loadToken) return;
 			error = err instanceof Error ? err.message : 'Failed to load ride';
 		} finally {
-			loading = false;
+			if (token === loadToken) loading = false;
 		}
 	}
-	load();
+
+	$effect(() => {
+		load(id);
+	});
 
 	const routeLine = $derived.by(() => (activity ? decodePolyline6(activity.shape) : []));
 	const routeDists = $derived(cumulativeDistances(routeLine));

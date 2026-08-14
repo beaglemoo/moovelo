@@ -130,3 +130,55 @@ test('a failed route pick puts the picker back rather than mixing two routes', a
 	expect(await select.inputValue()).toBe(before);
 	await expect(page.locator('.route-link a')).toHaveText(nameBefore);
 });
+
+test('navigating between two route pages loads the second one', async ({ page }) => {
+	await registerOrSkip(page, 'e2e-nav-swap', password);
+
+	// Two routes, so there is somewhere to navigate to. SvelteKit reuses the
+	// same +page.svelte between them - it is a same-route navigation, only the
+	// dynamic segment changes - so a component that read its id once renders
+	// the first route's content under the second's URL.
+	await page.goto('/library');
+	await windowDropReady(page);
+	await page.locator('input[type="file"]').setInputFiles(routeFile);
+	await expect(page.locator('.results li').first()).toContainText('turn cues', {
+		timeout: 60_000
+	});
+	await page.locator('input[type="file"]').setInputFiles(rideFile);
+	await expect(page.locator('.results li')).toHaveCount(2, { timeout: 60_000 });
+
+	await page.goto('/library');
+	await windowDropReady(page);
+	const rows = page.locator('tbody tr');
+	await expect(rows).toHaveCount(2, { timeout: 30_000 });
+	// The row's name is a button (it opens the planner); the detail page is a
+	// separate "Details" link.
+	const firstName = (await rows.nth(0).locator('button.name').innerText()).trim();
+	const secondName = (await rows.nth(1).locator('button.name').innerText()).trim();
+	expect(firstName).not.toBe(secondName);
+
+	const hrefs = await rows
+		.locator('a', { hasText: 'Details' })
+		.evaluateAll((nodes) => nodes.map((n) => (n as HTMLAnchorElement).getAttribute('href') ?? ''));
+	expect(hrefs[0]).not.toBe(hrefs[1]);
+
+	await rows.nth(0).getByRole('link', { name: 'Details' }).click();
+	await expect(page).toHaveURL(/\/library\/[0-9a-f-]+$/);
+	await expect(page.getByRole('heading', { name: firstName })).toBeVisible();
+
+	// Straight from one detail page to the other, WITHOUT going via the list:
+	// that is the navigation SvelteKit serves by reusing this component rather
+	// than remounting it, and the only one that exercises a captured id.
+	// Going back to the list first would unmount the page and hide the bug.
+	await page.evaluate((href) => {
+		const a = document.createElement('a');
+		a.href = href;
+		a.textContent = 'to the other route';
+		a.id = 'e2e-sibling-link';
+		document.body.appendChild(a);
+	}, hrefs[1]);
+	await page.locator('#e2e-sibling-link').click();
+
+	await expect(page).toHaveURL(new RegExp(`${hrefs[1]}$`));
+	await expect(page.getByRole('heading', { name: secondName })).toBeVisible({ timeout: 15_000 });
+});
