@@ -127,6 +127,31 @@ SIMPLIFY_TOLERANCE_LADDER_M = [20.0, 40.0, 80.0, 160.0, 320.0, 640.0, 1280.0]
 # above what a real ride needs to keep its shape after simplification.
 MAX_SIMPLIFIED_VERTICES = 1000
 
+# Fixed-precision grid for the coverage overlay, in EPSG:3857 units (1mm).
+#
+# Not a tuning knob - a correctness guard. GEOS's default floating-point
+# overlay returns LINESTRING EMPTY for ST_Intersection(ST_Buffer(line, tol),
+# line) when the line is EXACTLY axis-aligned, even though ST_Within(line,
+# buffer) is true for the same pair. Measured: a due-north line scores
+# covered_len 0 of 1620.09; the same line at a bearing of 1 degree scores
+# full coverage. It is magnitude-independent (LINESTRING(0 0, 0 900, 0 1620)
+# does it too), so it is a degeneracy, not a precision limit.
+#
+# That would be an exotic edge case if the input were the rider's raw GPS,
+# and it is not: ST_Simplify MANUFACTURES it. A realistic near-north road of
+# ten points wobbling 1-3m - far inside GPS/OSM noise, far under the ladder's
+# 20m first rung - collapses to an exact two-point line at identical
+# projected X, and nudging an interior point by 1m re-collapses to the same
+# two endpoints. Canal towpaths, disused railways and Roman roads are the
+# real population, and each one would silently never match any ride of it.
+#
+# Passing a gridSize routes the overlay through OverlayNG's fixed-precision
+# path, which is robust here. Measured across a bearing sweep it is identical
+# to the default everywhere the default works, and correct at 0 and 90 where
+# the default returns zero. 1mm is far below any distance this module can
+# resolve - the buffer it feeds is 40m - so it cannot affect a real verdict.
+_OVERLAY_GRID_SIZE_M = 0.001
+
 # `act` narrows to the one activity being matched and its owning user, so
 # every candidate route already belongs to that same user - there is no
 # separate ownership filter to forget.
@@ -209,7 +234,9 @@ _MATCH_SQL = text("""
           AND r.geom && act.geom
           AND r.distance_m BETWEEN
               act.distance_m * :match_ratio_min AND act.distance_m * :match_ratio_max
-        ORDER BY ST_Distance(ST_Centroid(r.geom), ST_Centroid(act.geom)),
+        ORDER BY ST_Distance(
+                     ST_Centroid(r.geom)::geography, ST_Centroid(act.geom)::geography
+                 ),
                  abs(r.distance_m - act.distance_m)
         LIMIT :max_candidates
     ),
@@ -238,12 +265,16 @@ _MATCH_SQL = text("""
         SELECT id, route_distance_m, activity_distance_m,
                ST_Length(
                    ST_Intersection(
-                       ST_Buffer(route_geom_s, :buffer_m / lat_cos), act_geom_s
+                       ST_Buffer(route_geom_s, :buffer_m / lat_cos),
+                       act_geom_s,
+                       :grid_size
                    )
                ) / NULLIF(ST_Length(act_geom_s), 0) AS ride_covered,
                ST_Length(
                    ST_Intersection(
-                       ST_Buffer(act_geom_s, :buffer_m / lat_cos), route_geom_s
+                       ST_Buffer(act_geom_s, :buffer_m / lat_cos),
+                       route_geom_s,
+                       :grid_size
                    )
                ) / NULLIF(ST_Length(route_geom_s), 0) AS route_covered
         FROM scored
@@ -353,6 +384,7 @@ async def match_activity_to_route(
                         "buffer_m": COVERAGE_BUFFER_M,
                         "tolerances": SIMPLIFY_TOLERANCE_LADDER_M,
                         "max_vertices": MAX_SIMPLIFIED_VERTICES,
+                        "grid_size": _OVERLAY_GRID_SIZE_M,
                     },
                 )
             ).first()

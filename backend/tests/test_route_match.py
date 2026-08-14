@@ -28,6 +28,7 @@ import".
 """
 
 import inspect
+import math
 import uuid
 
 import pytest
@@ -1133,3 +1134,132 @@ async def test_a_failed_match_commit_leaves_the_caller_object_usable(
     # raises MissingGreenlet if the rollback left it expired.
     assert activity.name == "Test ride"
     assert activity.user_id == user_id
+
+
+async def test_a_due_north_route_matches_its_own_ride(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """An exactly axis-aligned route must match a ride of it.
+
+    Round 6 found that it did not, and the cause was not a threshold: GEOS's
+    default overlay returns LINESTRING EMPTY for
+    ST_Intersection(ST_Buffer(line, tol), line) when the line is exactly due
+    north or due east, so coverage read 0 and the ride silently never linked.
+    ST_Simplify manufactures exactly that input from an ordinary near-north
+    road, so canal towpaths, disused railways and Roman roads were the real
+    population - see _OVERLAY_GRID_SIZE_M.
+
+    Every other test in this file tilts its geometry by RUN_BEARING_DEG,
+    which is precisely why none of them could see this. This one must stay
+    exactly axis-aligned to keep its meaning.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    due_north = [(LAT, LON), (LAT + 0.009, LON), (LAT + 0.018, LON)]
+    route = _route(user_id, due_north, RUN_LENGTH_M)
+    activity = _activity(user_id, due_north, RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+
+    matched = await match_activity_to_route(activity.id)
+
+    assert matched == route.id
+    await db.refresh(activity)
+    assert activity.match_confidence is not None
+    assert activity.match_confidence == pytest.approx(1.0, rel=0.03)
+
+
+async def test_a_due_east_route_matches_its_own_ride(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The other axis. The degeneracy is not specific to north - a bearing
+    sweep measured covered_len 0 at both 0 and 90 degrees and full coverage
+    at every bearing between, so fixing only the one this was first noticed
+    on would leave the identical bug one axis over."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    due_east = [(LAT, LON), (LAT, LON + 0.012), (LAT, LON + 0.024)]
+    route = _route(user_id, due_east, RUN_LENGTH_M)
+    activity = _activity(user_id, due_east, RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+
+    matched = await match_activity_to_route(activity.id)
+
+    assert matched == route.id
+
+
+async def test_the_candidate_ranking_is_not_distorted_by_longitude(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Candidate ranking must be in ground metres, not raw degrees.
+
+    A degree of longitude is ~68.8km at 51.8N against ~111.1km for a degree
+    of latitude, so ST_Distance over SRID 4326 makes an east-west offset
+    score ~1.6x larger than the identical real offset north-south. The
+    candidate list is capped at MAX_CANDIDATES, so that distortion does not
+    merely reorder - it decides which routes get scored at all, and a
+    genuine match displaced east can be pushed off the end by decoys that
+    are further away on the ground but nearer in degrees.
+
+    The fixture is built around that asymmetry, and every part of it is
+    load-bearing:
+
+      - The line runs due EAST, so a north shift is pure cross-track (it
+        breaks coverage) and an east shift is pure along-track (it barely
+        touches coverage). On the tilted line the rest of this file uses,
+        no combination of offsets can produce the required ordering at all.
+      - The true route is 30m EAST: 0.000436 degrees, but only 30m of
+        ground, and it still covers 1970/2000 = 0.985.
+      - The decoys are ~44.5m NORTH: 0.000400 degrees - NEARER in degrees
+        than the true route despite being FURTHER on the ground - and past
+        COVERAGE_BUFFER_M, so not one of them can win on merit. They exist
+        only to fill the LIMIT.
+
+    Ranked in degrees all 25 decoys sort ahead of the true route and it
+    never reaches the coverage stage; ranked in metres it sorts first.
+    test_the_true_route_wins_even_when_many_candidates_qualify cannot catch
+    this because it offsets every candidate along a single axis, and one
+    axis scales uniformly.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    # Degrees per metre at this latitude, used to state the fixture in
+    # metres and convert once, rather than hand-writing decimal degrees.
+    deg_per_m_lon = 1.0 / (111320.0 * math.cos(math.radians(LAT)))
+    deg_per_m_lat = 1.0 / 111132.0
+    length_deg = RUN_LENGTH_M * deg_per_m_lon
+
+    def _due_east(shift_east_m: float = 0.0, shift_north_m: float = 0.0) -> list[Point]:
+        lat = LAT + shift_north_m * deg_per_m_lat
+        lon = LON + shift_east_m * deg_per_m_lon
+        return [(lat, lon), (lat, lon + length_deg)]
+
+    activity = _activity(user_id, _due_east(), RUN_LENGTH_M)
+    true_route = _route(user_id, _due_east(shift_east_m=30.0), RUN_LENGTH_M)
+    db.add_all([activity, true_route])
+
+    true_route_deg = 30.0 * deg_per_m_lon
+    for i in range(MAX_CANDIDATES):
+        # Anchored at the activity's own start and fanning north, NOT shifted
+        # bodily north: a due-east line has a zero-height bounding box, so a
+        # bodily-shifted decoy fails `geom && geom` and never becomes a
+        # candidate at all - it cannot crowd a list it is not on. Sharing the
+        # start point keeps the boxes overlapping. The far end is 2*north_m
+        # away, so the centroid sits north_m off and most of the line is well
+        # beyond the buffer.
+        north_m = 44.5 + i * 0.02
+        assert north_m * deg_per_m_lat < true_route_deg, (
+            "decoy must rank ahead of the true route in raw degrees, "
+            "or the fixture does not reproduce the bug"
+        )
+        far = _due_east(shift_north_m=2.0 * north_m)[1]
+        db.add(_route(user_id, [(LAT, LON), far], RUN_LENGTH_M))
+    await db.commit()
+
+    matched = await match_activity_to_route(activity.id)
+
+    assert matched == true_route.id
