@@ -21,7 +21,7 @@ from fastapi.responses import Response
 from geoalchemy2.functions import ST_AsText
 from sqlalchemy import delete, exists, func, select
 
-from app.api.deps import DbDep, UserDep
+from app.api.deps import DbDep, UserDep, refresh_or_404
 from app.models import Activity, Route
 from app.schemas import (
     ActivityDetail,
@@ -438,7 +438,7 @@ async def rematch_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> 
     """
     activity = await _owned(activity_id, db, user.id)
     await match_activity_to_route(activity.id, clear_if_unmatched=True)
-    await db.refresh(activity)
+    await refresh_or_404(db, activity, "Activity not found")
     return await _detail(activity, db)
 
 
@@ -498,6 +498,19 @@ async def _owned(activity_id: uuid.UUID, db: DbDep, user_id: uuid.UUID) -> Activ
 
 
 def _summary(activity: Activity, route_name: str | None = None) -> ActivitySummary:
+    # route_id is derived from route_name, not read straight off the row, so
+    # the two cannot disagree. `route_name` is already resolved by an
+    # owner-filtered join, and Route.name is NOT NULL, so "no name" means
+    # "no route this caller may see" - either unmatched, or matched to a
+    # route somebody else owns.
+    #
+    # The owner filter was added to route_name alone, which left this
+    # returning the raw UUID of a stranger's private route beside a
+    # correctly-nulled name. No writer can currently produce such a row (both
+    # PUT .../route and the matcher scope to one user on both sides), but the
+    # filter exists precisely so a read path need not trust that forever, and
+    # a guard with a hole in it reads as cover it does not give.
+    linked = route_name is not None
     return ActivitySummary(
         id=activity.id,
         name=activity.name,
@@ -509,9 +522,9 @@ def _summary(activity: Activity, route_name: str | None = None) -> ActivitySumma
         descent_m=activity.descent_m,
         source=activity.source,
         created_at=activity.created_at,
-        route_id=activity.route_id,
+        route_id=activity.route_id if linked else None,
         route_name=route_name,
-        match_confidence=activity.match_confidence,
+        match_confidence=activity.match_confidence if linked else None,
         match_locked=activity.match_locked,
     )
 

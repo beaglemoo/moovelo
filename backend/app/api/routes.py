@@ -9,7 +9,7 @@ from geoalchemy2 import WKTElement
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import DbDep, UserDep
+from app.api.deps import DbDep, UserDep, refresh_or_404
 from app.api.settings import get_or_default_settings
 from app.models import Activity, Route
 from app.schemas import (
@@ -389,7 +389,7 @@ async def update_route(
     await db.commit()
     if body.snapshot is not None:
         await _rematch_linked_activities(route.id, db)
-    await db.refresh(route)
+    await refresh_or_404(db, route, "Route not found")
     return await _saved(route, db, user.id)
 
 

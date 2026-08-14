@@ -36,6 +36,7 @@ from httpx import AsyncClient
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import app.services.route_match as match_route_module
 import app.services.route_match as route_match
 from app.models import Activity, Route, User
 from app.schemas import RouteResponse
@@ -877,6 +878,16 @@ async def test_a_cross_linked_row_never_leaks_the_other_users_route_name(
     assert detail.json()["route_name"] != "SECRET-STRANGER-ROUTE"
     assert detail.json()["route_name"] is None
 
+    # The name was filtered and the raw UUID was not, so both reads handed
+    # back a stranger's route id beside a correctly-nulled name. route_id is
+    # now derived from the same owner-filtered fact as the name, so the two
+    # cannot disagree; match_confidence goes with them, since a confidence
+    # for a route the caller may not see describes nothing they can act on.
+    assert row["route_id"] is None
+    assert row["match_confidence"] is None
+    assert detail.json()["route_id"] is None
+    assert detail.json()["match_confidence"] is None
+
 
 async def test_re_routing_a_saved_route_clears_the_matches_it_invalidated(
     client: AsyncClient, db: AsyncSession
@@ -1338,3 +1349,43 @@ async def test_a_manual_pick_during_a_running_match_is_not_clobbered(
     assert row.route_id == manual_id, "the rider's pick was overwritten"
     assert row.match_locked is True
     assert row.match_confidence is None
+
+
+async def test_rematch_of_a_concurrently_deleted_activity_404s_rather_than_500s(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleting the ride while its rematch runs must not 500.
+
+    rematch_activity does slow work (the whole coverage query) and then
+    refreshes the activity to build its response. A DELETE landing in that
+    gap made the refresh raise ObjectDeletedError, which surfaced as a 500.
+    404 is the honest answer - the work happened, the resource is gone.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id = activity.id
+
+    real = match_route_module.match_activity_to_route
+    deleted = False
+
+    async def deleting_match(*a: object, **k: object) -> uuid.UUID | None:
+        nonlocal deleted
+        result = await real(*a, **k)  # type: ignore[arg-type]
+        async with db_factory() as other:
+            await other.execute(delete(Activity).where(Activity.id == activity_id))
+            await other.commit()
+        deleted = True
+        return result
+
+    monkeypatch.setattr("app.api.activities.match_activity_to_route", deleting_match)
+    response = await client.post(f"/api/activities/{activity_id}/rematch")
+
+    assert deleted, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
