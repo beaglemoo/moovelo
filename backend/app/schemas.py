@@ -564,7 +564,10 @@ class ActivityMonthStats(BaseModel):
     month: int
     count: int
     distance_m: float
-    moving_time_s: float
+    # None when no ride in the bucket carried a moving time - distinct from
+    # zero, and rendered as "-" rather than "0m". See the endpoint's own
+    # comment on why this one is not coalesced.
+    moving_time_s: float | None
     ascent_m: float
 
 
@@ -580,7 +583,9 @@ class ActivityYearStats(BaseModel):
     year: int | None
     count: int
     distance_m: float
-    moving_time_s: float
+    # None, not zero, when nothing in the bucket carried a moving time - see
+    # ActivityMonthStats.moving_time_s.
+    moving_time_s: float | None
     ascent_m: float
     months: list[ActivityMonthStats] = []
 

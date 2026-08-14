@@ -482,7 +482,7 @@ export interface ActivityMonthStats {
 	month: number;
 	count: number;
 	distance_m: number;
-	moving_time_s: number;
+	moving_time_s: number | null;
 	ascent_m: number;
 }
 
@@ -494,7 +494,7 @@ export interface ActivityYearStats {
 	year: number | null;
 	count: number;
 	distance_m: number;
-	moving_time_s: number;
+	moving_time_s: number | null;
 	ascent_m: number;
 	months: ActivityMonthStats[];
 }
