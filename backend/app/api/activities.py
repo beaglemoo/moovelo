@@ -28,6 +28,7 @@ from app.schemas import (
     ActivityRouteLinkRequest,
     ActivitySummary,
     ArchiveImportStatus,
+    ClimbLogResponse,
     ElevationPoint,
     HeatmapAvailability,
 )
@@ -39,6 +40,7 @@ from app.services.activity_import import (
     QueueFullError,
 )
 from app.services.activity_import import queue as archive_queue
+from app.services.climb_log import climb_log
 from app.services.geo import coords_from_wkt
 from app.services.heatmap import MAX_HEATMAP_ZOOM, MIN_HEATMAP_ZOOM, heatmap_etag, heatmap_tile
 from app.services.importer import MAX_FILE_BYTES, RouteImportError, parse_route_file
@@ -203,6 +205,19 @@ async def list_activities(
     ordering = func.coalesce(Activity.started_at, Activity.created_at)
     rows = (await db.execute(query.order_by(ordering.desc()))).all()
     return [_summary(activity, route_name) for activity, route_name in rows]
+
+
+@router.get("/climbs")
+async def list_climb_log(db: DbDep, user: UserDep) -> ClimbLogResponse:
+    """This rider's own deduplicated climb log - see services/climb_log.py.
+
+    Ahead of `/{activity_id}` in this file for the same reason `/import`
+    and `/heatmap-available` are: FastAPI matches routes in declaration
+    order, and a static path declared after the dynamic `/{activity_id}`
+    would never be reached - it would parse "climbs" as an activity id and
+    404 instead.
+    """
+    return ClimbLogResponse(climbs=await climb_log(db, user.id))
 
 
 @router.get("/heatmap-available")
