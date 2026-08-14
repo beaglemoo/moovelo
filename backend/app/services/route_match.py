@@ -319,6 +319,14 @@ async def match_activity_to_route(
     new failure mode in this codebase, it is a recurring one.
     """
     route_id: uuid.UUID | None = None
+    # One exit that commits, rather than a commit reachable from only one of
+    # the branches that write. The clear_if_unmatched path used to `return`
+    # from inside the SAVEPOINT below, which skipped the commit at the end
+    # entirely: the clear was visible to the calling session and then rolled
+    # back at close, so an explicit rematch appeared to work and changed
+    # nothing. Releasing a SAVEPOINT only merges into the still-open outer
+    # transaction; durability is this function's own commit.
+    changed = False
     try:
         async with db.begin_nested():
             activity = await db.get(Activity, activity_id)
@@ -347,21 +355,23 @@ async def match_activity_to_route(
                 # a stale link is read as a real match by planned-vs-actual
                 # and silently feeds a nonsensical implied speed into
                 # ride-time calibration.
-                if clear_if_unmatched:
+                if clear_if_unmatched and activity.route_id is not None:
                     activity.route_id = None
                     activity.match_confidence = None
-                return None
-
-            route_id = row.id
-            activity.route_id = route_id
-            activity.match_confidence = float(row.confidence)
+                    changed = True
+            else:
+                route_id = row.id
+                activity.route_id = route_id
+                activity.match_confidence = float(row.confidence)
+                changed = True
     except Exception:  # noqa: BLE001 - see the "Never raises" docstring note above
         logger.warning("route match failed for activity %s", activity_id, exc_info=True)
         return None
 
-    # Releasing the SAVEPOINT above only merges the change into the still-
-    # open outer transaction; nothing is durable until this commits it -
-    # get_db (app/db.py) has no auto-commit, so a caller that never commits
-    # loses the match on rollback-at-close the way any other write would.
-    await db.commit()
+    # get_db (app/db.py) has no auto-commit, so without this the write is lost
+    # on rollback-at-close the way any other would be. Guarded on `changed` so
+    # a no-op match does not commit a caller's unrelated pending work as a
+    # side effect of asking a question.
+    if changed:
+        await db.commit()
     return route_id

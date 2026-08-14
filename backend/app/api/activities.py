@@ -430,7 +430,7 @@ async def rematch_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> 
     on rather than duplicating.
     """
     activity = await _owned(activity_id, db, user.id)
-    await match_activity_to_route(db, activity.id)
+    await match_activity_to_route(db, activity.id, clear_if_unmatched=True)
     await db.refresh(activity)
     return await _detail(activity, db)
 
