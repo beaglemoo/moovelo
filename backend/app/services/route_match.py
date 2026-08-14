@@ -259,8 +259,19 @@ _MATCH_SQL = text("""
 """)
 
 
-async def match_activity_to_route(db: AsyncSession, activity_id: uuid.UUID) -> uuid.UUID | None:
+async def match_activity_to_route(
+    db: AsyncSession, activity_id: uuid.UUID, *, clear_if_unmatched: bool = False
+) -> uuid.UUID | None:
     """Find the best-matching route for one activity and persist the result.
+
+    `clear_if_unmatched` says whether "no candidate qualified" should clear an
+    existing link. It defaults to False, which is right for the passive pass
+    that runs on import: a route the rider has not touched is still evidence,
+    and a threshold that happens not to be beaten this time is not grounds to
+    throw a match away. It must be True whenever the caller knows the evidence
+    the link rested on is gone - the route was re-routed beneath it, or a rider
+    explicitly asked for a rematch - because there the stale link is the
+    harmful outcome, not the cautious one.
 
     A no-op - returns None without touching anything - when the activity
     does not exist, or when `match_locked` is true: that flag means a rider
@@ -330,6 +341,15 @@ async def match_activity_to_route(db: AsyncSession, activity_id: uuid.UUID) -> u
                 )
             ).first()
             if row is None or row.confidence is None:
+                # See clear_if_unmatched in the docstring: passively this
+                # means "leave the existing link alone"; when the caller
+                # knows the evidence is gone it means the opposite, because
+                # a stale link is read as a real match by planned-vs-actual
+                # and silently feeds a nonsensical implied speed into
+                # ride-time calibration.
+                if clear_if_unmatched:
+                    activity.route_id = None
+                    activity.match_confidence = None
                 return None
 
             route_id = row.id

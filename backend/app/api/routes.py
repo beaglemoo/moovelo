@@ -42,6 +42,7 @@ from app.services.importer import MAX_FILE_BYTES, RouteImportError
 from app.services.llm_config import resolve_llm_config
 from app.services.polyline import decode_polyline6
 from app.services.ride_time import compute_ride_time
+from app.services.route_match import match_activity_to_route
 from app.services.route_summary import generate_summary, route_geometry_signature
 from app.services.valhalla import ValhallaClient, ascent_descent
 
@@ -378,8 +379,46 @@ async def update_route(
     if body.snapshot is not None:
         _apply_snapshot(route, body.snapshot)
     await db.commit()
+    if body.snapshot is not None:
+        await _rematch_linked_activities(route.id, db)
     await db.refresh(route)
     return await _saved(route, db, user.id)
+
+
+async def _rematch_linked_activities(route_id: uuid.UUID, db: AsyncSession) -> None:
+    """Re-derive the matches of every ride linked to a route whose shape just
+    changed.
+
+    A saved route is re-routed in place - same row, same id - whenever the
+    rider tweaks a waypoint and saves, so any ride matched to it was matched
+    against geometry that no longer exists. Nothing else re-derives it: the
+    import-time pass only runs when a ride arrives, and its deliberate "no
+    candidate qualified means leave the existing link alone" policy is exactly
+    wrong here, because here the previous match IS known to be stale. Hence
+    clear_if_unmatched.
+
+    Left stale the damage is quiet and compounding: planned-vs-actual shows the
+    old confidence beside a predicted time computed from the NEW geometry - a
+    confident-looking comparison against a road the ride never touched - and
+    ride-time calibration joins on the same link and solves the new elevation
+    against the old ride's moving time, corrupting the rider's suggested flat
+    speed indefinitely with no visible error.
+
+    Rides the rider matched by hand are untouched: match_activity_to_route
+    honours match_locked, which is the whole point of that flag.
+
+    Inline, after the commit that changed the route. A route's own rides are
+    few - one rider's history of one route, not a scan - and each is a single
+    indexed query. A failure here cannot fail the save: match_activity_to_route
+    never raises, by contract.
+    """
+    linked = (
+        (await db.execute(select(Activity.id).where(Activity.route_id == route_id))).scalars().all()
+    )
+    for activity_id in linked:
+        await match_activity_to_route(db, activity_id, clear_if_unmatched=True)
+    if linked:
+        await db.commit()
 
 
 def _suffixed(name: str, suffix: str) -> str:

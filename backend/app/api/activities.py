@@ -195,7 +195,15 @@ async def list_activities(
     # None) rather than being dropped from the list.
     query = (
         select(Activity, Route.name)
-        .outerjoin(Route, Route.id == Activity.route_id)
+        # The join carries the OWNER's id as well as the ride's. Every writer
+        # that can set route_id checks both sides today, so a cross-linked row
+        # cannot currently exist - but the FK permits it, and a read path does
+        # not get to depend on every present and future writer staying
+        # correct. Without this a cross-linked row hands a stranger's private
+        # route name to whoever owns the ride. GET /api/routes/{id}/activities
+        # and services/ride_calibration.py already filter both tables for the
+        # same reason; these two reads were the pair that did not.
+        .outerjoin(Route, (Route.id == Activity.route_id) & (Route.user_id == user.id))
         .where(Activity.user_id == user.id)
     )
     if year is not None:
@@ -511,7 +519,12 @@ async def _detail(activity: Activity, db: DbDep) -> ActivityDetail:
     wkt = await db.scalar(select(ST_AsText(Activity.geom)).where(Activity.id == activity.id))
     route_name = None
     if activity.route_id is not None:
-        route_name = await db.scalar(select(Route.name).where(Route.id == activity.route_id))
+        # Owner-filtered too - see list_activities' own comment.
+        route_name = await db.scalar(
+            select(Route.name).where(
+                Route.id == activity.route_id, Route.user_id == activity.user_id
+            )
+        )
     return ActivityDetail(
         **_summary(activity, route_name).model_dump(),
         shape=encode_polyline6(coords_from_wkt(wkt)),
