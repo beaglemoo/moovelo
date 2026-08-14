@@ -887,6 +887,62 @@ seeds a stranger's activity at the identical location through the session
 `user_id` filter with 14 passing tests behind it that none of them actually
 exercised.
 
+## Riding totals
+
+`GET /api/activities/stats` answers "how much have I ridden": distance,
+moving time, ascent and ride count grouped by year, and by month within a
+year, rendered as `RideStatsCard.svelte` on `/activities`.
+
+**Two aggregate SQL queries, not a Python loop summing loaded rows.** One
+`GROUP BY` over `func.extract("year", Activity.started_at)` produces the
+per-year totals; a second `GROUP BY` over both the year and month
+expressions, restricted to rows with a non-null `started_at`, produces the
+per-month drill-down attached to each year in the response. `func.coalesce`
+around every `func.sum(...)` guards a bucket whose contributing values are
+all `NULL` (an activity with no `moving_time_s` at all) from turning
+`SUM`'s own NULL-for-empty-input into a `NULL` total for the whole bucket,
+rather than the real partial sum.
+
+**The undated bucket is not a special case bolted on afterwards - it falls
+out of the same `GROUP BY`.** `Activity.started_at` is nullable by design
+(a file can declare itself an activity and carry no usable timestamp, the
+same reason `GET /api/activities` falls back to `created_at` for
+ordering), and `func.extract` on a `NULL` timestamp returns `NULL`, which
+Postgres groups as its own bucket - `year: null` in the response, "Undated"
+in the UI - rather than excluding those rows from the aggregate. Because
+the year query has no `started_at IS NOT NULL` filter the month query
+needs (a `NULL` year and a `NULL` month would otherwise be indistinguishable
+from a genuine January with no rides), summing every bucket the year query
+returns, including the undated one, always equals the caller's unfiltered
+total. `test_api_ride_stats.py`'s
+`test_undated_bucket_reconciles_with_the_unfiltered_total` pins exactly
+that reconciliation, not just that the undated bucket exists.
+
+**Ordering is applied in Python, after both queries return** (newest year
+first, undated last, months ascending within a year) - `ORDER BY` on a
+`GROUP BY` aggregate would work here too, but the response shape (a year
+row carrying a nested list of its own months) already requires assembling
+`months_by_year` in Python from the second query's rows, so sorting there
+alongside it is one place rather than two.
+
+Declared before `/{activity_id}` in `api/activities.py`, for the same
+FastAPI route-ordering reason `/climbs` and `/heatmap-available` are - see
+the comment on `list_climb_log`.
+
+**Both queries carry their own `WHERE Activity.user_id == user.id`,
+independently.** They are two separate `SELECT`s, not one query reused, so
+one carrying the filter does not imply the other does. The month query's
+own filter is the one this PR's mutation check actually caught: with only
+`test_another_users_totals_are_never_visible` (a stranger with no rides of
+their own) in place, deleting the month query's `user_id` filter left every
+test green, because the year query alone already returns nothing for a
+rider with zero activities.
+`test_another_users_ride_in_the_same_month_never_inflates_your_own` closes
+that gap - two riders with an activity in the *same* year and month, which
+only a `GROUP BY year, month` missing its own `user_id` filter would merge
+together, since both rows would otherwise have a real, matched year bucket
+to land in on both sides.
+
 ## Cycle-network coverage
 
 "You have ridden 38% of the National Cycle Network near you" needs two new
@@ -1815,6 +1871,7 @@ frontend/src/
         ├── AssistantPanel.svelte     # chat log, tool status, stop, proposal card
         ├── CoverageCard.svelte       # /activities: cycle-network + all-roads %, "Match older rides"
         ├── ClimbLogCard.svelte       # /activities: deduplicated personal climb log
+        ├── RideStatsCard.svelte      # /activities: yearly/monthly distance, moving time, ascent, ride count
         └── WaypointList.svelte       # route-order list: reorder (drag or up/down), remove, reverse-geocoded names
 ```
 
@@ -1840,7 +1897,7 @@ backend/app/
 │                            #   SearchIndexMeta, UserSettings, LLMSettings
 ├── schemas.py               # request/response models
 ├── api/
-│   ├── activities.py        # /api/activities: import, list, read, delete, heatmap tiles
+│   ├── activities.py        # /api/activities: import, list, read, delete, heatmap tiles, stats
 │   ├── coverage.py          # /api/coverage: cycle-network % + all-roads %, backfill queue/status
 │   ├── route.py             # /api/health, /api/config, /api/route, /api/route/surface,
 │   │                        #   /api/route/isochrone, /api/route/loop, /api/route/alternates
