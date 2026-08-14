@@ -46,16 +46,24 @@
 			/* the picker degrades to "no other routes to offer" rather than an error */
 		});
 
-	async function loadMatchedRoute(routeId: string | null) {
-		matchedRoute = routeId ? await routes.get(routeId) : null;
+	// `activity` and `matchedRoute` are two halves of one fact - the select is
+	// bound to activity.route_id while every comparison row renders
+	// matchedRoute - so they are fetched together and assigned together, after
+	// both awaits have resolved. Assigning the ride first and then awaiting its
+	// route is what let a failed second call leave the picker showing one route
+	// and the comparison table showing another's distance, ascent and predicted
+	// time. One commit point means the pair cannot diverge: on failure both are
+	// left as they were, which is stale but coherent, and the error says so.
+	async function fetchPair(id: string): Promise<[ActivityDetail, SavedRoute | null]> {
+		const next = await activities.get(id);
+		return [next, next.route_id ? await routes.get(next.route_id) : null];
 	}
 
 	async function load() {
 		loading = true;
 		error = null;
 		try {
-			activity = await activities.get(id);
-			await loadMatchedRoute(activity.route_id);
+			[activity, matchedRoute] = await fetchPair(id);
 			fitTrigger += 1;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load ride';
@@ -84,14 +92,27 @@
 
 	async function pickRoute(event: Event) {
 		if (!activity) return;
-		const value = (event.currentTarget as HTMLSelectElement).value;
+		const select = event.currentTarget as HTMLSelectElement;
+		const value = select.value;
 		pickerBusy = true;
 		pickerError = null;
 		try {
-			activity = await activities.setRoute(activity.id, value || null);
-			await loadMatchedRoute(activity.route_id);
+			const updated = await activities.setRoute(activity.id, value || null);
+			// Resolved before either is assigned - see fetchPair's comment. A
+			// null route_id needs no call, so clearing a link cannot fail here.
+			const route = updated.route_id ? await routes.get(updated.route_id) : null;
+			activity = updated;
+			matchedRoute = route;
 		} catch (err) {
 			pickerError = err instanceof Error ? err.message : 'Failed to update the match';
+			// The select is bound one way (`value={activity.route_id}`), so when
+			// the state it reads does not change, nothing re-renders it and the
+			// element keeps the choice the rider just made - leaving the picker
+			// naming one route while the panel below describes another. Putting
+			// it back by hand is what actually restores the pair on screen;
+			// getting the state right is necessary but not sufficient, and the
+			// difference is only visible in a browser, not in a state model.
+			select.value = activity.route_id ?? '';
 		} finally {
 			pickerBusy = false;
 		}
