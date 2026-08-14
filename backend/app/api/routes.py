@@ -1,3 +1,4 @@
+import logging
 import re
 import secrets
 import uuid
@@ -46,9 +47,16 @@ from app.services.route_match import match_activity_to_route
 from app.services.route_summary import generate_summary, route_geometry_signature
 from app.services.valhalla import ValhallaClient, ascent_descent
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/routes")
 
 UPLOAD_CHUNK_BYTES = 64 * 1024
+
+# Bounds _rematch_linked_activities. At 9-28ms per re-match on real
+# multi-thousand-point traces, 200 is a few seconds in the worst realistic
+# shape and effectively never reached in an ordinary library.
+MAX_REDERIVE = 200
 
 
 def _slug(name: str) -> str:
@@ -407,14 +415,44 @@ async def _rematch_linked_activities(route_id: uuid.UUID, db: AsyncSession) -> N
     Rides the rider matched by hand are untouched: match_activity_to_route
     honours match_locked, which is the whole point of that flag.
 
-    Inline, after the commit that changed the route. A route's own rides are
-    few - one rider's history of one route, not a scan - and each is a single
-    indexed query. A failure here cannot fail the save: match_activity_to_route
-    never raises, by contract.
+    Inline, after the commit that changed the route, and capped. Measured
+    against 14,000-point traces (route_match.py's "ordinary four-hour ride at
+    1Hz"), each re-match costs 9-28ms, so a regular commute carrying a
+    multi-year imported history can turn one save into seconds of work held
+    open on the request. MAX_REDERIVE keeps the common case exact and bounds
+    the tail: anything past it keeps its existing link and is logged, and a
+    rider can correct one by hand from the ride page. A stale link on the far
+    tail of an exceptionally well-ridden route is worse-but-visible, and both
+    are better than the silent corruption this function exists to stop.
+
+    Oldest-first so the cap always falls on the same rides rather than an
+    arbitrary set - an unordered LIMIT is exactly how route_match.py's own
+    candidate query managed to drop the true match.
+
+    A failure here cannot fail the save: match_activity_to_route never raises,
+    by contract.
     """
     linked = (
-        (await db.execute(select(Activity.id).where(Activity.route_id == route_id))).scalars().all()
+        (
+            await db.execute(
+                select(Activity.id)
+                .where(Activity.route_id == route_id)
+                .order_by(Activity.created_at)
+                .limit(MAX_REDERIVE + 1)
+            )
+        )
+        .scalars()
+        .all()
     )
+    if len(linked) > MAX_REDERIVE:
+        logger.warning(
+            "route %s has more than %d linked rides; re-deriving the oldest %d and "
+            "leaving the rest to an explicit rematch",
+            route_id,
+            MAX_REDERIVE,
+            MAX_REDERIVE,
+        )
+        linked = linked[:MAX_REDERIVE]
     for activity_id in linked:
         await match_activity_to_route(db, activity_id, clear_if_unmatched=True)
     if linked:
