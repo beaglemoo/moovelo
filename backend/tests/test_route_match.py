@@ -873,3 +873,56 @@ async def test_saving_a_re_routed_route_triggers_the_re_derive(
     )
     assert resaved.status_code == 200
     assert called == [uuid.UUID(created["id"])]
+
+
+async def test_an_explicit_rematch_clears_a_stale_match_and_it_persists(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The rematch endpoint is the rider saying "this link is wrong".
+
+    Two separate failures hid behind each other here, and this pins both.
+    The endpoint has to ASK for clear_if_unmatched - without it a link to a
+    route that has since been re-routed elsewhere survives an explicit
+    rematch, which is the exact case the flag exists for. And the clear has
+    to be DURABLE: the branch that clears used to return from inside the
+    SAVEPOINT, skipping the function's own commit, so the clear was visible
+    to the calling session and then rolled back at close. The endpoint
+    returned 200 either way, so nothing surfaced.
+
+    The re-read below therefore goes through a fresh connection rather than
+    the ORM object or the same session - a same-session read passes even
+    when nothing was ever written.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id = activity.id
+    assert await match_activity_to_route(db, activity_id) == route.id
+
+    # The route is re-routed somewhere else entirely, so the stored match no
+    # longer describes anything.
+    far = destination_point((LAT, LON), 90.0, 5_000.0)
+    await db.execute(
+        text("UPDATE routes SET geom = ST_GeomFromEWKT(:wkt) WHERE id = :id"),
+        {
+            "wkt": _line_wkt([far, destination_point(far, RUN_BEARING_DEG, RUN_LENGTH_M)]),
+            "id": route.id,
+        },
+    )
+    await db.commit()
+
+    response = await client.post(f"/api/activities/{activity_id}/rematch")
+    assert response.status_code == 200, response.text
+    assert response.json()["route_id"] is None
+
+    db.expire_all()
+    persisted = await db.scalar(select(Activity.route_id).where(Activity.id == activity_id))
+    assert persisted is None, "the clear must survive the request, not just be visible inside it"
+    confidence = await db.scalar(
+        select(Activity.match_confidence).where(Activity.id == activity_id)
+    )
+    assert confidence is None
