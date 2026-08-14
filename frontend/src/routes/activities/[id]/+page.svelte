@@ -110,6 +110,12 @@
 		if (!activity) return;
 		const select = event.currentTarget as HTMLSelectElement;
 		const value = select.value;
+		// Takes a load token like load() does, and for the same reason: this
+		// also assigns `activity` and `matchedRoute`, so without one a slow
+		// pick can land after the rider has navigated to a different ride and
+		// overwrite that page with the previous one's. Guarding load() alone
+		// left the other writer of the same pair unguarded.
+		const token = ++loadToken;
 		pickerBusy = true;
 		pickerError = null;
 		try {
@@ -117,9 +123,11 @@
 			// Resolved before either is assigned - see fetchPair's comment. A
 			// null route_id needs no call, so clearing a link cannot fail here.
 			const route = updated.route_id ? await routes.get(updated.route_id) : null;
+			if (token !== loadToken) return;
 			activity = updated;
 			matchedRoute = route;
 		} catch (err) {
+			if (token !== loadToken) return;
 			pickerError = err instanceof Error ? err.message : 'Failed to update the match';
 			// The select is bound one way (`value={activity.route_id}`), so when
 			// the state it reads does not change, nothing re-renders it and the
@@ -130,7 +138,7 @@
 			// difference is only visible in a browser, not in a state model.
 			select.value = activity.route_id ?? '';
 		} finally {
-			pickerBusy = false;
+			if (token === loadToken) pickerBusy = false;
 		}
 	}
 
