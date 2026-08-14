@@ -418,6 +418,7 @@
 						<td>{elevation(item.ascent_m, units.system)}</td>
 						<td class="muted">{formatDate(item.updated_at)}</td>
 						<td class="actions">
+							<a href={`/library/${item.id}`}>Details</a>
 							<a href={routes.gpxUrl(item.id)} download>GPX</a>
 							<a href={routes.fitUrl(item.id)} download>FIT</a>
 							{#if wahooStatus?.connected}
