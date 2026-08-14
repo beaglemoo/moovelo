@@ -2055,6 +2055,14 @@
 			flex-direction: column;
 			gap: 0.2rem;
 		}
+		/* Stacked, the panel-body is a column, so the chart's `flex: 1 1 22rem`
+		   basis becomes its HEIGHT - inflating a 150px chart to 352px+ and
+		   pushing the map down to its floor so there is nowhere left to tap in
+		   waypoints. Reset it: the chart falls back to its own 150px height. */
+		.panel-body > :global(svg) {
+			flex: none;
+			width: 100%;
+		}
 		.panel-body :global(.pois),
 		.panel-body :global(.climbs),
 		.panel-body :global(.weather),
