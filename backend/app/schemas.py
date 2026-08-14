@@ -434,8 +434,9 @@ class ActivitySummary(BaseModel):
     # show it without a second call per row.
     route_id: uuid.UUID | None = None
     route_name: str | None = None
-    # The Frechet distance, in true ground metres, that produced an
-    # auto-match. Null for a manual link or no match at all.
+    # A 0-1 bidirectional coverage score (services/route_match.py) that
+    # produced an auto-match - higher is better. Null for a manual link or
+    # no match at all.
     match_confidence: float | None = None
     # True once a rider has picked or cleared the match by hand - the
     # auto-matcher will not touch it again.

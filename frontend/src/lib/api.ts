@@ -390,8 +390,8 @@ export interface ActivitySummary {
 	 * the list can show it without a second call per row. */
 	route_id: string | null;
 	route_name: string | null;
-	/** Frechet distance, in true ground metres, that produced an
-	 * auto-match. Null for a manual link or no match at all. */
+	/** A 0-1 bidirectional coverage score that produced an auto-match -
+	 * higher is better. Null for a manual link or no match at all. */
 	match_confidence: number | null;
 	/** True once a rider has picked or cleared the match by hand. */
 	match_locked: boolean;
