@@ -395,3 +395,56 @@ async def test_low_level_suggest_function_only_sees_the_given_user(
     owner_suggestion = await suggest_flat_speed_kmh(db, owner_id, _settings())
     assert owner_suggestion is not None
     assert owner_suggestion.sample_size == MIN_USABLE_RIDES
+
+
+async def test_a_ride_linked_to_another_users_route_is_not_used(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The query filters user_id on BOTH tables, and this is what that second
+    filter is for.
+
+    Nothing in the app can currently produce this row: PUT
+    /api/activities/{id}/route checks both sides, and route_match.py only
+    ever considers the rider's own routes. The foreign key does not care,
+    though, so the state is one bad query or one future endpoint away - and
+    the module's docstring claims isolation here does not depend on those
+    call sites staying correct. Without this test that claim is prose:
+    deleting `Route.user_id == user_id` leaves every other test in this file
+    passing, because `Activity.user_id` alone still filters the rows they
+    seed.
+
+    Seeded directly through the session for that reason - going through the
+    API could not create it.
+    """
+    monkeypatch.setattr("app.api.auth.settings.signups_enabled", True)
+    await register(client, "owner@example.com")
+    owner_id = await _user_id(db, "owner@example.com")
+    await client.post("/api/auth/logout")
+    await register(client, "stranger@example.com")
+    stranger_id = await _user_id(db, "stranger@example.com")
+
+    stranger_route = _route(stranger_id)
+    db.add(stranger_route)
+    await db.commit()
+
+    # Enough of them to clear the floor, so a leak would surface as a real
+    # suggestion rather than being hidden by MIN_USABLE_RIDES.
+    actual_time_s = _known_actual_time_s(28.0)
+    for i in range(MIN_USABLE_RIDES):
+        db.add(
+            _activity(
+                owner_id,
+                route_id=stranger_route.id,
+                moving_time_s=actual_time_s,
+                name=f"Cross-linked ride {i}",
+                offset=i * 0.001,
+            )
+        )
+    await db.commit()
+
+    suggestion = await suggest_flat_speed_kmh(db, owner_id, _settings())
+
+    assert suggestion is None, (
+        "a ride pointing at another user's route must not feed the fit - "
+        "its elevation and surface are that other rider's data"
+    )
