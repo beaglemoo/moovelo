@@ -330,3 +330,51 @@ async def test_another_users_ride_in_the_same_month_never_inflates_your_own(
     assert months[5]["distance_m"] == pytest.approx(9000.0)
     assert months[5]["moving_time_s"] == pytest.approx(900.0)
     assert months[5]["ascent_m"] == pytest.approx(90.0)
+
+
+async def test_a_bucket_with_no_timing_data_reports_none_not_zero(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """A year nobody timed is not a year ridden in zero seconds.
+
+    `Activity.moving_time_s` is the one nullable number here - a file can
+    declare itself a ride and carry no per-point timestamps at all - and
+    format.ts's `duration()` renders null as "-" precisely so that state
+    cannot read as a real, suspiciously fast ride. Coalescing the SUM to 0
+    erased that distinction before the UI ever saw it, and the type said
+    `float` so the null branch was unreachable.
+
+    Distance and ascent stay coalesced: those columns are NOT NULL on the
+    model, so a 0 there is a real sum, never missing data.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    db.add_all(
+        [
+            _activity(
+                user_id,
+                distance_m=1000.0,
+                moving_time_s=None,
+                ascent_m=10.0,
+                started_at=datetime(2026, 4, 1, tzinfo=UTC),
+            ),
+            _activity(
+                user_id,
+                distance_m=500.0,
+                moving_time_s=None,
+                ascent_m=5.0,
+                started_at=datetime(2026, 4, 2, tzinfo=UTC),
+            ),
+        ]
+    )
+    await db.commit()
+
+    body = await _stats(client)
+    year = _year(body, 2026)
+
+    assert year["moving_time_s"] is None
+    assert year["months"][0]["moving_time_s"] is None
+    # The rides themselves still count, and their untimed distance still sums.
+    assert year["count"] == 2
+    assert year["distance_m"] == pytest.approx(1500.0)
