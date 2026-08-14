@@ -698,10 +698,21 @@ export interface UserSettings {
 	version: string;
 }
 
+/** GET /api/settings/ride-time-suggestion - a flat_speed_kmh value the
+ * caller's own matched rides imply, offered alongside their current
+ * setting. Never applied on its own; applying it is a plain PATCH
+ * /api/settings with flat_speed_kmh set to suggested_kmh. */
+export interface RideTimeSuggestion {
+	suggested_kmh: number;
+	sample_size: number;
+	current_kmh: number;
+}
+
 export const settings = {
 	get: () => request<UserSettings>('/api/settings'),
 	update: (patch: Partial<UserSettings>) =>
-		request<UserSettings>('/api/settings', { method: 'PATCH', body: JSON.stringify(patch) })
+		request<UserSettings>('/api/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
+	rideTimeSuggestion: () => request<RideTimeSuggestion | null>('/api/settings/ride-time-suggestion')
 };
 
 export const wahoo = {
