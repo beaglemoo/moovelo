@@ -4,6 +4,7 @@
 	import ClimbLogCard from '$lib/components/ClimbLogCard.svelte';
 	import CoverageCard from '$lib/components/CoverageCard.svelte';
 	import ImportResults from '$lib/components/ImportResults.svelte';
+	import RideStatsCard from '$lib/components/RideStatsCard.svelte';
 	import { distance, duration, elevation } from '$lib/format';
 	import { units } from '$lib/units.svelte';
 	import {
@@ -217,6 +218,7 @@
 
 	<ImportResults queue={activityImportQueue} />
 
+	<RideStatsCard />
 	<CoverageCard />
 	<ClimbLogCard />
 
