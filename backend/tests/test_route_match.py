@@ -3,21 +3,34 @@ followed, plus the API surface around it (PUT .../route, POST .../rematch).
 
 Routes and activities are seeded directly with WKT/EWKT geometry, the same
 technique test_coverage.py uses for CycleWay/CycleWayMember - both are
-tables the app writes to itself, but building the exact shapes this module's
-Frechet-distance maths needs is easier as a straight line than as a real
+tables the app writes to itself, but building the exact shapes this
+module's coverage maths needs is easier as straight lines than as a real
 Valhalla response.
+
+The algorithm here is bidirectional coverage, not ST_FrechetDistance -
+Frechet was the original plan, and it was dropped after being measured
+against real dev Postgres and found to reject ordinary rides with ordinary
+outliers (a single ~300m detour) and, unsimplified, to be able to kill the
+Postgres backend process outright on a real multi-thousand-point trace.
+Both findings have a dedicated test below: test_a_single_detour_does_not_
+break_the_match and test_a_huge_trace_is_simplified_rather_than_crashing_
+postgres.
 """
 
 import uuid
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Activity, Route, User
 from app.services.geo import Point, destination_point
-from app.services.route_match import MAX_MATCH_DISTANCE_M, match_activity_to_route
+from app.services.route_match import (
+    COVERAGE_BUFFER_M,
+    MIN_COVERAGE,
+    match_activity_to_route,
+)
 from tests.conftest import register
 
 # Same Chilterns point test_coverage.py uses, deliberately: it sits at
@@ -31,11 +44,10 @@ RUN_LENGTH_M = 2000.0
 # Off true north (bearing 0) deliberately. A perfectly due-north line has
 # zero width in longitude, so shifting a copy of it east by any amount at
 # all - even 1m - produces a bounding box that never touches the
-# original's: the cheap `&&` prefilter would reject it before the Frechet
+# original's: the cheap `&&` prefilter would reject it before the coverage
 # maths this module exists to test ever ran. Tilting the run gives it a
 # real bounding-box width (RUN_LENGTH_M * sin(8 deg) =~ 280m here) while a
-# uniform east shift of the start point keeps both lines parallel, so the
-# Frechet distance between them stays exactly the shift distance.
+# uniform east shift of the start point keeps both lines parallel.
 RUN_BEARING_DEG = 8.0
 RUN_WIDTH_M = RUN_LENGTH_M * 0.1392  # sin(8 deg), for tests picking a safe offset
 
@@ -99,16 +111,16 @@ def _north_leg(offset_east_m: float = 0.0) -> list[Point]:
 
 
 async def test_a_ride_following_a_route_matches(client: AsyncClient, db: AsyncSession) -> None:
-    """A ride that closely tracks a saved route matches it, and the stored
-    confidence is a small, sane number of metres - not the route's whole
-    length and not zero-but-suspiciously-exact."""
+    """A ride that closely tracks a saved route matches it. 25m off the
+    line - a plausible real-world GPS/road-position deviation, comfortably
+    under COVERAGE_BUFFER_M - means the whole ride sits inside the buffered
+    corridor both ways, so the confidence should read close to a clean 1.0,
+    not merely "high"."""
     await register(client, "rider@example.com")
     user_id = await _user_id(db, "rider@example.com")
 
-    # 30m off the route's line for the whole run - a plausible real-world
-    # GPS/road-position deviation, comfortably under MAX_MATCH_DISTANCE_M.
     route = _route(user_id, _north_leg(), RUN_LENGTH_M)
-    activity = _activity(user_id, _north_leg(offset_east_m=30.0), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(offset_east_m=25.0), RUN_LENGTH_M)
     db.add_all([route, activity])
     await db.commit()
 
@@ -118,21 +130,21 @@ async def test_a_ride_following_a_route_matches(client: AsyncClient, db: AsyncSe
     await db.refresh(activity)
     assert activity.route_id == route.id
     assert activity.match_confidence is not None
-    assert activity.match_confidence == pytest.approx(30.0, rel=0.15)
+    assert activity.match_confidence == pytest.approx(1.0, rel=0.03)
 
 
 async def test_a_ride_on_a_different_road_does_not_match(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    """Comfortably over MAX_MATCH_DISTANCE_M is not "the same road with GPS
+    """Comfortably over COVERAGE_BUFFER_M is not "the same road with GPS
     noise" - it must not match. The offset is kept under RUN_WIDTH_M so this
     still passes the cheap bbox/distance-ratio prefilter (same length,
-    overlapping bounding boxes) and is rejected by the Frechet confirmation
+    overlapping bounding boxes) and is rejected by the coverage confirmation
     itself, not merely filtered out earlier for an unrelated reason."""
     await register(client, "rider@example.com")
     user_id = await _user_id(db, "rider@example.com")
     offset_m = RUN_WIDTH_M * 0.7
-    assert offset_m > MAX_MATCH_DISTANCE_M, "fixture must actually exceed the threshold"
+    assert offset_m > COVERAGE_BUFFER_M, "fixture must actually exceed the buffer"
 
     route = _route(user_id, _north_leg(), RUN_LENGTH_M)
     activity = _activity(user_id, _north_leg(offset_east_m=offset_m), RUN_LENGTH_M)
@@ -150,10 +162,12 @@ async def test_a_ride_on_a_different_road_does_not_match(
 async def test_a_route_ridden_in_reverse_still_matches(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    """Frechet distance is start-to-start: comparing the activity directly
-    against a route stored in the opposite point order (planned one way,
-    ridden the other) would score as if they were unrelated shapes. Taking
-    the minimum against ST_Reverse(route.geom) is what recovers this."""
+    """Coverage is direction-agnostic by construction - buffering and
+    intersecting two lines does not care which end either one starts from -
+    so a route stored in the opposite point order (planned one way, ridden
+    the other) needs no special handling the way ST_FrechetDistance's
+    start-to-start comparison would have. This documents that it just
+    works, rather than testing an arm that no longer exists."""
     await register(client, "rider@example.com")
     user_id = await _user_id(db, "rider@example.com")
 
@@ -168,23 +182,26 @@ async def test_a_route_ridden_in_reverse_still_matches(
     assert matched == route.id
     await db.refresh(activity)
     assert activity.match_confidence is not None
-    assert activity.match_confidence < MAX_MATCH_DISTANCE_M
+    assert activity.match_confidence == pytest.approx(1.0, rel=0.03)
 
 
 async def test_mercator_distortion_is_corrected_to_true_ground_metres(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    """The test the module docstring promises: an exactly-known 100m offset
-    at this UK latitude must read back as ~100m, not the ~162m
-    (100 / cos(51.8 deg)) EPSG:3857 would report uncorrected. Both numbers
-    are on the same side of MAX_MATCH_DISTANCE_M (150) as each other in a
-    way that makes the bug observable through the public behaviour, not just
-    the raw number: uncorrected, this fixture would NOT match at all."""
+    """The test the module docstring promises: a 32m true offset at this UK
+    latitude must still fall inside a 40m corridor once COVERAGE_BUFFER_M is
+    correctly converted to true ground metres. Uncorrected, the buffer would
+    only reach cos(51.8 deg) * 40 =~ 24.7m of true ground distance - less
+    than the 32m offset - and this fixture would not match at all: the
+    required EPSG:3857 reach for a 32m true offset is 32 / cos(51.8 deg)
+    =~ 51.8 map units, comfortably more than an uncorrected 40, and
+    comfortably less than the corrected 40 / cos(51.8 deg) =~ 64.7."""
     await register(client, "rider@example.com")
     user_id = await _user_id(db, "rider@example.com")
-
-    true_offset_m = 100.0
-    uncorrected_estimate_m = true_offset_m / 0.6184  # cos(51.8 deg), rounded
+    true_offset_m = 32.0
+    assert true_offset_m > COVERAGE_BUFFER_M * 0.6184, (
+        "fixture must exceed what an uncorrected buffer could reach at this latitude"
+    )
 
     route = _route(user_id, _north_leg(), RUN_LENGTH_M)
     activity = _activity(user_id, _north_leg(offset_east_m=true_offset_m), RUN_LENGTH_M)
@@ -194,13 +211,78 @@ async def test_mercator_distortion_is_corrected_to_true_ground_metres(
     matched = await match_activity_to_route(db, activity.id)
 
     assert matched == route.id, (
-        "with the cos(latitude) correction removed this offset reads as "
-        f"~{uncorrected_estimate_m:.0f}m, over the {MAX_MATCH_DISTANCE_M}m "
-        "threshold, and would not match at all"
+        "with the cos(latitude) correction removed, a 40m buffer only reaches "
+        "~24.7m of true ground distance at this latitude - under the 32m "
+        "offset - and this fixture would not match at all"
     )
+
+
+async def test_a_single_detour_does_not_break_the_match(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The finding that changed the algorithm: a ride that follows its route
+    exactly except for one ~300m out-and-back detour (a shop stop, a wrong
+    turn) measured a 300.6m ST_FrechetDistance against it in real testing -
+    over any sane threshold - despite the overwhelming majority of the ride
+    genuinely being on the route. A maximum-based metric lets a single
+    outlier veto the whole match; bidirectional coverage does not, because
+    the detour only drags the ratio down rather than setting the score on
+    its own. This fixture would fail to match under a Frechet-threshold
+    implementation and must pass under coverage."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    run_length_m = 4000.0
+    detour_m = 300.0
+    start = (LAT, LON)
+    at_45pct = destination_point(start, RUN_BEARING_DEG, run_length_m * 0.45)
+    detour_peak = destination_point(at_45pct, RUN_BEARING_DEG + 90.0, detour_m)
+    end = destination_point(start, RUN_BEARING_DEG, run_length_m)
+
+    route = _route(user_id, [start, end], run_length_m)
+    # start -> 45% -> 300m detour out -> back to 45% -> end. Total length is
+    # the route's 4000m plus the 600m round trip of the detour.
+    activity = _activity(
+        user_id, [start, at_45pct, detour_peak, at_45pct, end], run_length_m + 2 * detour_m
+    )
+    db.add_all([route, activity])
+    await db.commit()
+
+    matched = await match_activity_to_route(db, activity.id)
+
+    assert matched == route.id
     await db.refresh(activity)
-    assert activity.match_confidence == pytest.approx(true_offset_m, rel=0.1)
-    assert activity.match_confidence < uncorrected_estimate_m * 0.8
+    assert activity.match_confidence is not None
+    assert activity.match_confidence >= MIN_COVERAGE
+
+
+async def test_the_best_covering_candidate_wins(client: AsyncClient, db: AsyncSession) -> None:
+    """Two candidates that both clear MIN_COVERAGE, with a large gap between
+    their scores - a perfect match (confidence ~1.0) and a route covering
+    only the first 85% of the ride (confidence ~0.87, still passing). The
+    higher-covering one must win. This is exactly the kind of bug an
+    ORDER BY ... ASC left over from a distance-based metric would produce -
+    the old Frechet query correctly sorted ascending on a distance; this one
+    has to sort descending on a coverage fraction, and a leftover ASC would
+    make this test pick the worse candidate."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    ride_points = _north_leg()
+    partial_end = destination_point((LAT, LON), RUN_BEARING_DEG, RUN_LENGTH_M * 0.85)
+
+    perfect = _route(user_id, ride_points, RUN_LENGTH_M)
+    partial = _route(user_id, [(LAT, LON), partial_end], RUN_LENGTH_M * 0.85)
+    activity = _activity(user_id, ride_points, RUN_LENGTH_M)
+    db.add_all([perfect, partial, activity])
+    await db.commit()
+
+    matched = await match_activity_to_route(db, activity.id)
+
+    assert matched == perfect.id
+    await db.refresh(activity)
+    assert activity.match_confidence is not None
+    assert activity.match_confidence > 0.97
 
 
 async def test_match_locked_blocks_auto_match(client: AsyncClient, db: AsyncSession) -> None:
@@ -244,6 +326,54 @@ async def test_deleting_a_route_leaves_the_ride_intact_with_a_null_link(
     # identity-mapped instance cannot hide a FK that never actually cleared.
     route_id_after = await db.scalar(select(Activity.route_id).where(Activity.id == activity_id))
     assert route_id_after is None
+
+
+async def test_a_huge_trace_is_simplified_rather_than_crashing_postgres(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The severe finding: an unsimplified ~14,000-point trace - an ordinary
+    four-hour ride recorded at 1Hz - run through ST_FrechetDistance against
+    itself killed the Postgres backend process outright in real testing
+    ("server closed the connection unexpectedly"). MAX_SIMPLIFIED_VERTICES
+    plus the tolerance ladder must keep every geometry this matcher touches
+    under that cap before ST_Buffer/ST_Intersection ever run on it. The
+    assertion that matters is that this completes and the database
+    connection is still alive afterward - a match is a bonus, not the
+    point."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    # A noisy-but-essentially-straight 14,000-point line, generated in
+    # Postgres itself (the same technique used to find the crash): small
+    # zigzag (a few metres either side) so it is representative of a real
+    # recording, monotonically progressing so it stays a simple line.
+    huge_wkt = await db.scalar(
+        text("""
+            SELECT ST_AsText(ST_MakeLine(ARRAY(
+                SELECT ST_MakePoint(:lon + (n % 9 - 4) * 0.00002, :lat + n * 0.00003)
+                FROM generate_series(1, :n) AS n
+            )))
+        """),
+        {"lon": LON, "lat": LAT, "n": 14_000},
+    )
+    assert huge_wkt is not None
+    huge_geom = f"SRID=4326;{huge_wkt}"
+
+    route = _route(user_id, [], 40_000.0)
+    route.geom = huge_geom
+    activity = _activity(user_id, [], 40_000.0)
+    activity.geom = huge_geom
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id = activity.id
+
+    # Must not raise, and must not take the connection down with it.
+    result = await match_activity_to_route(db, activity_id)
+
+    assert result == route.id
+    # A fresh query on the same session - proves the backend process
+    # survived, not merely that this one call happened to return.
+    assert await db.scalar(select(Activity.id).where(Activity.id == activity_id)) == activity_id
 
 
 # --- cross-user isolation ---------------------------------------------------
@@ -363,6 +493,7 @@ async def test_rematch_finds_a_route_for_an_unmatched_ride(
     assert body["route_id"] == str(route.id)
     assert body["match_locked"] is False
     assert body["match_confidence"] is not None
+    assert 0.0 < body["match_confidence"] <= 1.0
 
 
 async def test_list_activities_carries_the_matched_route_name(
