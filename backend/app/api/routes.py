@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DbDep, UserDep
 from app.api.settings import get_or_default_settings
-from app.models import Route
+from app.models import Activity, Route
 from app.schemas import (
     DEFAULT_FLAT_SPEED_KMH,
     DEFAULT_WEIGHT_KG,
@@ -18,6 +18,8 @@ from app.schemas import (
     ElevationPoint,
     Preset,
     RideTimePoint,
+    RouteActivitiesResponse,
+    RouteActivity,
     RouteLeg,
     RoutePatchRequest,
     RouteRequest,
@@ -298,6 +300,54 @@ async def save_route(body: RouteSaveRequest, db: DbDep, user: UserDep) -> SavedR
 @router.get("/{route_id}")
 async def get_route(route_id: uuid.UUID, db: DbDep, user: UserDep) -> SavedRoute:
     return await _saved(await get_owned_route(db, user, route_id), db, user.id)
+
+
+@router.get("/{route_id}/activities")
+async def route_activities(
+    route_id: uuid.UUID, db: DbDep, user: UserDep
+) -> RouteActivitiesResponse:
+    """The rides matched to this route - services/route_match.py, or a
+    rider's own manual link - newest first, for planned-vs-actual.
+
+    404 for another user's route (get_owned_route), and the activity query
+    is filtered on both route_id and user_id: a route this rider owns can
+    only ever be linked to that same rider's own activities (set_activity_
+    route checks both sides), but the filter costs nothing and means this
+    endpoint's own isolation does not depend on that other endpoint never
+    changing.
+    """
+    route = await get_owned_route(db, user, route_id)
+    ride_time = await _ride_time_for(route, db, user.id)
+    predicted_time_s = ride_time[-1].time_s if ride_time else None
+
+    ordering = func.coalesce(Activity.started_at, Activity.created_at)
+    rows = (
+        (
+            await db.execute(
+                select(Activity)
+                .where(Activity.route_id == route.id, Activity.user_id == user.id)
+                .order_by(ordering.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return RouteActivitiesResponse(
+        predicted_time_s=predicted_time_s,
+        activities=[
+            RouteActivity(
+                id=a.id,
+                name=a.name,
+                started_at=a.started_at,
+                elapsed_time_s=a.elapsed_time_s,
+                moving_time_s=a.moving_time_s,
+                distance_m=a.distance_m,
+                ascent_m=a.ascent_m,
+                match_confidence=a.match_confidence,
+            )
+            for a in rows
+        ],
+    )
 
 
 @router.patch("/{route_id}")

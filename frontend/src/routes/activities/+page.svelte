@@ -3,7 +3,7 @@
 	import { Latest } from '$lib/latest';
 	import CoverageCard from '$lib/components/CoverageCard.svelte';
 	import ImportResults from '$lib/components/ImportResults.svelte';
-	import { distance, elevation } from '$lib/format';
+	import { distance, duration, elevation } from '$lib/format';
 	import { units } from '$lib/units.svelte';
 	import {
 		ACCEPTED_FILES,
@@ -143,13 +143,6 @@
 		});
 		return item.started_at ? label : `imported ${label}`;
 	}
-
-	function duration(seconds: number | null): string {
-		if (seconds === null) return '-';
-		const hours = Math.floor(seconds / 3600);
-		const minutes = Math.round((seconds % 3600) / 60);
-		return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-	}
 </script>
 
 <svelte:head><title>Activities - Moovelo</title></svelte:head>
@@ -262,10 +255,12 @@
 				{#each items as item (item.id)}
 					<tr>
 						<td data-label="Date">{rideDate(item)}</td>
-						<td data-label="Name">{item.name}</td>
+						<td data-label="Name"
+							><a class="ride-name" href={`/activities/${item.id}`}>{item.name}</a></td
+						>
 						<td data-label="Route">
-							{#if item.route_name}
-								<span class="route-name">{item.route_name}</span>
+							{#if item.route_name && item.route_id}
+								<a class="route-name" href={`/library/${item.route_id}`}>{item.route_name}</a>
 							{:else}
 								<span class="route-none">-</span>
 							{/if}
@@ -377,8 +372,20 @@
 	.actions {
 		text-align: right;
 	}
+	.ride-name {
+		font-weight: 600;
+		color: var(--link);
+		text-decoration: none;
+	}
+	.ride-name:hover {
+		text-decoration: underline;
+	}
 	.route-name {
 		color: var(--text);
+		text-decoration: none;
+	}
+	.route-name:hover {
+		text-decoration: underline;
 	}
 	.route-none {
 		color: var(--text-muted);

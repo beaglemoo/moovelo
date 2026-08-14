@@ -145,6 +145,15 @@ with turn-by-turn cues.
   always correct or clear a match by hand
   (`PUT /api/activities/{id}/route`), which locks it so a later automatic
   pass never overwrites your choice.
+- Planned vs actual: a ride detail page (`/activities/{id}`) and a route
+  detail page (`/library/{id}`), linked from both list pages. The ride page
+  shows the recorded trace and its matched route with actual moving time,
+  distance and ascent set against the route's planned figures - the
+  predicted ride time is the same rider-settings-aware model the planner
+  and library already use, not a separate estimate - plus a picker to set
+  or clear the match by hand. The route page lists every ride matched to
+  it, each with the same comparison, so a saved route can answer "how does
+  this usually go" from real rides rather than only Valhalla's estimate.
 
 ## Route intelligence
 

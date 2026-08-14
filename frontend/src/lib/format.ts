@@ -78,3 +78,17 @@ export function speed(kmh: number, units: UnitSystem): string {
 	const value = units === 'imperial' ? kmh / KM_PER_MILE : kmh;
 	return `${Math.round(value)} ${units === 'imperial' ? 'mph' : 'km/h'}`;
 }
+
+/**
+ * A duration in seconds, as "1h 23m" or "45m". Unit-agnostic - metric and
+ * imperial riders read the same clock - so this takes no `units` argument,
+ * unlike every other function here. Null (a ride or route with nothing to
+ * time) renders as "-" rather than "0m", which would read as a real,
+ * suspiciously fast ride.
+ */
+export function duration(seconds: number | null): string {
+	if (seconds === null) return '-';
+	const hours = Math.floor(seconds / 3600);
+	const minutes = Math.round((seconds % 3600) / 60);
+	return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+}
