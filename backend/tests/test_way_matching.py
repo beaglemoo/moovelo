@@ -608,3 +608,57 @@ async def test_a_hanging_rollback_cannot_delay_the_unclaim(
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+async def test_cancellation_mid_unclaim_still_unclaims(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round 4's finding: a cancellation (worker shutdown) landing during
+    the un-claim's own awaits skipped its `except Exception`, stranded the
+    ride with no log line, and replaced the original error with a bare
+    CancelledError. The un-claim is now shielded: cancelling the caller
+    mid-un-claim must still leave the ride un-claimed once the shielded
+    task completes, while the CancelledError still reaches the caller."""
+    import asyncio
+
+    monkeypatch.setattr("app.services.way_matching.session_factory", db_factory)
+    user = await _user(db)
+    activity = await _activity(db, user)
+    act_id = activity.id
+
+    async def exploding_match_ways(self: ValhallaClient, shape: object) -> dict[int, float]:
+        raise RuntimeError("bug in matching")
+
+    entered_unclaim_commit = asyncio.Event()
+    release_unclaim_commit = asyncio.Event()
+    real_commit = AsyncSession.commit
+
+    async def pausing_commit(self: AsyncSession) -> None:
+        # Only the recovery session pauses - the caller's own commits (the
+        # claim) must land normally so there is a durable claim to reset.
+        if self is not db:
+            entered_unclaim_commit.set()
+            await release_unclaim_commit.wait()
+        await real_commit(self)
+
+    monkeypatch.setattr(ValhallaClient, "match_ways", exploding_match_ways)
+    monkeypatch.setattr(AsyncSession, "commit", pausing_commit)
+
+    task = asyncio.ensure_future(match_activity(db, ValhallaClient(base_url=BASE), activity))
+    await asyncio.wait_for(entered_unclaim_commit.wait(), timeout=5)
+    task.cancel()  # shutdown lands exactly during the un-claim's commit
+    release_unclaim_commit.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # The shielded un-claim keeps running after the caller is gone - give
+    # it a moment to finish rather than racing it.
+    for _ in range(100):
+        async with db_factory() as fresh:
+            row = (await fresh.execute(select(Activity).where(Activity.id == act_id))).scalar_one()
+            if row.ways_matched_at is None:
+                break
+        await asyncio.sleep(0.02)
+    assert row.ways_matched_at is None  # un-claimed despite the cancellation
