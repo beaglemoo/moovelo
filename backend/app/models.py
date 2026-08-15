@@ -238,6 +238,19 @@ class Activity(Base):
     # Set true the moment a rider picks or clears the matched route by hand,
     # so a later auto-match run never overwrites a human decision.
     match_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # True when this ride's link survived a change to the route's geometry -
+    # which only happens to a LOCKED match, because an unlocked one is
+    # re-derived by _rematch_linked_activities. The rider's choice of route
+    # stands (it is theirs), but anything DERIVED from comparing the ride to
+    # the route no longer describes the same road: ride-time calibration
+    # solved the new elevation against the old ride's moving time and
+    # suggested 60 km/h for a real 26 km/h rider, and one Apply writes that
+    # into the setting every ETA in the app reads.
+    #
+    # Cleared by the same UPDATE that writes any fresh match (_store_match),
+    # so it cannot drift: there is no path that establishes a match without
+    # clearing it, and only the re-route path sets it.
+    match_stale: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     __table_args__ = (
         # The library's own query: one user's rides, newest first.

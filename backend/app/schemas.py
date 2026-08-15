@@ -454,6 +454,7 @@ class ActivitySummary(BaseModel):
     # True once a rider has picked or cleared the match by hand - the
     # auto-matcher will not touch it again.
     match_locked: bool = False
+    match_stale: bool = False
 
 
 class ActivityDetail(ActivitySummary):

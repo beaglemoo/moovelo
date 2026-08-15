@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from geoalchemy2 import WKTElement
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DbDep, UserDep, reload_or_404
@@ -462,6 +462,19 @@ async def _rematch_linked_activities(route_id: uuid.UUID, db: AsyncSession) -> N
     A failure here cannot fail the save: match_activity_to_route never raises,
     by contract.
     """
+    # The locked rides are the ones this pass cannot re-derive - the rider
+    # chose that route and the choice stands. Their link is now against
+    # geometry that no longer exists, though, so anything DERIVED from
+    # comparing ride to route is not to be trusted: calibration solving the
+    # new elevation against the old moving time suggested 60 km/h for a real
+    # 26 km/h rider. Flagged rather than broken, so the rider keeps their
+    # link and the derived readings decline to use it.
+    await db.execute(
+        update(Activity)
+        .where(Activity.route_id == route_id, Activity.match_locked.is_(True))
+        .values(match_stale=True)
+    )
+    await db.commit()
     linked = (
         (
             await db.execute(

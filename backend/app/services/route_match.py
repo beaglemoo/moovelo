@@ -316,6 +316,11 @@ async def _store_match(
     guess. Silent, permanent, and the exact inversion of what the flag is
     for.
 
+    Clears `match_stale` in the same statement, deliberately. A fresh match
+    is by definition against the route's current geometry, so there is no
+    path that can establish one and leave the flag set - which is what keeps
+    the flag from drifting the way a separately-maintained one would.
+
     Returns whether the row was actually written, so a caller cannot report
     a match it did not get to make.
     """
@@ -324,7 +329,7 @@ async def _store_match(
         await db.execute(
             update(Activity)
             .where(Activity.id == activity_id, Activity.match_locked.is_(False))
-            .values(route_id=route_id, match_confidence=confidence)
+            .values(route_id=route_id, match_confidence=confidence, match_stale=False)
         ),
     )
     await db.commit()
