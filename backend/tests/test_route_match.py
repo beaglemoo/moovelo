@@ -36,6 +36,7 @@ from httpx import AsyncClient
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import app.api.activities as activities_module
 import app.services.route_match as match_route_module
 import app.services.route_match as route_match
 from app.models import Activity, Route, User
@@ -1577,3 +1578,110 @@ async def test_import_404s_when_the_ride_is_deleted_before_the_match_runs(
 
     listed = await client.get("/api/activities")
     assert listed.json() == [], "fixture is wrong: the ride should really be gone"
+
+
+async def test_detail_404s_when_the_row_vanishes_after_the_liveness_check(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The last read is the authority, not the first.
+
+    reload_or_404 establishes that the row exists, and then _detail issues
+    another SELECT for the geometry. A liveness fact does not survive past
+    the statement that established it, so a delete landing in that gap used
+    to render a 201/200 carrying real stats beside an empty shape - the
+    same inconsistent body the reload was added to prevent, one round trip
+    later. Activity.geom is NOT NULL, so an empty geometry read can only
+    mean the row is gone.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add(activity)
+    await db.commit()
+    activity_id = activity.id
+
+    real_reload = activities_module.reload_or_404
+    raced = False
+
+    async def deleting_reload(db_: AsyncSession, instance: object, detail: str) -> object:
+        result = await real_reload(db_, instance, detail)
+        nonlocal raced
+        if not raced:
+            raced = True
+            await _delete_activity_elsewhere(db_factory, activity_id)
+        return result
+
+    monkeypatch.setattr("app.api.activities.reload_or_404", deleting_reload)
+    response = await client.post(f"/api/activities/{activity_id}/rematch")
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+
+async def test_rematch_recovers_a_ride_orphaned_by_deleting_its_matched_route(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """A manual pick whose route is later deleted must not freeze the ride.
+
+    The FK nulls route_id and leaves match_locked set, which is right on its
+    own terms - but it made the ride permanently invisible to every
+    auto-match pass, including the endpoint whose entire job is to re-run
+    one, and the frontend shows it identically to a ride that was never
+    matched. The rider never said "no route"; the route they picked was
+    deleted.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    picked = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([picked, activity])
+    await db.commit()
+    activity_id, picked_id = activity.id, picked.id
+
+    linked = await client.put(
+        f"/api/activities/{activity_id}/route", json={"route_id": str(picked_id)}
+    )
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["match_locked"] is True
+
+    assert (await client.delete(f"/api/routes/{picked_id}")).status_code == 204
+
+    orphaned = await client.get(f"/api/activities/{activity_id}")
+    assert orphaned.json()["route_id"] is None
+    assert orphaned.json()["match_locked"] is True, "fixture: the lock should survive the delete"
+
+    # A replacement route on the same roads, exactly what a rider re-planning
+    # would produce.
+    replacement = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add(replacement)
+    await db.commit()
+
+    response = await client.post(f"/api/activities/{activity_id}/rematch")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["route_id"] == str(replacement.id)
+
+
+async def test_rematch_does_not_discard_a_live_manual_pick(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The other half, and the reason the unlock is conditional. While a
+    rider's chosen route is still attached, Rematch must leave it alone -
+    only the orphaned state re-derives."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    chosen = _route(user_id, _north_leg(offset_east_m=5000.0), RUN_LENGTH_M)
+    better = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([chosen, better, activity])
+    await db.commit()
+
+    await client.put(f"/api/activities/{activity.id}/route", json={"route_id": str(chosen.id)})
+    response = await client.post(f"/api/activities/{activity.id}/rematch")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["route_id"] == str(chosen.id), "the rider's pick was discarded"
+    assert response.json()["match_locked"] is True

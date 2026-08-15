@@ -454,11 +454,33 @@ async def set_activity_route(
 async def rematch_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> ActivityDetail:
     """Re-run auto-matching for one ride.
 
-    A no-op if the rider has already picked or cleared the match by hand -
-    see match_activity_to_route's own match_locked check, which this relies
-    on rather than duplicating.
+    A no-op while a rider's own pick is in place: `match_locked` with a
+    route still attached means they chose that route, and asking for a
+    rematch is not a reason to discard it.
+
+    It is NOT a no-op when the flag is set but no route is attached, and
+    that case is why this endpoint touches the flag at all. A route can be
+    deleted out from under a manual pick: the FK nulls `route_id`, and the
+    lock stays, which is correct in itself - but it leaves the ride
+    permanently invisible to every future auto-match pass, including this
+    endpoint, with the frontend rendering it exactly like a ride that was
+    simply never matched. The rider never said "no route for this ride";
+    the route they picked vanished. Pressing Rematch is them asking, in as
+    many words, for the guess to be made again.
+
+    (`route_id IS NULL` with the flag set also covers a deliberate clear.
+    Re-deriving there is the same answer: the rider pressed the button.)
+
+    The two states are indistinguishable in the schema - one flag, two
+    causes - which is the same shape as the bug round 8 fixed in a return
+    value. Telling them apart properly would need a column and a migration;
+    keying on "is there a pick to protect" needs neither and removes the
+    stuck state, so that is what this does.
     """
     activity = await _owned(activity_id, db, user.id)
+    if activity.match_locked and activity.route_id is None:
+        activity.match_locked = False
+        await db.commit()
     await match_activity_to_route(activity.id, clear_if_unmatched=True)
     activity = await reload_or_404(db, activity, "Activity not found")
     return await _detail(activity, db)
@@ -559,6 +581,22 @@ async def _detail(activity: Activity, db: DbDep) -> ActivityDetail:
     same path as everything else on the map.
     """
     wkt = await db.scalar(select(ST_AsText(Activity.geom)).where(Activity.id == activity.id))
+    if wkt is None:
+        # Activity.geom is NOT NULL (migration 0013), so the only way this
+        # SELECT comes back empty is that the row is gone - deleted by a
+        # concurrent request between here and whatever established that it
+        # existed.
+        #
+        # It has to be checked HERE, not only by the caller. Callers now
+        # reload_or_404 before calling this, and that is still not enough:
+        # a liveness fact does not survive past the statement that
+        # established it, and this is another await. Encoding a missing
+        # geometry as an empty polyline shipped a 201/200 carrying real
+        # stats beside an empty shape - a body describing a row that is not
+        # there, which is the same symptom the reload was added to stop,
+        # moved one round trip later. The last read wins, so the last read
+        # is where the check belongs.
+        raise HTTPException(status_code=404, detail="Activity not found")
     route_name = None
     if activity.route_id is not None:
         # Owner-filtered too - see list_activities' own comment.
