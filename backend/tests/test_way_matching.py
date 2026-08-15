@@ -370,14 +370,28 @@ async def test_an_unexpected_failure_unclaims_so_a_backfill_can_retry(
     outcome is known. Valhalla failing to place a track is not this case
     (match_ways degrades that to None and the attempt is deliberately
     recorded); an UNEXPECTED exception is - and it must un-claim, or the
-    ride reads as attempted forever and no backfill will ever retry it."""
+    ride reads as attempted forever and no backfill will ever retry it.
+
+    The mid-flight assertion inside the probe is what makes this test
+    non-vacuous: the OLD code also left ways_matched_at NULL after an
+    exception, but for the opposite reason - the claim was simply never
+    committed. Asserting from a second session that the claim IS already
+    durable when the failure fires discriminates 'durable claim, then
+    explicitly un-claimed' from 'no claim ever existed', so a wholesale
+    revert of the mechanism fails here instead of passing by accident."""
+    user = await _user(db)
+    activity = await _activity(db, user)
+    act_id = activity.id
 
     async def exploding_match_ways(self: ValhallaClient, shape: object) -> dict[int, float]:
+        async with db_factory() as other:
+            claimed_at = await other.scalar(
+                select(Activity.ways_matched_at).where(Activity.id == act_id)
+            )
+            assert claimed_at is not None, "claim not durable at the moment of failure"
         raise RuntimeError("bug in matching")
 
     monkeypatch.setattr(ValhallaClient, "match_ways", exploding_match_ways)
-    user = await _user(db)
-    activity = await _activity(db, user)
 
     with pytest.raises(RuntimeError, match="bug in matching"):
         await match_activity(db, ValhallaClient(base_url=BASE), activity)
@@ -391,6 +405,46 @@ async def test_an_unexpected_failure_unclaims_so_a_backfill_can_retry(
             .all()
         )
         assert credited == []
+
+
+async def test_a_lost_commit_ack_after_a_durable_claim_still_unclaims(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The claim-durability commit can raise AFTER the server applied it -
+    the connection dies as the COMMIT ack comes back. Review of this fix
+    caught the try block starting one statement too late, so exactly that
+    failure stranded the ride claimed-forever with no un-claim ever
+    attempted: `ways_matched_at` set, zero coverage, invisible to every
+    future backfill. The handler must cover the claim commit itself; the
+    timestamp predicate makes the un-claim inert when the claim never
+    landed and a reset when it did."""
+    user = await _user(db)
+    activity = await _activity(db, user)
+    act_id = activity.id
+
+    real_commit = AsyncSession.commit
+    fault_fired: list[bool] = []
+
+    async def ack_lost_commit(self: AsyncSession) -> None:
+        # Real commit first - the claim genuinely lands server-side - then
+        # the ack is "lost". Only the first commit fails, so the un-claim's
+        # own commit inside the recovery handler works.
+        await real_commit(self)
+        if not fault_fired:
+            fault_fired.append(True)
+            raise ConnectionResetError("connection reset as the COMMIT ack arrived")
+
+    monkeypatch.setattr(AsyncSession, "commit", ack_lost_commit)
+
+    with pytest.raises(ConnectionResetError):
+        await match_activity(db, ValhallaClient(base_url=BASE), activity)
+
+    assert fault_fired == [True]  # the injected failure actually happened
+    async with db_factory() as fresh:
+        row = (await fresh.execute(select(Activity).where(Activity.id == act_id))).scalar_one()
+        assert row.ways_matched_at is None  # un-claimed despite the durable claim
 
 
 @respx.mock
