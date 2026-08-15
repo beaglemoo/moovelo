@@ -14,6 +14,8 @@
 
 	let user: UserInfo | null = $state(null);
 	let dropping = $state(false);
+	let mobileMenuOpen = $state(false);
+	let mobileMenuToggle: HTMLButtonElement | undefined = $state(undefined);
 	// True while a log-out is tearing the session down. The confirm() has been
 	// answered by then but auth.logout() is still in flight, so without this an
 	// impatient re-click (likelier on a slow connection) re-enters logout() and
@@ -29,6 +31,11 @@
 		units.load();
 		theme.load();
 		panelSize.load();
+		// Capture outside clicks before MapLibre (or any page control) sees
+		// them. The first tap dismisses the menu; it must not also add a
+		// waypoint or activate the control underneath the overlay.
+		window.addEventListener('click', handleWindowClick, true);
+		return () => window.removeEventListener('click', handleWindowClick, true);
 	});
 
 	function themeLabel(mode: 'system' | 'light' | 'dark'): string {
@@ -36,6 +43,38 @@
 		if (mode === 'dark') return 'Dark';
 		return 'Auto';
 	}
+
+	function closeMobileMenu() {
+		mobileMenuOpen = false;
+	}
+
+	function closeMobileMenuAndRestoreFocus() {
+		mobileMenuOpen = false;
+		mobileMenuToggle?.focus();
+	}
+
+	function handleWindowClick(event: MouseEvent) {
+		if (!mobileMenuOpen) return;
+		const target = event.target;
+		if (target instanceof Element && target.closest('.mobile-menu, .mobile-menu-toggle')) return;
+		event.preventDefault();
+		event.stopPropagation();
+		closeMobileMenu();
+	}
+
+	function handleWindowKeydown(event: KeyboardEvent) {
+		if (event.key === 'Escape' && mobileMenuOpen) {
+			event.preventDefault();
+			closeMobileMenuAndRestoreFocus();
+		}
+	}
+
+	// SvelteKit reuses this layout between pages. A menu opened on one page
+	// must not remain over the next page after a client-side navigation.
+	$effect(() => {
+		void page.url.pathname;
+		mobileMenuOpen = false;
+	});
 
 	// Files get dragged at the window, not at a particular drop target, so the
 	// whole app accepts them once you are logged in.
@@ -169,43 +208,93 @@
 	ondragleave={onDragLeave}
 	ondrop={onDrop}
 	onbeforeunload={warnOnUnsaved}
+	onkeydown={handleWindowKeydown}
 />
 
 <div class="shell">
 	{#if user}
 		<nav>
 			<span class="brand">Moovelo</span>
-			<a href="/" class:active={page.url.pathname === '/'}>Planner</a>
-			<a href="/library" class:active={page.url.pathname === '/library'}>Library</a>
-			<a href="/activities" class:active={page.url.pathname === '/activities'}>Activities</a>
-			<a href="/settings" class:active={page.url.pathname === '/settings'}>Settings</a>
-			{#if user.is_admin}
-				<a href="/admin" class:active={page.url.pathname === '/admin'}>Admin</a>
+			<div class="desktop-nav">
+				<a href="/" class:active={page.url.pathname === '/'}>Planner</a>
+				<a href="/library" class:active={page.url.pathname === '/library'}>Library</a>
+				<a href="/activities" class:active={page.url.pathname === '/activities'}>Activities</a>
+				<a href="/settings" class:active={page.url.pathname === '/settings'}>Settings</a>
+				{#if user.is_admin}
+					<a href="/admin" class:active={page.url.pathname === '/admin'}>Admin</a>
+				{/if}
+				<span class="spacer"></span>
+				<button
+					type="button"
+					class="theme-toggle"
+					onclick={() => theme.cycle()}
+					title="Cycle theme: auto, light, dark"
+					aria-label="Theme: {themeLabel(theme.mode)}"
+				>
+					{themeLabel(theme.mode)}
+				</button>
+				<button
+					type="button"
+					class="units-toggle"
+					onclick={() => units.toggle()}
+					title="Switch between metric and imperial units"
+					aria-label="Units: {units.system === 'imperial' ? 'imperial' : 'metric'}"
+				>
+					{units.system === 'imperial' ? 'mi' : 'km'}
+				</button>
+				<span class="email">{user.email}</span>
+				<button type="button" onclick={logout} disabled={loggingOut}>Log out</button>
+			</div>
+			<button
+				type="button"
+				class="mobile-menu-toggle"
+				aria-expanded={mobileMenuOpen}
+				aria-controls="mobile-navigation"
+				bind:this={mobileMenuToggle}
+				onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
+			>
+				Menu
+			</button>
+			{#if mobileMenuOpen}
+				<div class="mobile-menu" id="mobile-navigation">
+					<div class="mobile-menu-account">{user.email}</div>
+					<a href="/" class:active={page.url.pathname === '/'} onclick={closeMobileMenu}>Planner</a>
+					<a
+						href="/library"
+						class:active={page.url.pathname === '/library'}
+						onclick={closeMobileMenu}>Library</a
+					>
+					<a
+						href="/activities"
+						class:active={page.url.pathname === '/activities'}
+						onclick={closeMobileMenu}>Activities</a
+					>
+					<a
+						href="/settings"
+						class:active={page.url.pathname === '/settings'}
+						onclick={closeMobileMenu}>Settings</a
+					>
+					{#if user.is_admin}
+						<a href="/admin" class:active={page.url.pathname === '/admin'} onclick={closeMobileMenu}
+							>Admin</a
+						>
+					{/if}
+					<div class="mobile-menu-preferences">
+						<button type="button" onclick={() => theme.cycle()}>
+							Theme: {themeLabel(theme.mode)}
+						</button>
+						<button type="button" onclick={() => units.toggle()}>
+							Units: {units.system === 'imperial' ? 'mi' : 'km'}
+						</button>
+					</div>
+					<button type="button" class="mobile-menu-logout" onclick={logout} disabled={loggingOut}
+						>Log out</button
+					>
+				</div>
 			{/if}
-			<span class="spacer"></span>
-			<button
-				type="button"
-				class="theme-toggle"
-				onclick={() => theme.cycle()}
-				title="Cycle theme: auto, light, dark"
-				aria-label="Theme: {themeLabel(theme.mode)}"
-			>
-				{themeLabel(theme.mode)}
-			</button>
-			<button
-				type="button"
-				class="units-toggle"
-				onclick={() => units.toggle()}
-				title="Switch between metric and imperial units"
-				aria-label="Units: {units.system === 'imperial' ? 'imperial' : 'metric'}"
-			>
-				{units.system === 'imperial' ? 'mi' : 'km'}
-			</button>
-			<span class="email">{user.email}</span>
-			<button type="button" onclick={logout} disabled={loggingOut}>Log out</button>
 		</nav>
 	{/if}
-	<main>
+	<main class:planner={page.url.pathname === '/'}>
 		{@render children()}
 	</main>
 	{#if dropping}
@@ -326,6 +415,9 @@
 	:global(html, body) {
 		margin: 0;
 		height: 100%;
+		width: 100%;
+		overflow: hidden;
+		overscroll-behavior: none;
 		background: var(--bg);
 		color: var(--text);
 	}
@@ -345,12 +437,15 @@
 		flex-direction: column;
 		height: 100vh;
 		height: 100dvh;
+		overflow: hidden;
 		font-family:
 			system-ui,
 			-apple-system,
 			sans-serif;
 	}
 	nav {
+		position: relative;
+		z-index: 30;
 		display: flex;
 		align-items: center;
 		gap: 1rem;
@@ -359,6 +454,18 @@
 		background: var(--nav-bg);
 		color: var(--nav-text);
 		flex-shrink: 0;
+		box-sizing: border-box;
+	}
+	.desktop-nav {
+		display: flex;
+		align-items: center;
+		gap: 1rem;
+		min-width: 0;
+		flex: 1;
+	}
+	.mobile-menu-toggle,
+	.mobile-menu {
+		display: none;
 	}
 	.brand {
 		font-weight: 700;
@@ -396,6 +503,12 @@
 	main {
 		flex: 1;
 		min-height: 0;
+		overflow: auto;
+		overscroll-behavior: contain;
+	}
+	main.planner {
+		overflow: hidden;
+		overscroll-behavior: none;
 	}
 	.dropzone {
 		position: fixed;
@@ -415,12 +528,86 @@
 		border-radius: 10px;
 		padding: 2rem 3rem;
 	}
-	@media (max-width: 560px) {
-		.email {
+	/* The authenticated row can include five destinations, two preferences,
+	   an email and Log out. It only fits honestly on a wide viewport; switching
+	   before tablet width prevents a merely-long email from being clipped. */
+	@media (max-width: 900px) {
+		.desktop-nav {
 			display: none;
 		}
 		nav {
-			gap: 0.7rem;
+			padding: 0 0.75rem;
+		}
+		.brand {
+			margin-right: 0;
+		}
+		.mobile-menu-toggle {
+			display: block;
+			margin-left: auto;
+			min-height: 34px;
+			min-width: 64px;
+			background: var(--accent-fill);
+			border-color: var(--accent);
+			font-weight: 650;
+		}
+		.mobile-menu {
+			position: absolute;
+			top: 100%;
+			left: 0.5rem;
+			right: 0.5rem;
+			display: flex;
+			flex-direction: column;
+			gap: 0.2rem;
+			padding: 0.55rem;
+			border: 1px solid var(--border-strong);
+			border-top: none;
+			border-radius: 0 0 10px 10px;
+			background: var(--nav-bg);
+			box-shadow: 0 8px 22px var(--shadow);
+			box-sizing: border-box;
+			max-height: calc(100vh - 42px - 0.5rem);
+			max-height: calc(100dvh - 42px - 0.5rem);
+			overflow-y: auto;
+			overscroll-behavior: contain;
+		}
+		.mobile-menu-account {
+			padding: 0.35rem 0.55rem 0.5rem;
+			color: var(--nav-text-muted);
+			font-size: 0.8rem;
+			overflow-wrap: anywhere;
+		}
+		.mobile-menu a,
+		.mobile-menu > button,
+		.mobile-menu-preferences button {
+			display: flex;
+			align-items: center;
+			min-height: 44px;
+			box-sizing: border-box;
+			padding: 0.55rem 0.7rem;
+			border-radius: 7px;
+			font-size: 0.95rem;
+			text-align: left;
+		}
+		.mobile-menu a.active {
+			background: rgba(255, 255, 255, 0.1);
+			color: var(--nav-text-active);
+		}
+		.mobile-menu-preferences {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 0.45rem;
+			padding-top: 0.35rem;
+			border-top: 1px solid var(--border-strong);
+		}
+		.mobile-menu-preferences button {
+			width: 100%;
+			justify-content: center;
+		}
+		.mobile-menu .mobile-menu-logout {
+			justify-content: center;
+			margin-top: 0.25rem;
+			border-color: var(--danger-text);
+			color: #fff;
 		}
 	}
 </style>

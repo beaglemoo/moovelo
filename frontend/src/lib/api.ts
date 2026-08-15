@@ -934,7 +934,7 @@ export async function planRoute(
 	excludeLocations: Waypoint[] | null = null,
 	signal?: AbortSignal
 ): Promise<RouteResponse> {
-	const response = await fetch('/api/route', {
+	return request<RouteResponse>('/api/route', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
@@ -945,17 +945,6 @@ export async function planRoute(
 		}),
 		signal
 	});
-	if (!response.ok) {
-		let detail = `Routing failed (${response.status})`;
-		try {
-			const body = await response.json();
-			if (typeof body.detail === 'string') detail = body.detail;
-		} catch {
-			// keep the generic message
-		}
-		throw new Error(detail);
-	}
-	return response.json();
 }
 
 /** One reachability ring - mirrors backend/app/schemas.py's
