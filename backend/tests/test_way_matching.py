@@ -662,3 +662,110 @@ async def test_cancellation_mid_unclaim_still_unclaims(
                 break
         await asyncio.sleep(0.02)
     assert row.ways_matched_at is None  # un-claimed despite the cancellation
+
+
+async def test_stop_awaits_an_in_flight_unclaim_before_returning(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round 5's finding: the shielded un-claim was an orphan task nobody
+    awaited, and uvicorn's real shutdown (asyncio.run's Runner.close
+    cancels every still-pending task) killed it mid-commit with no log -
+    whether the ride stranded was a race on whether the COMMIT bytes had
+    reached Postgres. An orderly shutdown must wait for in-flight
+    un-claims: stop() may only return after the paused un-claim has
+    landed."""
+    import asyncio
+
+    from app.services import way_matching
+
+    monkeypatch.setattr("app.services.way_matching.session_factory", db_factory)
+    user = await _user(db)
+    activity = await _activity(db, user)
+    act_id = activity.id
+
+    async def exploding_match_ways(self: ValhallaClient, shape: object) -> dict[int, float]:
+        raise RuntimeError("bug in matching")
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    real_commit = AsyncSession.commit
+
+    async def pausing_commit(self: AsyncSession) -> None:
+        if self is not db:
+            entered.set()
+            await release.wait()
+        await real_commit(self)
+
+    monkeypatch.setattr(ValhallaClient, "match_ways", exploding_match_ways)
+    monkeypatch.setattr(AsyncSession, "commit", pausing_commit)
+
+    task = asyncio.ensure_future(match_activity(db, ValhallaClient(base_url=BASE), activity))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(way_matching._pending_unclaims) == 1  # noqa: SLF001 - tracked, not orphaned
+
+    async def release_soon() -> None:
+        await asyncio.sleep(0.1)
+        release.set()
+
+    releaser = asyncio.ensure_future(release_soon())
+    await WayMatchQueue().stop()  # must block until the un-claim lands
+    await releaser
+
+    # No polling: if stop() really waited, the row is already un-claimed.
+    async with db_factory() as fresh:
+        row = (await fresh.execute(select(Activity).where(Activity.id == act_id))).scalar_one()
+        assert row.ways_matched_at is None
+    assert way_matching._pending_unclaims == set()  # noqa: SLF001
+
+
+async def test_a_forcibly_killed_unclaim_is_never_silent(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If the runner kills the un-claim anyway (the bounded shutdown wait
+    expired, or a crashy teardown), the abort must leave a log line naming
+    the ride - round 5 measured the old shape stranding with zero trace."""
+    import asyncio
+
+    from app.services import way_matching
+
+    monkeypatch.setattr("app.services.way_matching.session_factory", db_factory)
+    user = await _user(db)
+    activity = await _activity(db, user)
+
+    async def exploding_match_ways(self: ValhallaClient, shape: object) -> dict[int, float]:
+        raise RuntimeError("bug in matching")
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    real_commit = AsyncSession.commit
+
+    async def pausing_commit(self: AsyncSession) -> None:
+        if self is not db:
+            entered.set()
+            await release.wait()
+        await real_commit(self)
+
+    monkeypatch.setattr(ValhallaClient, "match_ways", exploding_match_ways)
+    monkeypatch.setattr(AsyncSession, "commit", pausing_commit)
+
+    task = asyncio.ensure_future(match_activity(db, ValhallaClient(base_url=BASE), activity))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    (unclaim_task,) = way_matching._pending_unclaims  # noqa: SLF001
+    with caplog.at_level("WARNING", logger="app.services.way_matching"):
+        unclaim_task.cancel()  # the runner's direct second cancellation
+        with pytest.raises(asyncio.CancelledError):
+            await unclaim_task
+    assert any("killed before its commit landed" in r.message for r in caplog.records)
+    assert way_matching._pending_unclaims == set()  # noqa: SLF001
