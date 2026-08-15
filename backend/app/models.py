@@ -238,6 +238,19 @@ class Activity(Base):
     # Set true the moment a rider picks or clears the matched route by hand,
     # so a later auto-match run never overwrites a human decision.
     match_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # True when this ride's link survived a change to the route's geometry -
+    # which only happens to a LOCKED match, because an unlocked one is
+    # re-derived by _rematch_linked_activities. The rider's choice of route
+    # stands (it is theirs), but anything DERIVED from comparing the ride to
+    # the route no longer describes the same road: ride-time calibration
+    # solved the new elevation against the old ride's moving time and
+    # suggested 60 km/h for a real 26 km/h rider, and one Apply writes that
+    # into the setting every ETA in the app reads.
+    #
+    # Cleared by the same UPDATE that writes any fresh match (_store_match),
+    # so it cannot drift: there is no path that establishes a match without
+    # clearing it, and only the re-route path sets it.
+    match_stale: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     __table_args__ = (
         # The library's own query: one user's rides, newest first.
@@ -304,6 +317,55 @@ event.listen(
     Activity.__table__,
     "after_create",
     DDL(_CLEAR_MATCH_CONFIDENCE_TRIGGER).execute_if(dialect="postgresql"),  # type: ignore[no-untyped-call]
+)
+
+
+# A rider's manual pick records a decision ABOUT A PARTICULAR ROUTE, so it
+# cannot outlive that route. Deleting the route nulls `route_id` through the
+# FK and used to leave `match_locked` set, which froze the ride: invisible to
+# every auto-match pass, indistinguishable in the API and the UI from a ride
+# that was simply never matched, and recoverable only by remembering which
+# route was deleted and picking a replacement by hand.
+#
+# It has to be a DELETE trigger on `routes`, and that is the whole point.
+# `route_id IS NULL AND match_locked` has two causes - "the rider cleared it"
+# and "the route was deleted" - which is why an earlier attempt to fix this
+# inside the rematch endpoint could not tell them apart and undid deliberate
+# clears. The UPDATE trigger above cannot either; it fires for both. Only the
+# deletion itself knows which case it is, so the answer belongs where the
+# deletion happens - and then no extra column is needed to distinguish states
+# a trigger never has to guess between.
+#
+# Scoped to `route_id = OLD.id`: a ride the rider cleared by hand has no
+# route_id at all, so it can never match here and its "stop guessing" is left
+# exactly as docs/architecture.md promises.
+_UNLOCK_ORPHANED_MATCH_FN = """
+CREATE FUNCTION routes_unlock_orphaned_matches() RETURNS trigger AS $$
+BEGIN
+    UPDATE activities
+       SET match_locked = false
+     WHERE route_id = OLD.id
+       AND match_locked;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql
+"""
+
+_UNLOCK_ORPHANED_MATCH_TRIGGER = """
+CREATE TRIGGER routes_unlock_orphaned_matches
+BEFORE DELETE ON routes
+FOR EACH ROW EXECUTE FUNCTION routes_unlock_orphaned_matches()
+"""
+
+event.listen(
+    Activity.__table__,
+    "after_create",
+    DDL(_UNLOCK_ORPHANED_MATCH_FN).execute_if(dialect="postgresql"),  # type: ignore[no-untyped-call]
+)
+event.listen(
+    Activity.__table__,
+    "after_create",
+    DDL(_UNLOCK_ORPHANED_MATCH_TRIGGER).execute_if(dialect="postgresql"),  # type: ignore[no-untyped-call]
 )
 
 

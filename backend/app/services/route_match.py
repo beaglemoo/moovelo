@@ -77,10 +77,15 @@ whole bug family is retired rather than patched.
 
 import logging
 import uuid
+from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import text
+from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+if TYPE_CHECKING:
+    from sqlalchemy import CursorResult
+
+from app.db import session_factory
 from app.models import Activity
 
 logger = logging.getLogger(__name__)
@@ -126,6 +131,31 @@ SIMPLIFY_TOLERANCE_LADDER_M = [20.0, 40.0, 80.0, 160.0, 320.0, 640.0, 1280.0]
 # is comfortably under anything that measured as a problem and comfortably
 # above what a real ride needs to keep its shape after simplification.
 MAX_SIMPLIFIED_VERTICES = 1000
+
+# Fixed-precision grid for the coverage overlay, in EPSG:3857 units (1mm).
+#
+# Not a tuning knob - a correctness guard. GEOS's default floating-point
+# overlay returns LINESTRING EMPTY for ST_Intersection(ST_Buffer(line, tol),
+# line) when the line is EXACTLY axis-aligned, even though ST_Within(line,
+# buffer) is true for the same pair. Measured: a due-north line scores
+# covered_len 0 of 1620.09; the same line at a bearing of 1 degree scores
+# full coverage. It is magnitude-independent (LINESTRING(0 0, 0 900, 0 1620)
+# does it too), so it is a degeneracy, not a precision limit.
+#
+# That would be an exotic edge case if the input were the rider's raw GPS,
+# and it is not: ST_Simplify MANUFACTURES it. A realistic near-north road of
+# ten points wobbling 1-3m - far inside GPS/OSM noise, far under the ladder's
+# 20m first rung - collapses to an exact two-point line at identical
+# projected X, and nudging an interior point by 1m re-collapses to the same
+# two endpoints. Canal towpaths, disused railways and Roman roads are the
+# real population, and each one would silently never match any ride of it.
+#
+# Passing a gridSize routes the overlay through OverlayNG's fixed-precision
+# path, which is robust here. Measured across a bearing sweep it is identical
+# to the default everywhere the default works, and correct at 0 and 90 where
+# the default returns zero. 1mm is far below any distance this module can
+# resolve - the buffer it feeds is 40m - so it cannot affect a real verdict.
+_OVERLAY_GRID_SIZE_M = 0.001
 
 # `act` narrows to the one activity being matched and its owning user, so
 # every candidate route already belongs to that same user - there is no
@@ -209,7 +239,9 @@ _MATCH_SQL = text("""
           AND r.geom && act.geom
           AND r.distance_m BETWEEN
               act.distance_m * :match_ratio_min AND act.distance_m * :match_ratio_max
-        ORDER BY ST_Distance(ST_Centroid(r.geom), ST_Centroid(act.geom)),
+        ORDER BY ST_Distance(
+                     ST_Centroid(r.geom)::geography, ST_Centroid(act.geom)::geography
+                 ),
                  abs(r.distance_m - act.distance_m)
         LIMIT :max_candidates
     ),
@@ -238,12 +270,16 @@ _MATCH_SQL = text("""
         SELECT id, route_distance_m, activity_distance_m,
                ST_Length(
                    ST_Intersection(
-                       ST_Buffer(route_geom_s, :buffer_m / lat_cos), act_geom_s
+                       ST_Buffer(route_geom_s, :buffer_m / lat_cos),
+                       act_geom_s,
+                       :grid_size
                    )
                ) / NULLIF(ST_Length(act_geom_s), 0) AS ride_covered,
                ST_Length(
                    ST_Intersection(
-                       ST_Buffer(act_geom_s, :buffer_m / lat_cos), route_geom_s
+                       ST_Buffer(act_geom_s, :buffer_m / lat_cos),
+                       route_geom_s,
+                       :grid_size
                    )
                ) / NULLIF(ST_Length(route_geom_s), 0) AS route_covered
         FROM scored
@@ -259,8 +295,60 @@ _MATCH_SQL = text("""
 """)
 
 
-async def match_activity_to_route(db: AsyncSession, activity_id: uuid.UUID) -> uuid.UUID | None:
+async def _store_match(
+    db: AsyncSession,
+    activity_id: uuid.UUID,
+    route_id: uuid.UUID | None,
+    confidence: float | None,
+) -> bool:
+    """Write a match result, but only while the rider has not locked it.
+
+    `match_locked = false` lives in the UPDATE's own WHERE clause rather
+    than in a Python check, and that placement is the whole point. Reading
+    the flag and then writing leaves a window, and the window here is wide:
+    between the two sits the bidirectional-coverage query, which simplifies
+    and buffers up to MAX_CANDIDATES routes. A rider picking a route by hand
+    in that window used to lose it - and lose it invisibly, because
+    SQLAlchemy's unit of work only emits the columns it saw change, so the
+    manual write's `match_locked = true` survived while its `route_id` was
+    overwritten. That leaves a row no code can tell from a genuine manual
+    pick: locked against all future passes, pointing at the auto-matcher's
+    guess. Silent, permanent, and the exact inversion of what the flag is
+    for.
+
+    Clears `match_stale` in the same statement, deliberately. A fresh match
+    is by definition against the route's current geometry, so there is no
+    path that can establish one and leave the flag set - which is what keeps
+    the flag from drifting the way a separately-maintained one would.
+
+    Returns whether the row was actually written, so a caller cannot report
+    a match it did not get to make.
+    """
+    result = cast(
+        "CursorResult[Any]",
+        await db.execute(
+            update(Activity)
+            .where(Activity.id == activity_id, Activity.match_locked.is_(False))
+            .values(route_id=route_id, match_confidence=confidence, match_stale=False)
+        ),
+    )
+    await db.commit()
+    return bool(result.rowcount)
+
+
+async def match_activity_to_route(
+    activity_id: uuid.UUID, *, clear_if_unmatched: bool = False
+) -> uuid.UUID | None:
     """Find the best-matching route for one activity and persist the result.
+
+    `clear_if_unmatched` says whether "no candidate qualified" should clear an
+    existing link. It defaults to False, which is right for the passive pass
+    that runs on import: a route the rider has not touched is still evidence,
+    and a threshold that happens not to be beaten this time is not grounds to
+    throw a match away. It must be True whenever the caller knows the evidence
+    the link rested on is gone - the route was re-routed beneath it, or a rider
+    explicitly asked for a rematch - because there the stale link is the
+    harmful outcome, not the cautious one.
 
     A no-op - returns None without touching anything - when the activity
     does not exist, or when `match_locked` is true: that flag means a rider
@@ -278,38 +366,54 @@ async def match_activity_to_route(db: AsyncSession, activity_id: uuid.UUID) -> u
     is stored as a 0-1 score (the lower of the two coverage fractions), not
     a distance - higher is better.
 
-    Never raises. Every caller's contract is "a matching failure must never
-    fail the import", and that guarantee has to live here rather than at
-    each call site - and it took two attempts to actually deliver it,
-    reproduced directly against real Postgres both times:
+    Never raises, and - the part that took four review rounds to get right -
+    never disturbs the caller's session either. It opens its OWN session
+    rather than borrowing one.
 
-    A failed statement leaves the whole session's Postgres transaction
-    *aborted*, so catching the exception at the call site and carrying on
-    is not enough by itself - the very next query on the same session
-    (typically the caller re-reading the activity for its response) fails
-    too, with "current transaction is aborted, commands ignored until end
-    of transaction block", turning a missing enrichment into a 500 for the
-    whole request.
+    That is a mechanism, not a patch, and it exists because three consecutive
+    rounds found a new bug in the previous round's fix, all of them the same
+    shape: this function has to write and commit, the caller is mid-request
+    holding loaded ORM objects, and every way of failing inside a *shared*
+    session damages those objects.
 
-    The first fix - catch here and call `db.rollback()` - clears the abort,
-    but a plain rollback also *expires every object already loaded in the
-    session*, matching real transactional semantics (their state may no
-    longer be valid). The caller's own `activity` object - fetched before
-    this function was ever called - is one of them, so its very next
-    attribute access anywhere in the caller triggers an implicit lazy
-    reload, and `AsyncSession` refuses to do that reload outside an
-    explicit `await` ("MissingGreenlet: ... Was IO attempted in an
-    unexpected place?"). Swapping the plain rollback for a `SAVEPOINT`
-    (`db.begin_nested()`) is what actually fixes both problems at once: a
-    failure inside it only undoes work done inside it, so the caller's
-    already-loaded objects are never touched. This is the same mechanism
-    Sprint 1's C8/G3 fix used for the identical shape of bug (see
-    CLAUDE.md) - a plain rollback trashing a caller's transaction is not a
-    new failure mode in this codebase, it is a recurring one.
+      - A failed statement aborts the whole Postgres transaction, so the
+        caller's next query dies with "current transaction is aborted".
+      - Catching it and calling `db.rollback()` clears the abort but expires
+        every object in the session, so the caller's next attribute access
+        becomes an implicit lazy load, which AsyncSession refuses outside a
+        greenlet ("MissingGreenlet"). The ride is already durably committed
+        by then, so a rider got a 500 for an import that genuinely worked.
+      - A SAVEPOINT (`db.begin_nested()`) fixed the query path but not the
+        COMMIT path, which cannot be inside a savepoint.
+      - Rolling back and re-loading the activity to repopulate the caller's
+        identity-mapped instance fixed that - unless the re-load ITSELF
+        failed, which is exactly what a dropped connection does to the very
+        next statement after a failed commit. Then the caller was left
+        holding an expired object with no working reload: MissingGreenlet
+        again, one branch deeper.
+
+    Each fix was a case; the family was the borrowing. Every caller already
+    commits its own work BEFORE calling this (import_activity, the archive
+    worker, the rematch endpoint, and _rematch_linked_activities all do), so
+    there was never a transaction here worth sharing - only one worth not
+    breaking. With a private session the caller's objects are untouchable by
+    construction: a failure of any kind in here rolls back a session nobody
+    else can see, and the caller's request carries on with the enrichment
+    simply not applied. That is the stated policy - the ride is the valuable
+    thing, its route link is an enrichment.
+
+    The cost of the mechanism, and the one thing callers must know: the
+    caller's own `activity` object does NOT see the write, because it was
+    made on another connection. A caller that goes on to render the new link
+    has to re-read it (`db.refresh`), which import_activity does.
     """
     route_id: uuid.UUID | None = None
     try:
-        async with db.begin_nested():
+        # Module-scope `session_factory` on purpose: conftest monkeypatches
+        # this attribute to point at the per-test throwaway database, the same
+        # convention services/wahoo_queue.py and services/activity_import.py
+        # already use for their own out-of-request sessions.
+        async with session_factory() as db:
             activity = await db.get(Activity, activity_id)
             if activity is None or activity.match_locked:
                 return None
@@ -326,22 +430,32 @@ async def match_activity_to_route(db: AsyncSession, activity_id: uuid.UUID) -> u
                         "buffer_m": COVERAGE_BUFFER_M,
                         "tolerances": SIMPLIFY_TOLERANCE_LADDER_M,
                         "max_vertices": MAX_SIMPLIFIED_VERTICES,
+                        "grid_size": _OVERLAY_GRID_SIZE_M,
                     },
                 )
             ).first()
             if row is None or row.confidence is None:
+                # See clear_if_unmatched in the docstring: passively this
+                # means "leave the existing link alone"; when the caller
+                # knows the evidence is gone it means the opposite, because
+                # a stale link is read as a real match by planned-vs-actual
+                # and silently feeds a nonsensical implied speed into
+                # ride-time calibration.
+                if clear_if_unmatched and activity.route_id is not None:
+                    await _store_match(db, activity_id, None, None)
                 return None
 
+            if not await _store_match(db, activity_id, row.id, float(row.confidence)):
+                # A rider locked this activity while the coverage query was
+                # running. Their pick stands and we did not write, so there is
+                # no match of ours to report.
+                return None
             route_id = row.id
-            activity.route_id = route_id
-            activity.match_confidence = float(row.confidence)
     except Exception:  # noqa: BLE001 - see the "Never raises" docstring note above
         logger.warning("route match failed for activity %s", activity_id, exc_info=True)
+        # No rollback needed and none possible to get wrong: leaving the
+        # `async with` closes this private session, which rolls back anything
+        # uncommitted. There is no other session to damage.
         return None
 
-    # Releasing the SAVEPOINT above only merges the change into the still-
-    # open outer transaction; nothing is durable until this commits it -
-    # get_db (app/db.py) has no auto-commit, so a caller that never commits
-    # loses the match on rollback-at-close the way any other write would.
-    await db.commit()
     return route_id

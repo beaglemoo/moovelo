@@ -96,11 +96,13 @@ def _grid_cell_lon_deg(lat: float) -> float:
 # LATERAL join rather than a subquery per climb, so this is one query
 # however many climbs a rider has, not one per activity.
 #
-# `frac` clamps each fraction into [0, 1] (LEAST/GREATEST) and guards a
-# zero-length activity turning the division into an error (NULLIF) rather
-# than merely producing a NULL fraction - `climb_log` below drops any row
-# whose recovered point comes back NULL, so a zero-length or otherwise
-# unusable activity is skipped rather than raising.
+# `frac` clamps each fraction into [0, 1] (LEAST/GREATEST), and the NULLIF
+# keeps a zero distance from raising a division error. It does NOT skip such
+# an activity, though this comment used to claim it did: Postgres's GREATEST
+# and LEAST ignore null arguments instead of propagating them, so a null
+# fraction becomes a real 0 and the row survives as a phantom climb pinned to
+# the line's first vertex. The `a.distance_m > 0` predicate in the WHERE is
+# what actually skips it - see the note there.
 #
 # `a.user_id = :user_id` is the one line that matters most here: getting it
 # wrong is invisible with a single test account and would silently draw
@@ -128,6 +130,16 @@ _CLIMB_ROWS_SQL = text("""
             ), 1) AS start_frac
     ) AS frac
     WHERE a.user_id = :user_id
+      -- Explicit, because the NULLIF above does NOT skip these on its own.
+      -- Postgres's GREATEST and LEAST IGNORE null arguments rather than
+      -- propagating them, so `0.0 / NULLIF(0, 0)` is null but
+      -- `GREATEST(null, 0)` is 0 - the fraction resolves to a real 0,
+      -- ST_LineInterpolatePoint returns the line's first vertex, and the row
+      -- survives as a phantom climb at an arbitrary point instead of being
+      -- dropped. Measured: a distance_m = 0 activity with a non-empty
+      -- `climbs` array produced a full entry in the rider's climb log.
+      -- `> 0` also excludes null, since `null > 0` is null.
+      AND a.distance_m > 0
     ORDER BY a.started_at NULLS LAST, a.created_at
     LIMIT :max_rows
 """)
@@ -283,9 +295,11 @@ async def climb_log(db: AsyncSession, user_id: uuid.UUID) -> list[ClimbLogEntry]
     rows = (
         await db.execute(_CLIMB_ROWS_SQL, {"user_id": user_id, "max_rows": MAX_CLIMB_ROWS})
     ).all()
-    # A row's recovered point is NULL when the activity's own distance_m was
-    # zero or missing (NULLIF above), which ST_LineInterpolatePoint cannot
-    # place anywhere - skipped rather than clustered against nothing.
+    # Belt and braces. Unusable activities are excluded by the query's own
+    # `a.distance_m > 0` predicate, so this should find nothing to drop; it
+    # stays because a NULL point is meaningless to cluster against and the
+    # cost of checking is a comparison. It is NOT the load-bearing guard the
+    # comment here once said it was - see the SQL.
     usable = [row for row in rows if row.start_lat is not None and row.start_lon is not None]
     # Off the event loop. The grid keeps the common case near-linear, but it
     # only bounds comparisons against *distinct* clusters sharing a cell:

@@ -1,3 +1,4 @@
+import logging
 import mimetypes
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -7,6 +8,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.exc import StaleDataError
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, Response
 
@@ -77,7 +80,91 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await app.state.valhalla.close()
 
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Moovelo", lifespan=lifespan)
+
+
+# Postgres SQLSTATEs, via asyncpg. 23503 is a foreign-key violation - a row
+# this request points AT has gone. 23505 is a unique violation, which is a
+# different thing entirely: somebody else got there first.
+_FK_VIOLATION = "23503"
+_UNIQUE_VIOLATION = "23505"
+
+
+@app.exception_handler(StaleDataError)
+@app.exception_handler(IntegrityError)
+async def _row_deleted_during_request(request: Request, exc: Exception) -> Response:
+    """A row deleted while this request was mutating it is a 404, not a 500.
+
+    Two exceptions, because a concurrent delete arrives as either depending
+    on WHICH row went. StaleDataError is the endpoint's own row vanishing -
+    the UPDATE matches nothing. IntegrityError is a row it POINTS AT
+    vanishing: set_activity_route checks the target route exists, then
+    writes activities.route_id, and a delete in between makes the write a
+    foreign-key violation. Structurally different, identical to the user,
+    and the first version of this handler caught only the first while its
+    own docstring claimed set_activity_route was covered. It was not.
+
+    Registered once, for the whole app, on purpose. Every handler that loads
+    a row, changes an attribute and commits has this race - two tabs, a
+    rename against a delete - and SQLAlchemy's unit of work raises
+    StaleDataError from inside `commit()` when its UPDATE matches no rows.
+    Unhandled, that is a 500 for an ordinary pair of user actions.
+    Reproduced on update_route, revoke_share, set_activity_route and
+    update_preset; the same shape exists at 29 commit sites across nine
+    modules and predates the phase that found it.
+
+    Not every IntegrityError is a vanished row, and the first version of
+    this handler assumed otherwise - so a duplicate-email registration
+    losing a race answered "404 Not found", when the very same endpoint
+    answers 409 for the identical condition on the branch where it wins.
+    The reasoning at the time was that the only constraint that mattered
+    was 0013's duplicate ride, which the import path handles; no other
+    unique constraint in the app had been looked at.
+
+    So the exception type is not the discriminator - the SQLSTATE is.
+    23503, a foreign-key violation, is the racing-delete case this exists
+    for. 23505, a unique violation, is its opposite and gets a 409. Anything
+    else is a genuine bug and is re-raised, staying exactly as loud as it
+    was before any of this.
+
+    This is deliberately a policy rather than a patch. Fixing it endpoint by
+    endpoint was tried and does not converge - each fix narrows a window and
+    the next review finds the residue, three rounds running - because "check
+    just before the write" can never be late enough. Answering the question
+    once, where every write already funnels through, is the only version of
+    this that stays fixed as endpoints are added.
+
+    404 rather than 409: the caller asked to change something that no longer
+    exists, and their own next read would say the same. A 409 would suggest
+    retrying, and retrying will not bring the row back.
+    """
+    # Deliberately does not claim WHICH row went. The first version said
+    # "row deleted during request: GET /api/routes", which named the routes
+    # collection when the row that actually vanished was the caller's own
+    # session - a log line that sent a reader to the wrong table.
+    if isinstance(exc, IntegrityError):
+        # Catching IntegrityError wholesale was too broad, and it turned a
+        # raced duplicate-email registration into "404 Not found" - nonsense
+        # to somebody creating an account, and worse than the 409 the same
+        # endpoint gives when it WINS that race instead of losing it. Only a
+        # foreign-key violation means "the row I point at vanished"; a unique
+        # violation means the opposite, that something already exists.
+        sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+        if sqlstate == _UNIQUE_VIOLATION:
+            logger.info("unique violation: %s %s", request.method, request.url.path)
+            return JSONResponse(status_code=409, content={"detail": "Already exists"})
+        if sqlstate != _FK_VIOLATION:
+            # Not a race at all - a NOT NULL or CHECK violation is a bug, and
+            # it should stay as loud as it was before this handler existed.
+            raise exc
+    logger.info(
+        "a row this request was writing was deleted concurrently: %s %s",
+        request.method,
+        request.url.path,
+    )
+    return JSONResponse(status_code=404, content={"detail": "Not found"})
 
 
 @app.middleware("http")

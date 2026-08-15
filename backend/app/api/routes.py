@@ -1,3 +1,4 @@
+import logging
 import re
 import secrets
 import uuid
@@ -5,10 +6,10 @@ from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from geoalchemy2 import WKTElement
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import DbDep, UserDep
+from app.api.deps import DbDep, UserDep, reload_or_404
 from app.api.settings import get_or_default_settings
 from app.models import Activity, Route
 from app.schemas import (
@@ -42,12 +43,20 @@ from app.services.importer import MAX_FILE_BYTES, RouteImportError
 from app.services.llm_config import resolve_llm_config
 from app.services.polyline import decode_polyline6
 from app.services.ride_time import compute_ride_time
+from app.services.route_match import match_activity_to_route
 from app.services.route_summary import generate_summary, route_geometry_signature
 from app.services.valhalla import ValhallaClient, ascent_descent
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/routes")
 
 UPLOAD_CHUNK_BYTES = 64 * 1024
+
+# Bounds _rematch_linked_activities. At 9-28ms per re-match on real
+# multi-thousand-point traces, 200 is a few seconds in the worst realistic
+# shape and effectively never reached in an ordinary library.
+MAX_REDERIVE = 200
 
 
 def _slug(name: str) -> str:
@@ -320,6 +329,36 @@ async def route_activities(
     ride_time = await _ride_time_for(route, db, user.id)
     predicted_time_s = ride_time[-1].time_s if ride_time else None
 
+    # Re-checked here, not only by get_owned_route above. _ride_time_for
+    # awaits a settings read in between, and a DELETE landing in that window
+    # leaves this answering 200 with an empty `activities` list - which reads
+    # as "no rides have matched this route yet" - beside a predicted_time_s
+    # computed from the deleted route's own elevation. The rides did not
+    # vanish; activities.route_id is ON DELETE SET NULL, so they were
+    # unlinked, and a rider's manually locked match is exactly what gets
+    # silently dropped from the answer.
+    #
+    # Narrows the window; does NOT close it, and the first version of this
+    # comment wrongly claimed otherwise. The widest gap is the settings read
+    # inside _ride_time_for above, and this catches a delete landing there.
+    # A delete landing between this line and the Activity SELECT below still
+    # yields a 200 with an empty list - measured, not assumed.
+    #
+    # Closing it properly is not "check one await later": there is always a
+    # later read, so that is a chase with no end. It needs a single atomic
+    # read, or a decision that this benign case does not need closing. That
+    # is part of the app-wide concurrent-delete class recorded in CLAUDE.md,
+    # which reaches 29 commit sites across nine modules and predates this
+    # phase - not something to keep patching one endpoint at a time.
+    #
+    # Via reload_or_404, not a bare db.get. A plain get is served from the
+    # session's identity map and never reaches the database, so it happily
+    # returns the route this request loaded moments ago and reports a
+    # deleted row as present - written that way first, and the test below
+    # failed with a 200 until it was corrected. populate_existing=True,
+    # which the helper already passes, is what forces the re-read.
+    route = await reload_or_404(db, route, "Route not found")
+
     ordering = func.coalesce(Activity.started_at, Activity.created_at)
     rows = (
         (
@@ -343,6 +382,13 @@ async def route_activities(
                 moving_time_s=a.moving_time_s,
                 distance_m=a.distance_m,
                 ascent_m=a.ascent_m,
+                # Carried, not filtered out. The ride really did happen and
+                # really is linked to this route by the rider's own choice -
+                # hiding it would lose a row they put there. What must not
+                # happen is presenting its comparison as though it still
+                # described this route, so the flag travels with it and the
+                # page says so.
+                match_stale=a.match_stale,
                 match_confidence=a.match_confidence,
             )
             for a in rows
@@ -378,8 +424,98 @@ async def update_route(
     if body.snapshot is not None:
         _apply_snapshot(route, body.snapshot)
     await db.commit()
-    await db.refresh(route)
+    if body.snapshot is not None:
+        await _rematch_linked_activities(route.id, db)
+    route = await reload_or_404(db, route, "Route not found")
     return await _saved(route, db, user.id)
+
+
+async def _rematch_linked_activities(route_id: uuid.UUID, db: AsyncSession) -> None:
+    """Re-derive the matches of every ride linked to a route whose shape just
+    changed.
+
+    A saved route is re-routed in place - same row, same id - whenever the
+    rider tweaks a waypoint and saves, so any ride matched to it was matched
+    against geometry that no longer exists. Nothing else re-derives it: the
+    import-time pass only runs when a ride arrives, and its deliberate "no
+    candidate qualified means leave the existing link alone" policy is exactly
+    wrong here, because here the previous match IS known to be stale. Hence
+    clear_if_unmatched.
+
+    Left stale the damage is quiet and compounding: planned-vs-actual shows the
+    old confidence beside a predicted time computed from the NEW geometry - a
+    confident-looking comparison against a road the ride never touched - and
+    ride-time calibration joins on the same link and solves the new elevation
+    against the old ride's moving time, corrupting the rider's suggested flat
+    speed indefinitely with no visible error.
+
+    Rides the rider matched by hand are untouched: match_activity_to_route
+    honours match_locked, which is the whole point of that flag.
+
+    Inline, after the commit that changed the route, and capped. Measured
+    against 14,000-point traces (route_match.py's "ordinary four-hour ride at
+    1Hz"), each re-match costs 9-28ms, so a regular commute carrying a
+    multi-year imported history can turn one save into seconds of work held
+    open on the request. MAX_REDERIVE keeps the common case exact and bounds
+    the tail: anything past it keeps its existing link and is logged, and a
+    rider can correct one by hand from the ride page. A stale link on the far
+    tail of an exceptionally well-ridden route is worse-but-visible, and both
+    are better than the silent corruption this function exists to stop.
+
+    Oldest-first so the cap always falls on the same rides rather than an
+    arbitrary set - an unordered LIMIT is exactly how route_match.py's own
+    candidate query managed to drop the true match.
+
+    A failure here cannot fail the save: match_activity_to_route never raises,
+    by contract.
+    """
+    # The locked rides are the ones this pass cannot re-derive - the rider
+    # chose that route and the choice stands. Their link is now against
+    # geometry that no longer exists, though, so anything DERIVED from
+    # comparing ride to route is not to be trusted: calibration solving the
+    # new elevation against the old moving time suggested 60 km/h for a real
+    # 26 km/h rider. Flagged rather than broken, so the rider keeps their
+    # link and the derived readings decline to use it.
+    # Every ride linked to this route, not only the locked ones. A locked
+    # ride is skipped by the re-derive below by design; an UNLOCKED ride past
+    # the MAX_REDERIVE cap is skipped by accident, and both end up carrying a
+    # match made against geometry that is gone. Flagging the whole set first
+    # and letting each successful re-derive clear its own row (via
+    # _store_match) means the cap can move, or a re-derive can fail, without
+    # anything being left silently wrong - the flag is cleared by success
+    # rather than set by a guess about which rows will be reached.
+    await db.execute(update(Activity).where(Activity.route_id == route_id).values(match_stale=True))
+    await db.commit()
+    linked = (
+        (
+            await db.execute(
+                select(Activity.id)
+                .where(Activity.route_id == route_id)
+                .order_by(Activity.created_at)
+                .limit(MAX_REDERIVE + 1)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(linked) > MAX_REDERIVE:
+        logger.warning(
+            "route %s has more than %d linked rides; re-deriving the oldest %d and "
+            "leaving the rest to an explicit rematch",
+            route_id,
+            MAX_REDERIVE,
+            MAX_REDERIVE,
+        )
+        linked = linked[:MAX_REDERIVE]
+    for activity_id in linked:
+        # No commit of our own afterwards. match_activity_to_route commits each
+        # change durably itself, so a trailing one here did no useful work -
+        # but it was a bare, unguarded commit sitting directly under a
+        # docstring promising that a failure here cannot fail the save. That
+        # promise covers match_activity_to_route, which never raises; it never
+        # covered this line. A transient fault on it would have 500'd a PATCH
+        # whose route snapshot and every re-derived match were already durable.
+        await match_activity_to_route(activity_id, clear_if_unmatched=True)
 
 
 def _suffixed(name: str, suffix: str) -> str:
@@ -573,7 +709,7 @@ async def share_route(route_id: uuid.UUID, db: DbDep, user: UserDep) -> SavedRou
         route.summary = await generate_summary(route, config)
         route.summary_signature = current_signature if route.summary else None
     await db.commit()
-    await db.refresh(route)
+    route = await reload_or_404(db, route, "Route not found")
     return await _saved(route, db, user.id)
 
 
@@ -582,7 +718,7 @@ async def revoke_share(route_id: uuid.UUID, db: DbDep, user: UserDep) -> SavedRo
     route = await get_owned_route(db, user, route_id)
     route.share_token = None
     await db.commit()
-    await db.refresh(route)
+    route = await reload_or_404(db, route, "Route not found")
     return await _saved(route, db, user.id)
 
 

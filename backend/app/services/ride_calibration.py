@@ -133,6 +133,14 @@ async def suggest_flat_speed_kmh(
         await db.execute(
             select(Activity, Route)
             .join(Route, Route.id == Activity.route_id)
+            # A locked match can outlive the geometry it was made against:
+            # re-routing a saved route re-derives its unlocked rides and
+            # deliberately leaves the rider's own picks alone, so the link
+            # stays while the road changes. Solving the NEW elevation against
+            # the OLD ride's moving time is not a smaller error - it offered a
+            # real 26 km/h rider the model's 60 km/h ceiling, one click from
+            # writing that into the setting every ETA in the app reads.
+            .where(Activity.match_stale.is_(False))
             .where(
                 Activity.user_id == user_id,
                 Route.user_id == user_id,

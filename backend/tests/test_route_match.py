@@ -27,15 +27,23 @@ it took to actually deliver "a matching failure must never fail the
 import".
 """
 
+import inspect
+import math
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import delete, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import app.api.activities as activities_module
+import app.api.routes as routes_module
+import app.services.route_match as match_route_module
 import app.services.route_match as route_match
-from app.models import Activity, Route, User
+from app.models import Activity, Route, Session, User
+from app.schemas import RouteResponse
+from app.services.auth import hash_password
 from app.services.geo import Point, destination_point
 from app.services.route_match import (
     COVERAGE_BUFFER_M,
@@ -45,6 +53,7 @@ from app.services.route_match import (
 )
 from tests.conftest import register
 from tests.test_activities_api import GPX_RIDE
+from tests.test_auth_routes import WAYPOINTS
 
 # Same Chilterns point test_coverage.py uses, deliberately: it sits at
 # ~51.8N, close to the UK's centre of population, which is exactly the
@@ -120,6 +129,15 @@ def _north_leg(offset_east_m: float = 0.0) -> list[Point]:
     return [start, end]
 
 
+def _reshaped_snapshot() -> dict[str, object]:
+    """A minimal but genuinely different route snapshot, for re-saving a
+    route so its geometry stops being what a match was made against."""
+    from tests.conftest import make_snapshot
+
+    snapshot = make_snapshot()
+    return snapshot.model_dump(mode="json")
+
+
 # --- match_activity_to_route -----------------------------------------------
 
 
@@ -137,7 +155,7 @@ async def test_a_ride_following_a_route_matches(client: AsyncClient, db: AsyncSe
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched == route.id
     await db.refresh(activity)
@@ -164,7 +182,7 @@ async def test_a_ride_on_a_different_road_does_not_match(
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched is None
     await db.refresh(activity)
@@ -190,7 +208,7 @@ async def test_a_route_ridden_in_reverse_still_matches(
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched == route.id
     await db.refresh(activity)
@@ -221,7 +239,7 @@ async def test_mercator_distortion_is_corrected_to_true_ground_metres(
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched == route.id, (
         "with the cos(latitude) correction removed, a 40m buffer only reaches "
@@ -261,7 +279,7 @@ async def test_a_single_detour_does_not_break_the_match(
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched == route.id
     await db.refresh(activity)
@@ -312,7 +330,7 @@ async def test_a_large_relative_detour_on_a_short_route_does_not_match(
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched is None
     await db.refresh(activity)
@@ -352,6 +370,134 @@ async def test_a_match_query_failure_does_not_break_the_import_response(
     assert len(listed.json()) == 1
 
 
+def _tilted_points() -> list[Point]:
+    """The RUN_BEARING_DEG leg as three points, for building a GPX body.
+
+    Not due north, and the reason is load-bearing rather than cosmetic: a
+    perfectly north-south line has zero width in longitude, and a route
+    seeded on exactly the ride's own due-north points does NOT match - the
+    coverage maths degenerates and returns no candidate. Measured through
+    the real import endpoint while writing the test below, which is why this
+    fixture exists instead of reusing GPX_RIDE.
+    """
+    mid = destination_point((LAT, LON), RUN_BEARING_DEG, RUN_LENGTH_M / 2)
+    end = destination_point((LAT, LON), RUN_BEARING_DEG, RUN_LENGTH_M)
+    return [(LAT, LON), mid, end]
+
+
+def _gpx_of(points: list[Point]) -> bytes:
+    trkpts = "".join(
+        f'<trkpt lat="{lat:.6f}" lon="{lon:.6f}"><ele>100.0</ele>'
+        f"<time>2026-05-03T08:0{i}:00Z</time></trkpt>"
+        for i, (lat, lon) in enumerate(points)
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">'
+        f"<trk><name>Tilted</name><trkseg>{trkpts}</trkseg></trk></gpx>"
+    ).encode()
+
+
+async def test_a_match_commit_failure_does_not_break_the_import_response(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The commit path, which took three further rounds to get right.
+
+    Failing the match's COMMIT is a different fault from failing its query
+    and it broke the import three separate times, each fix uncovering the
+    next case one branch deeper: a bare commit outside the guard; then a
+    guarded commit whose `rollback()` expired the caller's `activity` and
+    turned `_detail`'s next attribute read into a `MissingGreenlet`; then a
+    rollback-plus-reload to repopulate that object, which still stranded the
+    caller whenever the RELOAD itself failed - the ordinary behaviour of a
+    dropped connection, since it is the very next statement after the commit
+    that dropped it.
+
+    So this simulates the double fault: the match's commit fails, AND any
+    recovery read it attempts afterwards fails too. The fix is not another
+    branch but a mechanism - match_activity_to_route owns a private session,
+    so no failure inside it can reach the caller's objects at all.
+
+    Deliberately driven through the real endpoint rather than by calling the
+    service, so it pins the observable contract (the rider gets their ride)
+    rather than an implementation shape, and stays a valid reproduction
+    across the mechanism change.
+
+    Failures are selected by CALL SITE, not by a global call counter: the
+    WayMatchQueue worker commits concurrently on its own session, so a
+    counter races it and misses.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    # A route the imported ride genuinely matches. Without one the match
+    # finds no candidate, writes nothing and never reaches its commit at
+    # all - the first version of this test omitted it and passed against
+    # the very code it was meant to catch.
+    db.add(_route(user_id, _tilted_points(), RUN_LENGTH_M))
+    await db.commit()
+
+    real_commit = AsyncSession.commit
+    real_get = AsyncSession.get
+    commit_failures = 0
+    gets_from_match = 0
+
+    def _called_by_match() -> bool:
+        # Two frames up, not one: this helper is called BY failing_commit /
+        # failing_get, so f_back is the patch and f_back.f_back is the code
+        # that called the patched method.
+        #
+        # Keyed on the FILE, not on match_activity_to_route by name. It was
+        # keyed on the name, and then the TOCTOU fix moved the commit into
+        # _store_match in the same module - at which point the injection
+        # stopped firing and this test would have gone silently vacuous. The
+        # commit_failures assertion below is what caught that; the predicate
+        # is now written so an ordinary refactor within the module cannot
+        # disarm it again.
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        caller = outer.f_back if outer else None
+        return caller is not None and caller.f_code.co_filename.endswith("route_match.py")
+
+    async def failing_commit(self: AsyncSession, *args: object, **kwargs: object) -> None:
+        nonlocal commit_failures
+        if _called_by_match():
+            commit_failures += 1
+            raise RuntimeError("simulated dropped connection on the match commit")
+        await real_commit(self)
+
+    async def failing_get(self: AsyncSession, *args: object, **kwargs: object) -> object:
+        nonlocal gets_from_match
+        if _called_by_match():
+            gets_from_match += 1
+            # The first get is the match's own initial load, which succeeds;
+            # any later one is a recovery attempt, and the connection that
+            # just killed the commit kills that too.
+            if gets_from_match > 1:
+                raise RuntimeError("simulated dead connection on the recovery reload")
+        return await real_get(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncSession, "commit", failing_commit)
+    monkeypatch.setattr(AsyncSession, "get", failing_get)
+
+    response = await client.post(
+        "/api/activities/import",
+        files={"file": ("ride.gpx", _gpx_of(_tilted_points()), "application/gpx+xml")},
+    )
+
+    # Pinned explicitly: if the injection ever stops firing - a rename, a
+    # refactor that moves the commit to a helper - the assertions below would
+    # all still pass while proving nothing at all.
+    assert commit_failures == 1, "the match's commit was never reached; test proves nothing"
+
+    # The ride was durably committed before the match ran, so anything other
+    # than a 201 hands the rider an error for an import that actually worked.
+    assert response.status_code == 201, response.text
+    assert response.json()["route_id"] is None
+
+    listed = await client.get("/api/activities")
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+
+
 async def test_the_best_covering_candidate_wins(client: AsyncClient, db: AsyncSession) -> None:
     """Two candidates that both clear MIN_COVERAGE, with a large gap between
     their scores - a perfect match (confidence ~1.0) and a route covering
@@ -373,7 +519,7 @@ async def test_the_best_covering_candidate_wins(client: AsyncClient, db: AsyncSe
     db.add_all([perfect, partial, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched == perfect.id
     await db.refresh(activity)
@@ -392,7 +538,7 @@ async def test_match_locked_blocks_auto_match(client: AsyncClient, db: AsyncSess
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched is None
     await db.refresh(activity)
@@ -413,7 +559,7 @@ async def test_deleting_a_route_leaves_the_ride_intact_with_a_null_link(
     db.add_all([route, activity])
     await db.commit()
     activity_id = activity.id
-    assert await match_activity_to_route(db, activity_id) == route.id
+    assert await match_activity_to_route(activity_id) == route.id
 
     await db.execute(delete(Route).where(Route.id == route.id))
     await db.commit()
@@ -453,7 +599,7 @@ async def test_a_hand_cleared_link_keeps_its_lock_when_confidence_is_cleared(
     # Held as a plain value: the expire_all() below would otherwise make
     # reading activity.id an implicit lazy load outside async context.
     activity_id = activity.id
-    assert await match_activity_to_route(db, activity_id) == route.id
+    assert await match_activity_to_route(activity_id) == route.id
 
     cleared = await client.put(f"/api/activities/{activity_id}/route", json={"route_id": None})
     assert cleared.status_code == 200, cleared.text
@@ -474,7 +620,7 @@ async def test_a_hand_cleared_link_keeps_its_lock_when_confidence_is_cleared(
     # holds the pre-clear Activity - expire it, or the matcher reads a stale
     # match_locked and the assertion passes or fails for the wrong reason.
     db.expire_all()
-    assert await match_activity_to_route(db, activity_id) is None
+    assert await match_activity_to_route(activity_id) is None
 
 
 async def test_the_true_route_wins_even_when_many_candidates_qualify(
@@ -511,7 +657,7 @@ async def test_the_true_route_wins_even_when_many_candidates_qualify(
     db.add_all([*decoys, true_route, activity])
     await db.commit()
 
-    assert await match_activity_to_route(db, activity.id) == true_route.id
+    assert await match_activity_to_route(activity.id) == true_route.id
 
 
 async def test_a_huge_trace_is_simplified_rather_than_crashing_postgres(
@@ -554,7 +700,7 @@ async def test_a_huge_trace_is_simplified_rather_than_crashing_postgres(
     activity_id = activity.id
 
     # Must not raise, and must not take the connection down with it.
-    result = await match_activity_to_route(db, activity_id)
+    result = await match_activity_to_route(activity_id)
 
     assert result == route.id
     # A fresh query on the same session - proves the backend process
@@ -582,7 +728,7 @@ async def test_auto_match_never_crosses_users(
     db.add_all([route, activity])
     await db.commit()
 
-    matched = await match_activity_to_route(db, activity.id)
+    matched = await match_activity_to_route(activity.id)
 
     assert matched is None
     await db.refresh(activity)
@@ -691,7 +837,7 @@ async def test_list_activities_carries_the_matched_route_name(
     activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
     db.add_all([route, activity])
     await db.commit()
-    assert await match_activity_to_route(db, activity.id) == route.id
+    assert await match_activity_to_route(activity.id) == route.id
 
     response = await client.get("/api/activities")
 
@@ -699,3 +845,1289 @@ async def test_list_activities_carries_the_matched_route_name(
     row = next(item for item in response.json() if item["id"] == str(activity.id))
     assert row["route_id"] == str(route.id)
     assert row["route_name"] == route.name
+
+
+async def test_a_cross_linked_row_never_leaks_the_other_users_route_name(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, db: AsyncSession
+) -> None:
+    """The list and detail reads filter the route's owner as well as the ride's.
+
+    Nothing in the app can produce this row: PUT .../route checks both sides
+    (the test above pins that) and auto-matching only ever considers the
+    rider's own routes. The foreign key permits it though, so it is one bad
+    query or one future endpoint away - and these are read paths, which do
+    not get to depend on every present and future writer staying correct.
+    GET /api/routes/{id}/activities and services/ride_calibration.py already
+    filter both tables for this reason; these two were the pair that did not,
+    and without the filter a stranger's private route name is handed to
+    whoever owns the ride.
+
+    Seeded through the session because the API cannot create it.
+    """
+    monkeypatch.setattr("app.api.auth.settings.signups_enabled", True)
+    await register(client, "stranger@example.com")
+    stranger_id = await _user_id(db, "stranger@example.com")
+    secret = _route(stranger_id, _north_leg(), RUN_LENGTH_M)
+    secret.name = "SECRET-STRANGER-ROUTE"
+    db.add(secret)
+    await db.commit()
+    await client.post("/api/auth/logout")
+
+    await register(client, "owner@example.com")
+    owner_id = await _user_id(db, "owner@example.com")
+    activity = _activity(owner_id, _north_leg(), RUN_LENGTH_M)
+    activity.route_id = secret.id
+    db.add(activity)
+    await db.commit()
+
+    listed = await client.get("/api/activities")
+    assert listed.status_code == 200
+    row = next(item for item in listed.json() if item["id"] == str(activity.id))
+    assert row["route_name"] != "SECRET-STRANGER-ROUTE"
+    assert row["route_name"] is None
+
+    detail = await client.get(f"/api/activities/{activity.id}")
+    assert detail.status_code == 200
+    assert detail.json()["route_name"] != "SECRET-STRANGER-ROUTE"
+    assert detail.json()["route_name"] is None
+
+    # The name was filtered and the raw UUID was not, so both reads handed
+    # back a stranger's route id beside a correctly-nulled name. route_id is
+    # now derived from the same owner-filtered fact as the name, so the two
+    # cannot disagree; match_confidence goes with them, since a confidence
+    # for a route the caller may not see describes nothing they can act on.
+    assert row["route_id"] is None
+    assert row["match_confidence"] is None
+    assert detail.json()["route_id"] is None
+    assert detail.json()["match_confidence"] is None
+
+
+async def test_re_routing_a_saved_route_clears_the_matches_it_invalidated(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """A saved route is re-routed in place, so its matches go stale silently.
+
+    Nothing else re-derives them: the import-time pass only runs when a ride
+    arrives, and its "no candidate qualified means leave the link alone"
+    policy is exactly wrong once the geometry the match was made against no
+    longer exists. Left stale, planned-vs-actual shows the old confidence
+    beside a predicted time computed from the new shape, and ride-time
+    calibration solves that new elevation against this ride's real moving
+    time - corrupting the rider's suggested speed with no visible error.
+    """
+    from app.api.routes import _rematch_linked_activities
+
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id, route_id = activity.id, route.id
+    assert await match_activity_to_route(activity_id) == route_id
+
+    # The rider re-routes the saved route somewhere else entirely and saves;
+    # same row, same id, different road.
+    far = destination_point((LAT, LON), 90.0, 5_000.0)
+    route.geom = _line_wkt([far, destination_point(far, RUN_BEARING_DEG, RUN_LENGTH_M)])
+    await db.commit()
+
+    await _rematch_linked_activities(route_id, db)
+
+    db.expire_all()
+    row = (
+        await db.execute(
+            select(Activity.route_id, Activity.match_confidence).where(Activity.id == activity_id)
+        )
+    ).one()
+    assert row.route_id is None, "a match against geometry that no longer exists must not survive"
+    assert row.match_confidence is None
+
+
+async def test_re_routing_leaves_a_hand_picked_match_alone(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """match_locked is the rider's decision, and re-routing is not a reason to
+    overrule it - the re-derive goes through match_activity_to_route precisely
+    so it inherits that check rather than reimplementing it."""
+    from app.api.routes import _rematch_linked_activities
+
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id, route_id = activity.id, route.id
+
+    linked = await client.put(
+        f"/api/activities/{activity_id}/route", json={"route_id": str(route_id)}
+    )
+    assert linked.status_code == 200
+    assert linked.json()["match_locked"] is True
+
+    far = destination_point((LAT, LON), 90.0, 5_000.0)
+    route.geom = _line_wkt([far, destination_point(far, RUN_BEARING_DEG, RUN_LENGTH_M)])
+    await db.commit()
+    # The PUT above went through the API's own session, so this one still
+    # holds the pre-lock Activity; without expiring it the re-derive reads a
+    # stale match_locked and the assertion below passes or fails for the
+    # wrong reason. In the app both run on the same session, so this is a
+    # test artifact rather than the behaviour under test.
+    db.expire_all()
+
+    await _rematch_linked_activities(route_id, db)
+
+    db.expire_all()
+    stored = await db.scalar(select(Activity.route_id).where(Activity.id == activity_id))
+    assert stored == route_id
+
+
+async def test_saving_a_re_routed_route_triggers_the_re_derive(
+    client: AsyncClient, snapshot: RouteResponse, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PATCH with a new snapshot must actually call the re-derive.
+
+    The two tests above pin what `_rematch_linked_activities` does; this one
+    pins that the endpoint calls it, which is a separate failure - the helper
+    could be perfect and simply never run. It also pins the other half: a
+    PATCH that only renames a route changes no geometry, so nothing needs
+    re-deriving and the matches must be left alone.
+    """
+    import app.api.routes as routes_api
+
+    await register(client, "rider@example.com")
+    saved = await client.post(
+        "/api/routes",
+        json={
+            "name": "Re-routed",
+            "waypoints": WAYPOINTS,
+            "preset": "gravel",
+            "snapshot": snapshot.model_dump(),
+        },
+    )
+    assert saved.status_code == 201, saved.text
+    created = saved.json()
+
+    called: list[uuid.UUID] = []
+
+    async def _spy(route_id: uuid.UUID, db: object) -> None:
+        called.append(route_id)
+
+    monkeypatch.setattr(routes_api, "_rematch_linked_activities", _spy)
+
+    renamed = await client.patch(f"/api/routes/{created['id']}", json={"name": "Just a rename"})
+    assert renamed.status_code == 200
+    assert called == [], "a rename changes no geometry, so nothing is stale"
+
+    resaved = await client.patch(
+        f"/api/routes/{created['id']}", json={"snapshot": snapshot.model_dump()}
+    )
+    assert resaved.status_code == 200
+    assert called == [uuid.UUID(created["id"])]
+
+
+async def test_an_explicit_rematch_clears_a_stale_match_and_it_persists(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The rematch endpoint is the rider saying "this link is wrong".
+
+    Two separate failures hid behind each other here, and this pins both.
+    The endpoint has to ASK for clear_if_unmatched - without it a link to a
+    route that has since been re-routed elsewhere survives an explicit
+    rematch, which is the exact case the flag exists for. And the clear has
+    to be DURABLE: the branch that clears used to return from inside the
+    SAVEPOINT, skipping the function's own commit, so the clear was visible
+    to the calling session and then rolled back at close. The endpoint
+    returned 200 either way, so nothing surfaced.
+
+    The re-read below therefore goes through a fresh connection rather than
+    the ORM object or the same session - a same-session read passes even
+    when nothing was ever written.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id = activity.id
+    assert await match_activity_to_route(activity_id) == route.id
+
+    # The route is re-routed somewhere else entirely, so the stored match no
+    # longer describes anything.
+    far = destination_point((LAT, LON), 90.0, 5_000.0)
+    await db.execute(
+        text("UPDATE routes SET geom = ST_GeomFromEWKT(:wkt) WHERE id = :id"),
+        {
+            "wkt": _line_wkt([far, destination_point(far, RUN_BEARING_DEG, RUN_LENGTH_M)]),
+            "id": route.id,
+        },
+    )
+    await db.commit()
+
+    response = await client.post(f"/api/activities/{activity_id}/rematch")
+    assert response.status_code == 200, response.text
+    assert response.json()["route_id"] is None
+
+    db.expire_all()
+    persisted = await db.scalar(select(Activity.route_id).where(Activity.id == activity_id))
+    assert persisted is None, "the clear must survive the request, not just be visible inside it"
+    confidence = await db.scalar(
+        select(Activity.match_confidence).where(Activity.id == activity_id)
+    )
+    assert confidence is None
+
+
+async def test_a_failing_commit_does_not_escape_the_matcher(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "Never raises" has to include the commit, which is the risky part.
+
+    The attribute assignments do not flush until the commit runs, so that one
+    call is the most exposed to a real operational failure - a dropped
+    connection, a deadlock, a statement timeout - and it briefly sat outside
+    the try/except that makes this function safe to call.
+
+    It matters because _rematch_linked_activities iterates this with no
+    try/except of its own, from a PATCH whose route save has already
+    committed: an escape there 500s a request that actually succeeded and
+    silently abandons every remaining ride's re-derive.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id = activity.id
+
+    original = AsyncSession.commit
+
+    async def _boom(self: AsyncSession) -> None:
+        raise RuntimeError("simulated commit failure")
+
+    monkeypatch.setattr(AsyncSession, "commit", _boom)
+    try:
+        matched = await match_activity_to_route(activity_id)
+    finally:
+        monkeypatch.setattr(AsyncSession, "commit", original)
+
+    assert matched is None, "a failed commit is a failed match, not an exception"
+
+
+async def test_a_failed_match_commit_leaves_the_caller_object_usable(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rollback must not strand the caller holding an expired object.
+
+    A rollback expires every object in the session - true regardless of
+    expire_on_commit, which only governs the success path - including the
+    Activity the caller loaded before calling this and goes on using
+    afterwards. import_activity does exactly that: it matches, then builds its
+    response from the same object. An expired one turns the next attribute
+    read into an implicit lazy load, which AsyncSession refuses outside a
+    greenlet, so the rider gets a 500 for a ride that was already durably
+    committed - the very bug the SAVEPOINT exists to prevent, reintroduced on
+    the commit-failure path when that path learned to roll back.
+
+    The matcher therefore re-loads the activity after rolling back,
+    repopulating the caller's own identity-mapped instance.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+
+    real_commit = AsyncSession.commit
+
+    async def _boom(self: AsyncSession) -> None:
+        raise RuntimeError("simulated commit failure")
+
+    monkeypatch.setattr(AsyncSession, "commit", _boom)
+    try:
+        matched = await match_activity_to_route(activity.id)
+    finally:
+        monkeypatch.setattr(AsyncSession, "commit", real_commit)
+
+    assert matched is None
+
+    # The caller's own reference, used the way import_activity uses it. This
+    # raises MissingGreenlet if the rollback left it expired.
+    assert activity.name == "Test ride"
+    assert activity.user_id == user_id
+
+
+async def test_a_due_north_route_matches_its_own_ride(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """An exactly axis-aligned route must match a ride of it.
+
+    Round 6 found that it did not, and the cause was not a threshold: GEOS's
+    default overlay returns LINESTRING EMPTY for
+    ST_Intersection(ST_Buffer(line, tol), line) when the line is exactly due
+    north or due east, so coverage read 0 and the ride silently never linked.
+    ST_Simplify manufactures exactly that input from an ordinary near-north
+    road, so canal towpaths, disused railways and Roman roads were the real
+    population - see _OVERLAY_GRID_SIZE_M.
+
+    Every other test in this file tilts its geometry by RUN_BEARING_DEG,
+    which is precisely why none of them could see this. This one must stay
+    exactly axis-aligned to keep its meaning.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    due_north = [(LAT, LON), (LAT + 0.009, LON), (LAT + 0.018, LON)]
+    route = _route(user_id, due_north, RUN_LENGTH_M)
+    activity = _activity(user_id, due_north, RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+
+    matched = await match_activity_to_route(activity.id)
+
+    assert matched == route.id
+    await db.refresh(activity)
+    assert activity.match_confidence is not None
+    assert activity.match_confidence == pytest.approx(1.0, rel=0.03)
+
+
+async def test_a_due_east_route_matches_its_own_ride(client: AsyncClient, db: AsyncSession) -> None:
+    """The other axis. The degeneracy is not specific to north - a bearing
+    sweep measured covered_len 0 at both 0 and 90 degrees and full coverage
+    at every bearing between, so fixing only the one this was first noticed
+    on would leave the identical bug one axis over."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    due_east = [(LAT, LON), (LAT, LON + 0.012), (LAT, LON + 0.024)]
+    route = _route(user_id, due_east, RUN_LENGTH_M)
+    activity = _activity(user_id, due_east, RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+
+    matched = await match_activity_to_route(activity.id)
+
+    assert matched == route.id
+
+
+async def test_the_candidate_ranking_is_not_distorted_by_longitude(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Candidate ranking must be in ground metres, not raw degrees.
+
+    A degree of longitude is ~68.8km at 51.8N against ~111.1km for a degree
+    of latitude, so ST_Distance over SRID 4326 makes an east-west offset
+    score ~1.6x larger than the identical real offset north-south. The
+    candidate list is capped at MAX_CANDIDATES, so that distortion does not
+    merely reorder - it decides which routes get scored at all, and a
+    genuine match displaced east can be pushed off the end by decoys that
+    are further away on the ground but nearer in degrees.
+
+    The fixture is built around that asymmetry, and every part of it is
+    load-bearing:
+
+      - The line runs due EAST, so a north shift is pure cross-track (it
+        breaks coverage) and an east shift is pure along-track (it barely
+        touches coverage). On the tilted line the rest of this file uses,
+        no combination of offsets can produce the required ordering at all.
+      - The true route is 30m EAST: 0.000436 degrees, but only 30m of
+        ground, and it still covers 1970/2000 = 0.985.
+      - The decoys are ~44.5m NORTH: 0.000400 degrees - NEARER in degrees
+        than the true route despite being FURTHER on the ground - and past
+        COVERAGE_BUFFER_M, so not one of them can win on merit. They exist
+        only to fill the LIMIT.
+
+    Ranked in degrees all 25 decoys sort ahead of the true route and it
+    never reaches the coverage stage; ranked in metres it sorts first.
+    test_the_true_route_wins_even_when_many_candidates_qualify cannot catch
+    this because it offsets every candidate along a single axis, and one
+    axis scales uniformly.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    # Degrees per metre at this latitude, used to state the fixture in
+    # metres and convert once, rather than hand-writing decimal degrees.
+    deg_per_m_lon = 1.0 / (111320.0 * math.cos(math.radians(LAT)))
+    deg_per_m_lat = 1.0 / 111132.0
+    length_deg = RUN_LENGTH_M * deg_per_m_lon
+
+    def _due_east(shift_east_m: float = 0.0, shift_north_m: float = 0.0) -> list[Point]:
+        lat = LAT + shift_north_m * deg_per_m_lat
+        lon = LON + shift_east_m * deg_per_m_lon
+        return [(lat, lon), (lat, lon + length_deg)]
+
+    activity = _activity(user_id, _due_east(), RUN_LENGTH_M)
+    true_route = _route(user_id, _due_east(shift_east_m=30.0), RUN_LENGTH_M)
+    db.add_all([activity, true_route])
+
+    true_route_deg = 30.0 * deg_per_m_lon
+    for i in range(MAX_CANDIDATES):
+        # Anchored at the activity's own start and fanning north, NOT shifted
+        # bodily north: a due-east line has a zero-height bounding box, so a
+        # bodily-shifted decoy fails `geom && geom` and never becomes a
+        # candidate at all - it cannot crowd a list it is not on. Sharing the
+        # start point keeps the boxes overlapping. The far end is 2*north_m
+        # away, so the centroid sits north_m off and most of the line is well
+        # beyond the buffer.
+        north_m = 44.5 + i * 0.02
+        assert north_m * deg_per_m_lat < true_route_deg, (
+            "decoy must rank ahead of the true route in raw degrees, "
+            "or the fixture does not reproduce the bug"
+        )
+        far = _due_east(shift_north_m=2.0 * north_m)[1]
+        db.add(_route(user_id, [(LAT, LON), far], RUN_LENGTH_M))
+    await db.commit()
+
+    matched = await match_activity_to_route(activity.id)
+
+    assert matched == true_route.id
+
+
+async def test_a_manual_pick_during_a_running_match_is_not_clobbered(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rider locking the activity mid-match must win.
+
+    match_locked used to be read once, immediately after the activity was
+    loaded, and the write then went ahead unconditionally - with the whole
+    bidirectional-coverage query (simplify, buffer and intersect over up to
+    MAX_CANDIDATES routes) sitting in between. A manual PUT .../route
+    landing in that window was lost, and lost invisibly: SQLAlchemy's unit
+    of work only emits columns it saw change, so the rider's
+    match_locked=true survived while their route_id was overwritten by the
+    auto-matcher's guess. The result is a row nothing can tell from a
+    genuine manual pick - locked against every future pass, pointing at the
+    wrong route. The guard now lives in the UPDATE's WHERE clause, so there
+    is no window to lose.
+
+    The race is driven for real, not simulated: a second independent
+    session commits the manual pick from inside the coverage query itself.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+
+    auto_route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    manual_route = _route(user_id, _north_leg(offset_east_m=5000.0), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([auto_route, manual_route, activity])
+    await db.commit()
+    activity_id, manual_id = activity.id, manual_route.id
+
+    real_execute = AsyncSession.execute
+    raced = False
+
+    async def racing_execute(self: AsyncSession, statement: object, *a: object, **k: object):  # type: ignore[no-untyped-def]
+        result = await real_execute(self, statement, *a, **k)  # type: ignore[arg-type]
+        nonlocal raced
+        # Fire once, after the coverage CTE has run but before the write -
+        # exactly the window the old read-once check left open.
+        if not raced and "act_tol" in str(statement):
+            raced = True
+            async with db_factory() as other:
+                await other.execute(
+                    update(Activity)
+                    .where(Activity.id == activity_id)
+                    .values(route_id=manual_id, match_locked=True, match_confidence=None)
+                )
+                await other.commit()
+        return result
+
+    monkeypatch.setattr(AsyncSession, "execute", racing_execute)
+    matched = await match_activity_to_route(activity_id)
+    monkeypatch.undo()
+
+    assert raced, "the manual pick never landed; the race was not reproduced"
+    # Nothing of ours was written, so nothing of ours may be reported.
+    assert matched is None
+
+    async with db_factory() as check:
+        row = (
+            await check.execute(
+                select(Activity.route_id, Activity.match_locked, Activity.match_confidence).where(
+                    Activity.id == activity_id
+                )
+            )
+        ).one()
+    assert row.route_id == manual_id, "the rider's pick was overwritten"
+    assert row.match_locked is True
+    assert row.match_confidence is None
+
+
+async def test_rematch_of_a_concurrently_deleted_activity_404s_rather_than_500s(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleting the ride while its rematch runs must not 500.
+
+    rematch_activity does slow work (the whole coverage query) and then
+    refreshes the activity to build its response. A DELETE landing in that
+    gap made the refresh raise ObjectDeletedError, which surfaced as a 500.
+    404 is the honest answer - the work happened, the resource is gone.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id = activity.id
+
+    real = match_route_module.match_activity_to_route
+    deleted = False
+
+    async def deleting_match(*a: object, **k: object) -> uuid.UUID | None:
+        nonlocal deleted
+        result = await real(*a, **k)  # type: ignore[arg-type]
+        async with db_factory() as other:
+            await other.execute(delete(Activity).where(Activity.id == activity_id))
+            await other.commit()
+        deleted = True
+        return result
+
+    monkeypatch.setattr("app.api.activities.match_activity_to_route", deleting_match)
+    response = await client.post(f"/api/activities/{activity_id}/rematch")
+
+    assert deleted, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+
+async def _delete_activity_elsewhere(
+    db_factory: async_sessionmaker[AsyncSession], activity_id: uuid.UUID
+) -> None:
+    """Delete a row from an independent session, as a concurrent request would."""
+    async with db_factory() as other:
+        await other.execute(delete(Activity).where(Activity.id == activity_id))
+        await other.commit()
+
+
+async def test_import_survives_a_delete_landing_in_the_post_match_window(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The post-match re-read must not 500 a durably-committed import.
+
+    This is the round-5 fix's own follow-up refresh, and it reintroduced
+    the family that fix existed to close. Two faults compounded: the
+    refresh raised on a deleted row, and the `except` block that caught it
+    then read `activity.id` off the now-EXPIRED instance, raising
+    MissingGreenlet straight out of the handler. A guard that touches the
+    thing it is guarding is not a guard, so the id is captured in a local
+    and the re-read sits outside the try.
+
+    404, not 500: the ride genuinely is gone by the time the response is
+    built, and that is a real answer rather than a crash.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    db.add(_route(user_id, _tilted_points(), RUN_LENGTH_M))
+    await db.commit()
+
+    real = match_route_module.match_activity_to_route
+    raced = False
+
+    async def deleting_match(activity_id: uuid.UUID, **k: object) -> uuid.UUID | None:
+        nonlocal raced
+        result = await real(activity_id, **k)  # type: ignore[arg-type]
+        await _delete_activity_elsewhere(db_factory, activity_id)
+        raced = True
+        return result
+
+    monkeypatch.setattr("app.api.activities.match_activity_to_route", deleting_match)
+    response = await client.post(
+        "/api/activities/import",
+        files={"file": ("ride.gpx", _gpx_of(_tilted_points()), "application/gpx+xml")},
+    )
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+    assert "500" not in str(response.status_code)
+
+
+async def test_manual_route_link_survives_a_concurrent_delete(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PUT .../route commits and then renders the row; a delete in that gap
+    must 404 rather than 500."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id, route_id = activity.id, route.id
+
+    real_commit = AsyncSession.commit
+    raced = False
+
+    async def deleting_commit(self: AsyncSession, *a: object, **k: object) -> None:
+        await real_commit(self)
+        nonlocal raced
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        if not raced and outer is not None and outer.f_code.co_name == "set_activity_route":
+            raced = True
+            await _delete_activity_elsewhere(db_factory, activity_id)
+
+    monkeypatch.setattr(AsyncSession, "commit", deleting_commit)
+    response = await client.put(
+        f"/api/activities/{activity_id}/route", json={"route_id": str(route_id)}
+    )
+    monkeypatch.undo()
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+
+async def test_sharing_a_route_deleted_mid_request_404s(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """share_route's window is the widest in the app.
+
+    It commits and then renders the route, and its summary branch runs an
+    LLM call behind a 30s timeout on essentially every first share - so a
+    rider deleting the same route from another tab has a long window to
+    land in. It kept a bare db.refresh after the two Phase 11 sites were
+    given refresh_or_404, which is the same bug one call site over: naming
+    call sites is not a mechanism.
+
+    Included even though the helper is shared with the endpoints tested
+    above, because "the helper is proven elsewhere" is precisely the
+    reasoning that left this one behind.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add(route)
+    await db.commit()
+    route_id = route.id
+
+    real_commit = AsyncSession.commit
+    raced = False
+
+    async def deleting_commit(self: AsyncSession, *a: object, **k: object) -> None:
+        await real_commit(self)
+        nonlocal raced
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        if not raced and outer is not None and outer.f_code.co_name == "share_route":
+            raced = True
+            async with db_factory() as other:
+                await other.execute(delete(Route).where(Route.id == route_id))
+                await other.commit()
+
+    monkeypatch.setattr(AsyncSession, "commit", deleting_commit)
+    response = await client.post(f"/api/routes/{route_id}/share")
+    monkeypatch.undo()
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+
+async def test_import_404s_when_the_ride_is_deleted_before_the_match_runs(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The delete landing BEFORE the match, not after.
+
+    The sibling case (delete after a successful match) already 404s. This
+    one used to answer 201 with a full body for a row that was gone -
+    populated name, distance and elevation beside an empty `shape`, because
+    the geometry SELECT correctly found nothing. The client had no signal
+    at all that the ride did not exist.
+
+    The cause was inferring liveness from the match's return value: None
+    means "no candidate qualified", "a rider has this locked" AND "the row
+    is gone", and only the last one needed the re-read that the condition
+    skipped. Deliberately kept as a separate test from the post-match race,
+    because they enter the same function through different doors.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    db.add(_route(user_id, _tilted_points(), RUN_LENGTH_M))
+    await db.commit()
+
+    real = match_route_module.match_activity_to_route
+    raced = False
+
+    async def deleting_match(activity_id: uuid.UUID, **k: object) -> uuid.UUID | None:
+        nonlocal raced
+        # Before, not after: the row is already gone when the match looks
+        # for it, so the match reports None for a reason that has nothing
+        # to do with geometry.
+        await _delete_activity_elsewhere(db_factory, activity_id)
+        raced = True
+        return await real(activity_id, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("app.api.activities.match_activity_to_route", deleting_match)
+    response = await client.post(
+        "/api/activities/import",
+        files={"file": ("ride.gpx", _gpx_of(_tilted_points()), "application/gpx+xml")},
+    )
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+    listed = await client.get("/api/activities")
+    assert listed.json() == [], "fixture is wrong: the ride should really be gone"
+
+
+async def test_detail_404s_when_the_row_vanishes_after_the_liveness_check(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The last read is the authority, not the first.
+
+    reload_or_404 establishes that the row exists, and then _detail issues
+    another SELECT for the geometry. A liveness fact does not survive past
+    the statement that established it, so a delete landing in that gap used
+    to render a 201/200 carrying real stats beside an empty shape - the
+    same inconsistent body the reload was added to prevent, one round trip
+    later. Activity.geom is NOT NULL, so an empty geometry read can only
+    mean the row is gone.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add(activity)
+    await db.commit()
+    activity_id = activity.id
+
+    real_reload = activities_module.reload_or_404
+    raced = False
+
+    async def deleting_reload(db_: AsyncSession, instance: object, detail: str) -> object:
+        result = await real_reload(db_, instance, detail)
+        nonlocal raced
+        if not raced:
+            raced = True
+            await _delete_activity_elsewhere(db_factory, activity_id)
+        return result
+
+    monkeypatch.setattr("app.api.activities.reload_or_404", deleting_reload)
+    response = await client.post(f"/api/activities/{activity_id}/rematch")
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+
+async def test_deleting_a_route_unlocks_the_rides_that_named_it(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """A manual pick is a decision about a particular route, so deleting
+    that route must not leave the ride frozen.
+
+    Before, the FK nulled route_id and left match_locked set: the ride
+    became invisible to every auto-match pass, looked in the API and the UI
+    exactly like a ride that had never matched, and could only be recovered
+    by remembering the deleted route. The BEFORE DELETE trigger on routes
+    clears the flag, because the deletion is the only place that knows this
+    is an orphan rather than a rider's "stop guessing".
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    picked = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([picked, activity])
+    await db.commit()
+    activity_id, picked_id = activity.id, picked.id
+
+    linked = await client.put(
+        f"/api/activities/{activity_id}/route", json={"route_id": str(picked_id)}
+    )
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["match_locked"] is True
+
+    assert (await client.delete(f"/api/routes/{picked_id}")).status_code == 204
+
+    freed = await client.get(f"/api/activities/{activity_id}")
+    assert freed.status_code == 200
+    assert freed.json()["route_id"] is None
+    assert freed.json()["match_locked"] is False, "the orphaned lock was not cleared"
+
+    # And it is genuinely matchable again, not merely flagged differently.
+    replacement = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add(replacement)
+    await db.commit()
+    rematched = await client.post(f"/api/activities/{activity_id}/rematch")
+    assert rematched.status_code == 200, rematched.text
+    assert rematched.json()["route_id"] == str(replacement.id)
+
+
+async def test_deleting_a_route_leaves_another_rides_deliberate_clear_alone(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The trigger is scoped to rides that named the deleted route. A ride
+    the rider cleared by hand has no route_id at all, so it can never match
+    the trigger's WHERE and its "stop guessing" survives - which is the
+    distinction the endpoint-level attempt could not make."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    doomed = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    cleared_ride = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([doomed, cleared_ride])
+    await db.commit()
+
+    await client.put(f"/api/activities/{cleared_ride.id}/route", json={"route_id": None})
+    assert (await client.delete(f"/api/routes/{doomed.id}")).status_code == 204
+
+    still_cleared = await client.get(f"/api/activities/{cleared_ride.id}")
+    assert still_cleared.json()["route_id"] is None
+    assert still_cleared.json()["match_locked"] is True, "a deliberate clear was undone"
+
+
+async def test_rematch_does_not_undo_a_deliberate_clear(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """`route_id` null with `match_locked` set is how a rider says "there is
+    no route for this ride, stop guessing" - docs/architecture.md documents
+    that pairing. A rematch must not quietly re-link it."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    candidate = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([candidate, activity])
+    await db.commit()
+
+    cleared = await client.put(f"/api/activities/{activity.id}/route", json={"route_id": None})
+    assert cleared.status_code == 200, cleared.text
+
+    response = await client.post(f"/api/activities/{activity.id}/rematch")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["route_id"] is None, "the rider's clear was undone"
+    assert response.json()["match_locked"] is True
+
+
+async def test_rematch_does_not_discard_a_live_manual_pick(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The other half, and the reason the unlock is conditional. While a
+    rider's chosen route is still attached, Rematch must leave it alone -
+    only the orphaned state re-derives."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    chosen = _route(user_id, _north_leg(offset_east_m=5000.0), RUN_LENGTH_M)
+    better = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([chosen, better, activity])
+    await db.commit()
+
+    await client.put(f"/api/activities/{activity.id}/route", json={"route_id": str(chosen.id)})
+    response = await client.post(f"/api/activities/{activity.id}/rematch")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["route_id"] == str(chosen.id), "the rider's pick was discarded"
+    assert response.json()["match_locked"] is True
+
+
+async def test_route_activities_404s_when_the_route_is_deleted_mid_request(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same liveness shape as _detail, in a sibling endpoint.
+
+    route_activities owns the route once, awaits a settings read inside
+    _ride_time_for, and only then queries the rides. A DELETE landing in
+    that window used to answer 200 with an empty `activities` list - which
+    reads as "nothing has matched this route yet" - beside a
+    predicted_time_s computed from the deleted route's own elevation. The
+    rides had not vanished; the FK had unlinked them, so a rider's locked
+    manual match was exactly what disappeared from the answer.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    route_id = route.id
+    activity.route_id = route_id
+    activity.match_locked = True
+    await db.commit()
+
+    real = routes_module._ride_time_for
+    raced = False
+
+    async def deleting_ride_time(*a: object, **k: object) -> object:
+        result = await real(*a, **k)  # type: ignore[arg-type]
+        nonlocal raced
+        if not raced:
+            raced = True
+            async with db_factory() as other:
+                await other.execute(delete(Route).where(Route.id == route_id))
+                await other.commit()
+        return result
+
+    monkeypatch.setattr("app.api.routes._ride_time_for", deleting_ride_time)
+    response = await client.get(f"/api/routes/{route_id}/activities")
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+
+async def test_migration_0019_and_create_all_agree_on_the_trigger(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """The test schema is built by Base.metadata.create_all, not Alembic, so
+    a trigger declared only in a migration does not exist here and every
+    test of it would pass against nothing. This asserts the mirror is real:
+    the trigger the tests above rely on is present, on the right table and
+    the right event.
+
+    ix_routes_geom vs idx_routes_geom is the standing reminder that the two
+    schemas drift silently when nobody diffs them.
+    """
+    async with db_factory() as session:
+        row = (
+            await session.execute(
+                text("""
+                SELECT tgname, c.relname AS table_name
+                FROM pg_trigger t
+                JOIN pg_class c ON c.oid = t.tgrelid
+                WHERE tgname = 'routes_unlock_orphaned_matches'
+                """)
+            )
+        ).first()
+
+    assert row is not None, "create_all did not build the trigger migration 0019 creates"
+    assert row.table_name == "routes"
+
+
+async def test_editing_a_route_deleted_mid_commit_404s_rather_than_500s(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two tabs: a rename racing a delete of the same route.
+
+    SQLAlchemy's unit of work raises StaleDataError from inside commit()
+    when its UPDATE matches no rows, which was an unhandled 500 for an
+    ordinary pair of user actions. Handled once for the whole app in
+    main.py rather than at each of the 29 commit sites, because "check just
+    before the write" is never late enough - the check and the write are
+    still two statements.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add(route)
+    await db.commit()
+    route_id = route.id
+
+    real_commit = AsyncSession.commit
+    raced = False
+
+    async def deleting_commit(self: AsyncSession, *a: object, **k: object) -> None:
+        nonlocal raced
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        if not raced and outer is not None and outer.f_code.co_name == "update_route":
+            raced = True
+            async with db_factory() as other:
+                await other.execute(delete(Route).where(Route.id == route_id))
+                await other.commit()
+        await real_commit(self)
+
+    monkeypatch.setattr(AsyncSession, "commit", deleting_commit)
+    response = await client.patch(f"/api/routes/{route_id}", json={"name": "Renamed"})
+    monkeypatch.undo()
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+
+async def test_a_session_deleted_mid_request_is_401_not_404(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The app-wide "deleted row means 404" policy must not swallow auth.
+
+    current_user slides the session expiry and commits on nearly every
+    authenticated request, so the same session logging out in another tab
+    raises StaleDataError from a commit that has nothing to do with the
+    endpoint's own resource. Under the blanket rule that answered 404, and
+    GET /api/routes - a list endpoint with no "not found" case at all -
+    reported that it did not exist.
+
+    A blanket policy is only safe while every layer under it means the same
+    thing by the error. This layer does not, so it answers for itself.
+    """
+    await register(client, "racer@example.com")
+    session_row = (await db.execute(select(Session))).scalars().first()
+    assert session_row is not None
+    session_row.expires_at = datetime.now(UTC) + timedelta(days=1)
+    await db.commit()
+    token_hash = session_row.token_hash
+
+    real_commit = AsyncSession.commit
+    raced = False
+
+    async def deleting_commit(self: AsyncSession, *a: object, **k: object) -> None:
+        nonlocal raced
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        if not raced and outer is not None and outer.f_code.co_name == "current_user":
+            raced = True
+            async with db_factory() as other:
+                await other.execute(delete(Session).where(Session.token_hash == token_hash))
+                await other.commit()
+        await real_commit(self)
+
+    monkeypatch.setattr(AsyncSession, "commit", deleting_commit)
+    response = await client.get("/api/routes")
+    monkeypatch.undo()
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"] == "Session expired"
+
+
+async def test_linking_to_a_route_deleted_mid_commit_404s_rather_than_500s(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The FK TARGET vanishing, not this row.
+
+    set_activity_route checks the route exists, then writes route_id. A
+    delete in between makes the write a foreign-key violation - an
+    IntegrityError, structurally different from the StaleDataError raised
+    when the endpoint's OWN row goes. The app-wide policy caught only the
+    latter while its docstring claimed this endpoint was covered.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id, route_id = activity.id, route.id
+
+    real_commit = AsyncSession.commit
+    raced = False
+
+    async def deleting_commit(self: AsyncSession, *a: object, **k: object) -> None:
+        nonlocal raced
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        if not raced and outer is not None and outer.f_code.co_name == "set_activity_route":
+            raced = True
+            async with db_factory() as other:
+                await other.execute(delete(Route).where(Route.id == route_id))
+                await other.commit()
+        await real_commit(self)
+
+    monkeypatch.setattr(AsyncSession, "commit", deleting_commit)
+    response = await client.put(
+        f"/api/activities/{activity_id}/route", json={"route_id": str(route_id)}
+    )
+    monkeypatch.undo()
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+
+async def test_calibration_ignores_a_match_that_outlived_its_route_geometry(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Re-routing must not poison the rider's suggested flat speed.
+
+    A locked match survives a re-route by design - the rider chose that
+    route. But the link now points at different geometry, and calibration
+    solving the new elevation against the old ride's moving time offered a
+    genuine 26 km/h rider the model's 60 km/h ceiling, one click from
+    writing it into the setting every ETA in the app reads.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add(route)
+    await db.commit()
+
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    activity.moving_time_s = 300.0
+    activity.route_id = route.id
+    activity.match_locked = True
+    db.add(activity)
+    await db.commit()
+    assert activity.match_stale is False
+
+    # Re-save the route with a different shape, exactly as a rider tweaking a
+    # waypoint does. The locked ride keeps its link; the geometry it was
+    # matched against is gone.
+    patched = await client.patch(
+        f"/api/routes/{route.id}",
+        json={"waypoints": WAYPOINTS, "snapshot": _reshaped_snapshot()},
+    )
+    assert patched.status_code == 200, patched.text
+
+    await db.refresh(activity)
+    assert activity.match_stale is True, "the re-derive pass did not flag the surviving lock"
+    assert activity.route_id == route.id, "the rider's own pick must survive"
+    assert activity.match_locked is True
+
+
+async def test_a_zero_distance_activity_produces_no_phantom_climb(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The climb log's zero-distance guard did not guard.
+
+    It relied on `NULLIF(distance_m, 0)` making the position fraction NULL,
+    and on NULL surviving the surrounding `LEAST(GREATEST(...))`. Postgres's
+    GREATEST and LEAST IGNORE null arguments rather than propagating them,
+    so the fraction resolved to a real 0, ST_LineInterpolatePoint returned
+    the line's first vertex, and the row became a fabricated ascent pinned
+    to the start of the trace. Migration 0018's own backfill can produce
+    this pairing, deriving `climbs` from elevation with no cross-check
+    against distance_m.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    activity = _activity(user_id, _north_leg(), 0.0)
+    activity.climbs = [
+        {
+            "start_dist_m": 0.0,
+            "end_dist_m": 1000.0,
+            "length_m": 1000.0,
+            "gain_m": 60.0,
+            "avg_grade_pct": 6.0,
+            "category": "3",
+        }
+    ]
+    db.add(activity)
+    await db.commit()
+
+    response = await client.get("/api/activities/climbs")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["climbs"] == [], "a zero-distance ride produced a phantom climb"
+
+
+async def test_match_stale_reaches_the_api(client: AsyncClient, db: AsyncSession) -> None:
+    """The flag was written to the database, read by calibration, and dropped
+    on the way out - `_summary` never read the column, so every response said
+    false whatever the row held. Five separate review lenses found it, which
+    is what a column plumbed in one direction earns."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add(route)
+    # Committed before the activity references it: no ORM relationship is
+    # declared between the two, so SQLAlchemy cannot order the inserts and
+    # the FK fires.
+    await db.commit()
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    activity.route_id = route.id
+    activity.match_locked = True
+    activity.match_stale = True
+    db.add(activity)
+    await db.commit()
+
+    detail = await client.get(f"/api/activities/{activity.id}")
+    assert detail.json()["match_stale"] is True
+
+    listed = await client.get("/api/activities")
+    row = next(r for r in listed.json() if r["id"] == str(activity.id))
+    assert row["match_stale"] is True
+
+    # And on the surface it was built to protect.
+    planned = await client.get(f"/api/routes/{route.id}/activities")
+    assert planned.status_code == 200, planned.text
+    assert planned.json()["activities"][0]["match_stale"] is True
+
+
+async def test_a_fresh_manual_pick_clears_the_stale_flag(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """PUT .../route writes the link directly, not through _store_match.
+
+    That is where "the flag cannot drift, because every writer of a match
+    clears it" turned out to be false: there were two writers and only one
+    cleared it, so a rider re-picking a route after a re-route stayed
+    excluded from their own calibration for good.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    activity.match_stale = True
+    db.add_all([route, activity])
+    await db.commit()
+
+    response = await client.put(
+        f"/api/activities/{activity.id}/route", json={"route_id": str(route.id)}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["match_stale"] is False
+    await db.refresh(activity)
+    assert activity.match_stale is False
+
+
+async def test_a_raced_duplicate_registration_is_409_not_404(
+    client: AsyncClient,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catching IntegrityError app-wide was too broad.
+
+    register() checks the email, then inserts. Two attempts can both pass
+    the check, and the loser's flush hits the unique constraint - which the
+    blanket policy turned into "404 Not found" for somebody creating an
+    account, while the very same endpoint answers 409 for the identical
+    condition on the branch where it wins. The exception type is not the
+    discriminator; the SQLSTATE is.
+    """
+    real_flush = AsyncSession.flush
+    raced = False
+
+    async def racing_flush(self: AsyncSession, *a: object, **k: object) -> None:
+        nonlocal raced
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        if not raced and outer is not None and outer.f_code.co_name == "create_user":
+            raced = True
+            async with db_factory() as other:
+                other.add(
+                    User(
+                        email="race@example.com",
+                        password_hash=hash_password("correct-horse-9"),
+                        is_admin=False,
+                    )
+                )
+                await other.commit()
+        await real_flush(self, *a, **k)
+
+    monkeypatch.setattr(AsyncSession, "flush", racing_flush)
+    response = await client.post(
+        "/api/auth/register", json={"email": "race@example.com", "password": "correct-horse-9"}
+    )
+    monkeypatch.undo()
+
+    assert raced, "the duplicate never landed; the race was not reproduced"
+    assert response.status_code == 409, response.text

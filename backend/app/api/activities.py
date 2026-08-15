@@ -21,7 +21,7 @@ from fastapi.responses import Response
 from geoalchemy2.functions import ST_AsText
 from sqlalchemy import delete, exists, func, select
 
-from app.api.deps import DbDep, UserDep
+from app.api.deps import DbDep, UserDep, reload_or_404
 from app.models import Activity, Route
 from app.schemas import (
     ActivityDetail,
@@ -101,10 +101,38 @@ async def import_activity(
     # inline rather than through a queue - see services/route_match.py.
     # Never allowed to fail the import itself: the ride is the valuable
     # thing, its route link is an enrichment.
+    # The id in a local, and every log below uses it rather than the
+    # instance. An earlier version logged `activity.id` from inside the
+    # except block, and a failed refresh leaves the instance expired - so
+    # the attribute read raised MissingGreenlet from within the handler
+    # that existed to contain the failure, and a durably-committed import
+    # 500'd anyway. A guard that touches the thing it is guarding is not a
+    # guard.
+    activity_id = activity.id
     try:
-        await match_activity_to_route(db, activity.id)
+        await match_activity_to_route(activity_id)
     except Exception:  # noqa: BLE001 - see comment above
-        logger.warning("route match failed for activity %s", activity.id, exc_info=True)
+        logger.warning("route match failed for activity %s", activity_id, exc_info=True)
+    # Unconditionally, and outside the except. The match commits on its own
+    # private session, so this instance still holds the pre-match row and has
+    # to be re-read before it is rendered.
+    #
+    # It used to be conditional on the match having returned a route id, to
+    # save a SELECT when nothing had changed - and that optimisation was a
+    # bug, because the return value does not mean what the condition assumed.
+    # match_activity_to_route returns None for "no candidate qualified", for
+    # "a rider has this locked", AND for "the row is gone", which are not
+    # distinguishable from out here. So the one case that most needed the
+    # re-read - the ride deleted while the match was running - was precisely
+    # the case that skipped it, and the import answered 201 with a full body
+    # for a row that no longer existed, populated stats beside an empty
+    # shape. The clear_if_unmatched path has the same shape: it writes and
+    # still returns None.
+    #
+    # Liveness is not something to infer from an unrelated return value. One
+    # SELECT per import buys a response that describes a row that is really
+    # there, or an honest 404.
+    activity = await reload_or_404(db, activity, "Activity not found")
     return await _detail(activity, db)
 
 
@@ -195,7 +223,15 @@ async def list_activities(
     # None) rather than being dropped from the list.
     query = (
         select(Activity, Route.name)
-        .outerjoin(Route, Route.id == Activity.route_id)
+        # The join carries the OWNER's id as well as the ride's. Every writer
+        # that can set route_id checks both sides today, so a cross-linked row
+        # cannot currently exist - but the FK permits it, and a read path does
+        # not get to depend on every present and future writer staying
+        # correct. Without this a cross-linked row hands a stranger's private
+        # route name to whoever owns the ride. GET /api/routes/{id}/activities
+        # and services/ride_calibration.py already filter both tables for the
+        # same reason; these two reads were the pair that did not.
+        .outerjoin(Route, (Route.id == Activity.route_id) & (Route.user_id == user.id))
         .where(Activity.user_id == user.id)
     )
     if year is not None:
@@ -409,7 +445,16 @@ async def set_activity_route(
     activity.route_id = body.route_id
     activity.match_locked = True
     activity.match_confidence = None
+    # A rider picking a route now is picking the shape it has now, so this is
+    # not a stale link whatever it was before. Cleared here explicitly
+    # because this endpoint writes the link DIRECTLY rather than through
+    # _store_match - which is where the claim that the flag "cannot drift,
+    # because every writer of a match clears it" turned out to be false.
+    # There were two writers, and only one of them cleared it, so a fresh
+    # manual pick stayed excluded from calibration for good.
+    activity.match_stale = False
     await db.commit()
+    activity = await reload_or_404(db, activity, "Activity not found")
     return await _detail(activity, db)
 
 
@@ -420,10 +465,19 @@ async def rematch_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> 
     A no-op if the rider has already picked or cleared the match by hand -
     see match_activity_to_route's own match_locked check, which this relies
     on rather than duplicating.
+
+    Reached from the "Re-run matching" control on the ride detail page.
+
+    A ride orphaned by deleting the route it was linked to is NOT stuck:
+    migration 0019's BEFORE DELETE trigger on `routes` clears match_locked
+    for the rides that named the deleted route, so this endpoint re-derives
+    them normally. A ride the rider deliberately cleared keeps its lock and
+    is left alone, which is the distinction the trigger can make and an
+    endpoint-level check could not - see the trigger's comment in models.py.
     """
     activity = await _owned(activity_id, db, user.id)
-    await match_activity_to_route(db, activity.id)
-    await db.refresh(activity)
+    await match_activity_to_route(activity.id, clear_if_unmatched=True)
+    activity = await reload_or_404(db, activity, "Activity not found")
     return await _detail(activity, db)
 
 
@@ -483,6 +537,19 @@ async def _owned(activity_id: uuid.UUID, db: DbDep, user_id: uuid.UUID) -> Activ
 
 
 def _summary(activity: Activity, route_name: str | None = None) -> ActivitySummary:
+    # route_id is derived from route_name, not read straight off the row, so
+    # the two cannot disagree. `route_name` is already resolved by an
+    # owner-filtered join, and Route.name is NOT NULL, so "no name" means
+    # "no route this caller may see" - either unmatched, or matched to a
+    # route somebody else owns.
+    #
+    # The owner filter was added to route_name alone, which left this
+    # returning the raw UUID of a stranger's private route beside a
+    # correctly-nulled name. No writer can currently produce such a row (both
+    # PUT .../route and the matcher scope to one user on both sides), but the
+    # filter exists precisely so a read path need not trust that forever, and
+    # a guard with a hole in it reads as cover it does not give.
+    linked = route_name is not None
     return ActivitySummary(
         id=activity.id,
         name=activity.name,
@@ -494,10 +561,11 @@ def _summary(activity: Activity, route_name: str | None = None) -> ActivitySumma
         descent_m=activity.descent_m,
         source=activity.source,
         created_at=activity.created_at,
-        route_id=activity.route_id,
+        route_id=activity.route_id if linked else None,
         route_name=route_name,
-        match_confidence=activity.match_confidence,
+        match_confidence=activity.match_confidence if linked else None,
         match_locked=activity.match_locked,
+        match_stale=activity.match_stale,
     )
 
 
@@ -509,9 +577,30 @@ async def _detail(activity: Activity, db: DbDep) -> ActivityDetail:
     same path as everything else on the map.
     """
     wkt = await db.scalar(select(ST_AsText(Activity.geom)).where(Activity.id == activity.id))
+    if wkt is None:
+        # Activity.geom is NOT NULL (migration 0013), so the only way this
+        # SELECT comes back empty is that the row is gone - deleted by a
+        # concurrent request between here and whatever established that it
+        # existed.
+        #
+        # It has to be checked HERE, not only by the caller. Callers now
+        # reload_or_404 before calling this, and that is still not enough:
+        # a liveness fact does not survive past the statement that
+        # established it, and this is another await. Encoding a missing
+        # geometry as an empty polyline shipped a 201/200 carrying real
+        # stats beside an empty shape - a body describing a row that is not
+        # there, which is the same symptom the reload was added to stop,
+        # moved one round trip later. The last read wins, so the last read
+        # is where the check belongs.
+        raise HTTPException(status_code=404, detail="Activity not found")
     route_name = None
     if activity.route_id is not None:
-        route_name = await db.scalar(select(Route.name).where(Route.id == activity.route_id))
+        # Owner-filtered too - see list_activities' own comment.
+        route_name = await db.scalar(
+            select(Route.name).where(
+                Route.id == activity.route_id, Route.user_id == activity.user_id
+            )
+        )
     return ActivityDetail(
         **_summary(activity, route_name).model_dump(),
         shape=encode_polyline6(coords_from_wkt(wkt)),

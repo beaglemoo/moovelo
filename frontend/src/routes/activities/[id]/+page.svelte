@@ -15,7 +15,10 @@
 	import { distance, duration, elevation } from '$lib/format';
 	import { units } from '$lib/units.svelte';
 
-	const id = page.params.id ?? '';
+	// $derived, not a one-time read: SvelteKit reuses this component when one
+	// /activities/[id] navigates to another, so a captured id leaves the page
+	// showing the previous ride under the new URL.
+	const id = $derived(page.params.id ?? '');
 
 	// Stable empty props for the read-only map - the share page's own
 	// convention. Fresh inline literals would retrigger MapView's effects on
@@ -59,19 +62,40 @@
 		return [next, next.route_id ? await routes.get(next.route_id) : null];
 	}
 
-	async function load() {
+	// Token-owned, so a superseded load applies nothing: two quick
+	// navigations otherwise race, and the first ride's response can land
+	// after the second's and leave the older ride under the newer URL.
+	let loadToken = 0;
+
+	async function load(target: string) {
+		if (!target) return;
+		const token = ++loadToken;
 		loading = true;
 		error = null;
+		// The picker belongs to whichever ride is on screen, so a new one takes
+		// it over. Without this a pick still in flight when the rider navigates
+		// never reaches its own reset - its token no longer matches - and the
+		// select stays disabled on this ride and every ride after it, for the
+		// life of the component. The token guard protects the data pickRoute
+		// writes; this is the flag it owns.
+		pickerBusy = false;
+		pickerError = null;
 		try {
-			[activity, matchedRoute] = await fetchPair(id);
+			const pair = await fetchPair(target);
+			if (token !== loadToken) return;
+			[activity, matchedRoute] = pair;
 			fitTrigger += 1;
 		} catch (err) {
+			if (token !== loadToken) return;
 			error = err instanceof Error ? err.message : 'Failed to load ride';
 		} finally {
-			loading = false;
+			if (token === loadToken) loading = false;
 		}
 	}
-	load();
+
+	$effect(() => {
+		load(id);
+	});
 
 	const routeLine = $derived.by(() => (activity ? decodePolyline6(activity.shape) : []));
 	const routeDists = $derived(cumulativeDistances(routeLine));
@@ -90,10 +114,39 @@
 			: null
 	);
 
+	async function rematch() {
+		if (!activity) return;
+		// Same load token as load() and pickRoute, for the same reason: this
+		// assigns the activity/route pair too, so a slow rematch landing after
+		// the rider has navigated away would otherwise overwrite the page they
+		// are now on with this one's data.
+		const token = ++loadToken;
+		pickerBusy = true;
+		pickerError = null;
+		try {
+			const updated = await activities.rematch(activity.id);
+			const route = updated.route_id ? await routes.get(updated.route_id) : null;
+			if (token !== loadToken) return;
+			activity = updated;
+			matchedRoute = route;
+		} catch (err) {
+			if (token !== loadToken) return;
+			pickerError = err instanceof Error ? err.message : 'Failed to re-run matching';
+		} finally {
+			if (token === loadToken) pickerBusy = false;
+		}
+	}
+
 	async function pickRoute(event: Event) {
 		if (!activity) return;
 		const select = event.currentTarget as HTMLSelectElement;
 		const value = select.value;
+		// Takes a load token like load() does, and for the same reason: this
+		// also assigns `activity` and `matchedRoute`, so without one a slow
+		// pick can land after the rider has navigated to a different ride and
+		// overwrite that page with the previous one's. Guarding load() alone
+		// left the other writer of the same pair unguarded.
+		const token = ++loadToken;
 		pickerBusy = true;
 		pickerError = null;
 		try {
@@ -101,9 +154,11 @@
 			// Resolved before either is assigned - see fetchPair's comment. A
 			// null route_id needs no call, so clearing a link cannot fail here.
 			const route = updated.route_id ? await routes.get(updated.route_id) : null;
+			if (token !== loadToken) return;
 			activity = updated;
 			matchedRoute = route;
 		} catch (err) {
+			if (token !== loadToken) return;
 			pickerError = err instanceof Error ? err.message : 'Failed to update the match';
 			// The select is bound one way (`value={activity.route_id}`), so when
 			// the state it reads does not change, nothing re-renders it and the
@@ -114,7 +169,7 @@
 			// difference is only visible in a browser, not in a state model.
 			select.value = activity.route_id ?? '';
 		} finally {
-			pickerBusy = false;
+			if (token === loadToken) pickerBusy = false;
 		}
 	}
 
@@ -193,8 +248,24 @@
 					{/each}
 				</select>
 			</label>
+			<div class="rematch">
+				<button type="button" onclick={rematch} disabled={pickerBusy}>
+					{pickerBusy ? 'Matching…' : 'Re-run matching'}
+				</button>
+				<span class="hint">
+					Finds the saved route this ride followed. Leaves a route you picked yourself alone.
+				</span>
+			</div>
 			{#if pickerError}
 				<p class="error">{pickerError}</p>
+			{/if}
+
+			{#if activity.match_stale}
+				<p class="stale-note">
+					This route has been edited since the ride was matched to it, so the comparison below is
+					against a shape the ride never followed. Re-run matching, or pick the route again, to
+					refresh it.
+				</p>
 			{/if}
 
 			{#if matchedRoute}
@@ -301,6 +372,28 @@
 		color: var(--text);
 		margin: 0 0 0.6rem;
 	}
+	.stale-note {
+		margin: 0.6rem 0 0;
+		padding: 0.5rem 0.7rem;
+		border-left: 3px solid var(--warning);
+		background: var(--surface-2, transparent);
+		color: var(--warning-text);
+		font-size: 0.9rem;
+	}
+
+	.rematch {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		flex-wrap: wrap;
+		margin-top: 0.6rem;
+	}
+
+	.rematch .hint {
+		color: var(--text-muted);
+		font-size: 0.85rem;
+	}
+
 	.picker {
 		display: flex;
 		flex-direction: column;

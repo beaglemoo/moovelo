@@ -427,7 +427,7 @@ class ArchiveImportQueue:
                     # otherwise-successful import: the ride already landed,
                     # its route link is an enrichment.
                     try:
-                        await match_activity_to_route(db, activity.id)
+                        await match_activity_to_route(activity.id)
                     except Exception:  # noqa: BLE001 - see comment above
                         logger.warning(
                             "route match failed for activity %s", activity.id, exc_info=True

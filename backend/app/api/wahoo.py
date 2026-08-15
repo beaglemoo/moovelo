@@ -1,3 +1,4 @@
+import logging
 import secrets as py_secrets
 import uuid
 from typing import Annotated, Any
@@ -5,14 +6,18 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Cookie, HTTPException
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.exc import StaleDataError
 
-from app.api.deps import DbDep, UserDep
+from app.api.deps import DbDep, UserDep, reload_or_404
 from app.api.routes import get_owned_route
 from app.config import settings
 from app.models import WahooAccount
 from app.schemas import RouteSummary
 from app.services import wahoo
 from app.services.wahoo_queue import queue
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/wahoo")
 
@@ -80,7 +85,31 @@ async def callback(
     wahoo.apply_tokens(account, tokens)
     athlete = tokens.get("athlete")
     account.athlete = athlete if isinstance(athlete, dict) else {}
-    await db.commit()
+    try:
+        await db.commit()
+    except (StaleDataError, IntegrityError):
+        # Two shapes, one answer. StaleDataError: a concurrent disconnect
+        # deleted the account row between the read above and this write.
+        # IntegrityError: there was no row, so this branch INSERTS one, and a
+        # second connect got there first - the unique constraint on user_id
+        # fires. The first version of this fix only caught the update path,
+        # because the scenario in its own commit message was a disconnect;
+        # the insert path is the one a double-clicked Connect actually takes.
+        #
+        # Caught here rather than left to main.py's app-wide 404 policy, for
+        # the same reason current_user catches its own: this is a browser
+        # landing at the end of an OAuth redirect chain, not a fetch(). The
+        # blanket rule would replace the 302 with a bare JSON body and no
+        # Location header, so the rider would end up looking at
+        # {"detail": "Not found"} instead of anywhere. Nothing they asked for
+        # is missing either - the connection they were making was removed
+        # from under them, and the honest thing is to send them back to the
+        # page they came from, where the Wahoo panel will show disconnected.
+        #
+        # A blanket policy is only safe while every layer beneath it means
+        # the same thing by the error, and answers in the same medium.
+        logger.info("wahoo account removed mid-callback for user %s", user.id)
+        await db.rollback()
 
     response = RedirectResponse("/library", status_code=302)
     response.delete_cookie(WAHOO_STATE_COOKIE)
@@ -108,6 +137,6 @@ async def push(route_id: uuid.UUID, db: DbDep, user: UserDep) -> RouteSummary:
     route.wahoo_status = "queued"
     route.wahoo_error = None
     await db.commit()
-    await db.refresh(route)
+    route = await reload_or_404(db, route, "Route not found")
     queue.enqueue(route.id)
     return RouteSummary.from_route(route)

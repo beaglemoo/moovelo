@@ -86,14 +86,36 @@ live in their own activity history: import from GPX/TCX/FIT or a Strava
 bulk-export zip, a personal heatmap built from your own traces, and
 coverage of the signed cycle network and (opt-in) every bikeable road,
 matched onto OpenStreetMap way ids. This is deliberately not a Strava
-*sync* - the OAuth path was dropped over Strava's API Policy 6.2/5.3, see
+_sync_ - the OAuth path was dropped over Strava's API Policy 6.2/5.3, see
 `docs/faq.md#why-is-there-no-strava-sync` before proposing one. An
 activity is a record, not an intention: it has no preset and is never
 re-routed, and there is no update endpoint by design - keep that
 distinction if you touch `models.Activity` or `services/activities.py`.
 
+Those two halves now meet. An imported ride is matched to the saved route
+it followed, by bidirectional geometric coverage rather than a
+maximum-based metric like Frechet distance - a ride with one shop-stop
+detour is still that ride, and `docs/architecture.md` records the
+measurements behind that choice. The rider can always override a match by
+hand, and `match_locked` means an automatic pass never overwrites that
+decision: geometry is sometimes wrong and the rider is not. On top of the
+link sit planned-vs-actual comparison on the ride and route pages, a
+ride-time calibration that fits your own flat-road speed from your own
+matched rides and _suggests_ it (it never applies itself - the Phase 7
+model stays the single source of predictions), a personal climb log that
+clusters repeat ascents of the same hill into one entry, and yearly and
+monthly riding totals.
+
+Two conventions worth knowing before touching any of that: geometric
+tolerances in this area are provisional and documented as such, so tune
+them with measurements rather than taste; and anything that computes a
+distance from projected coordinates needs the `cos(latitude)` correction -
+EPSG:3857 metres are inflated about 1.62x at UK latitudes, and forgetting
+it has caused three separate defects in this codebase, each recorded
+where it happened.
+
 Permanently out of scope: social features (comments, likes, feeds),
-photos, live ride *recording* / GPS tracking (importing a file recorded
+photos, live ride _recording_ / GPS tracking (importing a file recorded
 elsewhere is in scope; turning Moovelo into a recording app is not),
 native mobile apps, and i18n. Anything that would make the app call out
 to a third-party service by default is also out - external integrations

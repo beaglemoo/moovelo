@@ -395,6 +395,10 @@ export interface ActivitySummary {
 	match_confidence: number | null;
 	/** True once a rider has picked or cleared the match by hand. */
 	match_locked: boolean;
+	/** True when the route was re-routed after this match was made, so the
+	 * link points at geometry the route no longer has. The ride and the
+	 * rider's choice both stand; anything comparing the two does not. */
+	match_stale: boolean;
 }
 
 export interface ActivityDetail extends ActivitySummary {
@@ -456,6 +460,9 @@ export interface RouteActivity {
 	moving_time_s: number | null;
 	distance_m: number;
 	ascent_m: number;
+	/** See ActivitySummary.match_stale - the comparison in this row is
+	 * against geometry the route no longer has. */
+	match_stale: boolean;
 	match_confidence: number | null;
 }
 
