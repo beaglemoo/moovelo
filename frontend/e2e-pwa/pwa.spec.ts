@@ -275,24 +275,29 @@ test.describe('mobile PWA', () => {
 		await existing.close();
 	});
 
-	test('keeps an in-memory guide dismissal when its storage key is unavailable', async ({
+	test('keeps the guide dismissed for the session when local storage is unavailable', async ({
 		page
 	}) => {
 		await page.addInitScript((key) => {
 			const nativeGet = Storage.prototype.getItem;
 			const nativeSet = Storage.prototype.setItem;
 			Storage.prototype.getItem = function (candidate) {
-				if (candidate === key) throw new DOMException('Storage blocked', 'SecurityError');
+				if (candidate === key && this === window.localStorage)
+					throw new DOMException('Storage blocked', 'SecurityError');
 				return nativeGet.call(this, candidate);
 			};
 			Storage.prototype.setItem = function (candidate, value) {
-				if (candidate === key) throw new DOMException('Storage blocked', 'SecurityError');
+				if (candidate === key && this === window.localStorage)
+					throw new DOMException('Storage blocked', 'SecurityError');
 				return nativeSet.call(this, candidate, value);
 			};
 		}, GUIDE_STORAGE_KEY);
 		await mockAuthenticatedPlanner(page);
 		await page.goto('/');
 		await page.getByRole('button', { name: 'Dismiss planner guide' }).tap();
+		await expect(page.locator('.planner-guide')).toHaveCount(0);
+		expect(await page.evaluate((key) => sessionStorage.getItem(key), GUIDE_STORAGE_KEY)).toBe('1');
+		await page.reload();
 		await expect(page.locator('.planner-guide')).toHaveCount(0);
 
 		await page.getByRole('button', { name: 'Menu' }).tap();

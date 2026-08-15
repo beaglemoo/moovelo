@@ -75,7 +75,14 @@
 			plannerGuideDismissed =
 				plannerGuideDismissed || localStorage.getItem(PLANNER_GUIDE_STORAGE_KEY) !== null;
 		} catch {
-			// Storage is optional; the in-memory state below remains authoritative.
+			// Fall through to the session-scoped fallback below.
+		}
+		if (!plannerGuideDismissed) {
+			try {
+				plannerGuideDismissed = sessionStorage.getItem(PLANNER_GUIDE_STORAGE_KEY) !== null;
+			} catch {
+				// Storage is optional; the in-memory state remains authoritative.
+			}
 		}
 		plannerGuideReady = true;
 	});
@@ -83,10 +90,19 @@
 	function dismissPlannerGuide() {
 		sessionPlannerGuideDismissed = true;
 		plannerGuideDismissed = true;
+		let persisted = false;
 		try {
 			localStorage.setItem(PLANNER_GUIDE_STORAGE_KEY, '1');
+			persisted = true;
 		} catch {
-			// Keep the guide dismissed in memory when persistence is unavailable.
+			// Use sessionStorage below when durable storage is unavailable.
+		}
+		if (!persisted) {
+			try {
+				sessionStorage.setItem(PLANNER_GUIDE_STORAGE_KEY, '1');
+			} catch {
+				// Keep the guide dismissed in memory when all storage is unavailable.
+			}
 		}
 	}
 	let preset: Preset = $state('road');
