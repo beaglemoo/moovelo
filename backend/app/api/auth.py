@@ -1,15 +1,19 @@
+import logging
 import secrets as py_secrets
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Cookie, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DbDep, UserDep
 from app.config import settings
 from app.services import auth as auth_service
 from app.services import oidc, rate_limit
 from app.services.auth import SESSION_COOKIE
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth")
 
@@ -163,7 +167,29 @@ async def oidc_callback(
             db, email, py_secrets.token_urlsafe(32), is_admin=first_user
         )
     token = await auth_service.create_session(db, user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Two SSO logins racing to provision the same not-yet-existing
+        # account - a double-clicked "Login with SSO", or two tabs finishing
+        # close together - collide on the users.email unique constraint.
+        #
+        # Handled here for the same reason the Wahoo callback handles its
+        # own: this is a top-level browser navigation at the end of an OAuth
+        # redirect chain, not a fetch(), so the answer has to be a redirect
+        # rather than a body. The app-wide policy would hand the rider a bare
+        # JSON page with no Location header, mid-redirect, with nothing to
+        # click. The sibling callback was fixed and this one was not, because
+        # that audit looked at the failing endpoint rather than at every
+        # endpoint that answers in redirects - there are exactly two.
+        #
+        # Sending them back to /login is honest: the account now exists
+        # (the winner created it), so logging in again succeeds.
+        logger.info("oidc provisioning raced another login for %s", email)
+        await db.rollback()
+        response = RedirectResponse("/login", status_code=302)
+        response.delete_cookie(OIDC_STATE_COOKIE)
+        return response
 
     response = RedirectResponse("/", status_code=302)
     response.delete_cookie(OIDC_STATE_COOKIE)

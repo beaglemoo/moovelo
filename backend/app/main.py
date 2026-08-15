@@ -85,6 +85,13 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Moovelo", lifespan=lifespan)
 
 
+# Postgres SQLSTATEs, via asyncpg. 23503 is a foreign-key violation - a row
+# this request points AT has gone. 23505 is a unique violation, which is a
+# different thing entirely: somebody else got there first.
+_FK_VIOLATION = "23503"
+_UNIQUE_VIOLATION = "23505"
+
+
 @app.exception_handler(StaleDataError)
 @app.exception_handler(IntegrityError)
 async def _row_deleted_during_request(request: Request, exc: Exception) -> Response:
@@ -108,14 +115,19 @@ async def _row_deleted_during_request(request: Request, exc: Exception) -> Respo
     update_preset; the same shape exists at 29 commit sites across nine
     modules and predates the phase that found it.
 
-    Not every IntegrityError is a vanished row - a genuine unique-constraint
-    violation is one too, and answering 404 for that would be a lie. Those
-    are caught where they are meaningful (the 0013 duplicate-ride constraint
-    is handled in the import path, which converts it to a skip long before
-    this handler could see it), so what reaches here is the racing-delete
-    case. If a future endpoint grows a constraint whose violation is a user
-    error, it must handle it itself rather than let this turn it into a
-    404 - the same rule current_user follows for its own 401.
+    Not every IntegrityError is a vanished row, and the first version of
+    this handler assumed otherwise - so a duplicate-email registration
+    losing a race answered "404 Not found", when the very same endpoint
+    answers 409 for the identical condition on the branch where it wins.
+    The reasoning at the time was that the only constraint that mattered
+    was 0013's duplicate ride, which the import path handles; no other
+    unique constraint in the app had been looked at.
+
+    So the exception type is not the discriminator - the SQLSTATE is.
+    23503, a foreign-key violation, is the racing-delete case this exists
+    for. 23505, a unique violation, is its opposite and gets a 409. Anything
+    else is a genuine bug and is re-raised, staying exactly as loud as it
+    was before any of this.
 
     This is deliberately a policy rather than a patch. Fixing it endpoint by
     endpoint was tried and does not converge - each fix narrows a window and
@@ -132,6 +144,21 @@ async def _row_deleted_during_request(request: Request, exc: Exception) -> Respo
     # "row deleted during request: GET /api/routes", which named the routes
     # collection when the row that actually vanished was the caller's own
     # session - a log line that sent a reader to the wrong table.
+    if isinstance(exc, IntegrityError):
+        # Catching IntegrityError wholesale was too broad, and it turned a
+        # raced duplicate-email registration into "404 Not found" - nonsense
+        # to somebody creating an account, and worse than the 409 the same
+        # endpoint gives when it WINS that race instead of losing it. Only a
+        # foreign-key violation means "the row I point at vanished"; a unique
+        # violation means the opposite, that something already exists.
+        sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+        if sqlstate == _UNIQUE_VIOLATION:
+            logger.info("unique violation: %s %s", request.method, request.url.path)
+            return JSONResponse(status_code=409, content={"detail": "Already exists"})
+        if sqlstate != _FK_VIOLATION:
+            # Not a race at all - a NOT NULL or CHECK violation is a bug, and
+            # it should stay as loud as it was before this handler existed.
+            raise exc
     logger.info(
         "a row this request was writing was deleted concurrently: %s %s",
         request.method,

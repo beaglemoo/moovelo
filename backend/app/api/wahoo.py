@@ -6,6 +6,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Cookie, HTTPException
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 
 from app.api.deps import DbDep, UserDep, reload_or_404
@@ -86,9 +87,14 @@ async def callback(
     account.athlete = athlete if isinstance(athlete, dict) else {}
     try:
         await db.commit()
-    except StaleDataError:
-        # A concurrent disconnect deleted the account row between the read
-        # above and this write - a second tab, or a double-submitted connect.
+    except (StaleDataError, IntegrityError):
+        # Two shapes, one answer. StaleDataError: a concurrent disconnect
+        # deleted the account row between the read above and this write.
+        # IntegrityError: there was no row, so this branch INSERTS one, and a
+        # second connect got there first - the unique constraint on user_id
+        # fires. The first version of this fix only caught the update path,
+        # because the scenario in its own commit message was a disconnect;
+        # the insert path is the one a double-clicked Connect actually takes.
         #
         # Caught here rather than left to main.py's app-wide 404 policy, for
         # the same reason current_user catches its own: this is a browser
