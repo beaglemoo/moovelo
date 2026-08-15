@@ -605,11 +605,24 @@ test('desktop navigation and ordinary-page scrolling remain unchanged', async ({
 	const nav = page.locator('nav');
 	await expect(page.locator('.desktop-nav')).toBeVisible();
 	await expect(page.locator('.mobile-menu-toggle')).toBeHidden();
+	await expect(page.locator('.planner-guide')).toBeVisible();
+	await expectNoOverlap(
+		page.locator('.planner-guide'),
+		page.locator('.toolbar'),
+		'desktop toolbar'
+	);
 	const desktopStyle = await nav.evaluate((element) => {
 		const style = getComputedStyle(element);
 		return { height: element.getBoundingClientRect().height, background: style.backgroundColor };
 	});
 	expect(desktopStyle).toEqual({ height: 42, background: 'rgb(7, 54, 66)' });
+	await page.setViewportSize({ width: 900, height: 720 });
+	await expect(page.locator('.mobile-menu-toggle')).toBeVisible();
+	expect(await nav.evaluate((element) => element.getBoundingClientRect().height)).toBe(44);
+	await page.setViewportSize({ width: 901, height: 720 });
+	await expect(page.locator('.desktop-nav')).toBeVisible();
+	await expect(page.locator('.mobile-menu-toggle')).toBeHidden();
+	expect(await nav.evaluate((element) => element.getBoundingClientRect().height)).toBe(42);
 
 	await page.locator('.desktop-nav').getByRole('link', { name: 'Library' }).click();
 	await expect(page).toHaveURL(/\/library$/);
