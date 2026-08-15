@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import {
 		streamAssistantChat,
 		type AssistantHandle,
@@ -102,26 +102,43 @@
 		localStorage.setItem(STORAGE_KEY, JSON.stringify({ collapsed, left, top }));
 	}
 
-	function toggleCollapsed() {
+	async function toggleCollapsed() {
 		collapsed = !collapsed;
+		// Expansion replaces the pill with a much larger card. Wait for that
+		// card to exist before measuring it, otherwise a saved position that was
+		// reachable as a pill can leave the conversation and input off-screen.
+		await tick();
+		clampPosition();
 		persistBox();
 	}
 
-	// Keeps the card fully inside .map-area (its positioning parent) with at
-	// least HEADER_MARGIN px reachable, so a window dragged off-screen and
-	// then resized narrower cannot strand itself out of reach. Run on drop
-	// and on window resize - not continuously during a drag.
-	function clampPosition() {
-		if (!root || left === null || top === null) return;
+	// Keeps an expanded card fully inside .map-area (its positioning parent).
+	// A collapsed pill only needs HEADER_MARGIN px reachable, so an existing
+	// partly-offscreen drag position is preserved without stranding it. Run on
+	// drop and on window resize - not continuously during a drag.
+	function clampPosition(): boolean {
+		if (!root || left === null || top === null) return false;
 		const area = root.parentElement;
-		if (!area) return;
+		if (!area) return false;
 		const areaRect = area.getBoundingClientRect();
 		const boxRect = root.getBoundingClientRect();
-		const minLeft = HEADER_MARGIN - boxRect.width;
-		const maxLeft = Math.max(minLeft, areaRect.width - HEADER_MARGIN);
-		const maxTop = Math.max(0, areaRect.height - HEADER_MARGIN);
-		left = Math.min(Math.max(left, minLeft), maxLeft);
-		top = Math.min(Math.max(top, 0), maxTop);
+		// A collapsed pill may remain partly beyond an edge as long as its
+		// draggable header-sized portion is reachable. Once expanded, every
+		// edge of the conversation card (especially its input and controls) must
+		// be inside the map area.
+		const minLeft = collapsed ? HEADER_MARGIN - boxRect.width : 0;
+		const maxLeft = collapsed
+			? Math.max(minLeft, areaRect.width - HEADER_MARGIN)
+			: Math.max(0, areaRect.width - boxRect.width);
+		const maxTop = collapsed
+			? Math.max(0, areaRect.height - HEADER_MARGIN)
+			: Math.max(0, areaRect.height - boxRect.height);
+		const nextLeft = Math.min(Math.max(left, minLeft), maxLeft);
+		const nextTop = Math.min(Math.max(top, 0), maxTop);
+		const changed = nextLeft !== left || nextTop !== top;
+		left = nextLeft;
+		top = nextTop;
+		return changed;
 	}
 
 	const boxStyle = $derived(
@@ -186,7 +203,7 @@
 		header.addEventListener('pointercancel', onUp);
 	}
 
-	onMount(() => {
+	onMount(async () => {
 		try {
 			const raw = localStorage.getItem(STORAGE_KEY);
 			if (raw) {
@@ -203,7 +220,10 @@
 		}
 		// A position saved on a wider window must not strand the card off
 		// this one.
-		clampPosition();
+		// Reading collapsed state can replace the pill with the larger card, so
+		// measure only after Svelte has committed the restored DOM shape.
+		await tick();
+		if (clampPosition()) persistBox();
 	});
 
 	const TOOL_LABELS: Record<string, string> = {
@@ -531,8 +551,8 @@
 		   including short landscape layouts, and put it one tier above the
 		   routing toolbar so that toolbar buttons cannot intercept its controls. */
 		.assistant:not(.collapsed) {
-			left: auto !important;
-			right: 10px !important;
+			left: 10px !important;
+			right: auto !important;
 			top: auto !important;
 			bottom: 72px !important;
 			width: min(22rem, calc(100% - 20px)) !important;
