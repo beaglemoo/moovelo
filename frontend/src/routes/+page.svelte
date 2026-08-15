@@ -1829,6 +1829,8 @@
 		position: relative;
 		flex: 1;
 		min-height: 260px;
+		overflow: hidden;
+		isolation: isolate;
 	}
 	/* Its own row below the toolbar rather than centred beside it: the
 	   toolbar grows as buttons appear (Save, GPX, FIT, Wahoo, the route
@@ -1853,7 +1855,8 @@
 		align-items: center;
 		flex-wrap: wrap;
 		max-width: calc(100% - 20px);
-		z-index: 5;
+		z-index: 8;
+		pointer-events: auto;
 	}
 	/* Anchors PresetSlidersPopover, which is positioned absolutely relative
 	   to this wrapper rather than the whole toolbar. */

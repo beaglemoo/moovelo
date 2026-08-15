@@ -13,7 +13,10 @@
 		<link rel="apple-touch-icon" href="%sveltekit.assets%/apple-touch-icon.png" />
 		<meta name="apple-mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-title" content="Moovelo" />
-		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+		<!-- Keep the application below the iOS status bar. black-translucent
+		     extends the interactive viewport underneath the clock and Dynamic
+		     Island, which hid the authenticated navigation in Home Screen mode. -->
+		<meta name="apple-mobile-web-app-status-bar-style" content="black" />
 		<script>
 			// FOUC guard: set data-theme before hydration, so the CSS in
 			// +layout.svelte never has to repaint from the wrong theme.
