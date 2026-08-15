@@ -110,17 +110,29 @@ async def import_activity(
     # guard.
     activity_id = activity.id
     try:
-        matched = await match_activity_to_route(activity_id)
+        await match_activity_to_route(activity_id)
     except Exception:  # noqa: BLE001 - see comment above
         logger.warning("route match failed for activity %s", activity_id, exc_info=True)
-        matched = None
-    if matched is not None:
-        # It committed on its own private session, so our `activity` still
-        # holds the pre-match row - re-read, or the response reports the ride
-        # as unmatched when it was in fact just matched. Outside the except
-        # on purpose: this can 404 if the ride was deleted meanwhile, and
-        # that is a real answer the handler must not swallow.
-        activity = await reload_or_404(db, activity, "Activity not found")
+    # Unconditionally, and outside the except. The match commits on its own
+    # private session, so this instance still holds the pre-match row and has
+    # to be re-read before it is rendered.
+    #
+    # It used to be conditional on the match having returned a route id, to
+    # save a SELECT when nothing had changed - and that optimisation was a
+    # bug, because the return value does not mean what the condition assumed.
+    # match_activity_to_route returns None for "no candidate qualified", for
+    # "a rider has this locked", AND for "the row is gone", which are not
+    # distinguishable from out here. So the one case that most needed the
+    # re-read - the ride deleted while the match was running - was precisely
+    # the case that skipped it, and the import answered 201 with a full body
+    # for a row that no longer existed, populated stats beside an empty
+    # shape. The clear_if_unmatched path has the same shape: it writes and
+    # still returns None.
+    #
+    # Liveness is not something to infer from an unrelated return value. One
+    # SELECT per import buys a response that describes a row that is really
+    # there, or an honest 404.
+    activity = await reload_or_404(db, activity, "Activity not found")
     return await _detail(activity, db)
 
 

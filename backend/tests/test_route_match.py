@@ -1527,3 +1527,53 @@ async def test_sharing_a_route_deleted_mid_request_404s(
 
     assert raced, "the delete never landed; the race was not reproduced"
     assert response.status_code == 404, response.text
+
+
+async def test_import_404s_when_the_ride_is_deleted_before_the_match_runs(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The delete landing BEFORE the match, not after.
+
+    The sibling case (delete after a successful match) already 404s. This
+    one used to answer 201 with a full body for a row that was gone -
+    populated name, distance and elevation beside an empty `shape`, because
+    the geometry SELECT correctly found nothing. The client had no signal
+    at all that the ride did not exist.
+
+    The cause was inferring liveness from the match's return value: None
+    means "no candidate qualified", "a rider has this locked" AND "the row
+    is gone", and only the last one needed the re-read that the condition
+    skipped. Deliberately kept as a separate test from the post-match race,
+    because they enter the same function through different doors.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    db.add(_route(user_id, _tilted_points(), RUN_LENGTH_M))
+    await db.commit()
+
+    real = match_route_module.match_activity_to_route
+    raced = False
+
+    async def deleting_match(activity_id: uuid.UUID, **k: object) -> uuid.UUID | None:
+        nonlocal raced
+        # Before, not after: the row is already gone when the match looks
+        # for it, so the match reports None for a reason that has nothing
+        # to do with geometry.
+        await _delete_activity_elsewhere(db_factory, activity_id)
+        raced = True
+        return await real(activity_id, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("app.api.activities.match_activity_to_route", deleting_match)
+    response = await client.post(
+        "/api/activities/import",
+        files={"file": ("ride.gpx", _gpx_of(_tilted_points()), "application/gpx+xml")},
+    )
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+    listed = await client.get("/api/activities")
+    assert listed.json() == [], "fixture is wrong: the ride should really be gone"
