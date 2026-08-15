@@ -710,6 +710,25 @@ how a rider says "there is no route for this ride, stop guessing" - so a
 trigger that reset the flag whenever `route_id` went null would silently
 undo the rider's own decision and let the next auto-match re-link the ride.
 
+Deleting the route a rider picked is the one case where the flag *should*
+go, and a second trigger handles it: `routes_unlock_orphaned_matches`
+(migration 0019, `BEFORE DELETE ON routes`) clears `match_locked` for the
+rides that named the deleted route. Without it those rides were frozen -
+skipped by every auto-match pass, and shown by the API and the UI exactly
+like a ride that had never matched.
+
+The two triggers cannot be one, and that is the point. After the fact,
+`route_id IS NULL AND match_locked` has two causes - the rider cleared it,
+or their route was deleted - and nothing inspecting the row can tell them
+apart; an attempt to fix this in the rematch endpoint could not, and undid
+deliberate clears. Only the deletion itself knows, so the answer lives
+where the deletion happens, scoped to `route_id = OLD.id`. A ride cleared
+by hand has no `route_id` to match, so its "stop guessing" survives.
+
+A rider can re-run matching from the **Re-run matching** control on the ride
+detail page (`POST /api/activities/{id}/rematch`), which re-derives anything
+not locked.
+
 ## Planned vs actual
 
 `GET /api/routes/{id}/activities` is the read side of the match above: the

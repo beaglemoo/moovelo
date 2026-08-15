@@ -458,24 +458,14 @@ async def rematch_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> 
     see match_activity_to_route's own match_locked check, which this relies
     on rather than duplicating.
 
-    KNOWN LIMITATION, deliberately left in place. Deleting a route that a
-    rider picked by hand nulls `route_id` through the FK and leaves
-    `match_locked` set, so the ride becomes invisible to every auto-match
-    pass, including this one, with no way back but picking a route again.
+    Reached from the "Re-run matching" control on the ride detail page.
 
-    A conditional unlock here was tried and reverted, because all three of
-    its premises were wrong. It justified itself as "the rider pressed
-    Rematch", and nothing in the frontend calls this endpoint at all. It
-    could not tell an orphaned lock from a deliberate clear - one flag, two
-    causes - so it also undid "stop guessing", which docs/architecture.md
-    documents as a supported decision. And the unlock was a plain
-    read-then-write on the very flag round 6 moved into an atomic UPDATE
-    predicate, so a manual pick landing in the window was un-locked and then
-    erased outright by the clear_if_unmatched pass that followed.
-
-    Fixing it properly means distinguishing the two states (a column and a
-    migration) and giving the rider a way to reach this endpoint. Both are
-    design decisions, not races, and neither belongs in a review fix.
+    A ride orphaned by deleting the route it was linked to is NOT stuck:
+    migration 0019's BEFORE DELETE trigger on `routes` clears match_locked
+    for the rides that named the deleted route, so this endpoint re-derives
+    them normally. A ride the rider deliberately cleared keeps its lock and
+    is left alone, which is the distinction the trigger can make and an
+    endpoint-level check could not - see the trigger's comment in models.py.
     """
     activity = await _owned(activity_id, db, user.id)
     await match_activity_to_route(activity.id, clear_if_unmatched=True)
