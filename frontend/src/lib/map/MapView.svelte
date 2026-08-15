@@ -801,6 +801,14 @@
 		};
 		m.on('touchstart', (e) => {
 			cancelPress();
+			// Markers own their long-press menu, but their touch must still bubble
+			// through MapLibre so its draggable Marker can start tracking it.
+			if (
+				e.originalEvent.target instanceof Element &&
+				e.originalEvent.target.closest('.maplibregl-marker') !== null
+			) {
+				return;
+			}
 			if (e.points.length !== 1) return;
 			const { point, lngLat } = e;
 			pressOrigin = { x: point.x, y: point.y };
@@ -884,11 +892,26 @@
 			const endEvent = kind === 'mouse' ? 'mouseup' : 'touchend';
 			let last = grab;
 			let dragActivated = false;
+			let touchCancelled = false;
+			const cleanup = () => {
+				window.removeEventListener(moveEvent, onMove);
+				window.removeEventListener(endEvent, onEnd);
+				if (kind === 'touch') window.removeEventListener('touchcancel', cancelTouch);
+				setSourceData(m, 'drag-point', pointGeoJSON(null));
+			};
+			const cancelTouch = () => {
+				touchCancelled = true;
+				cleanup();
+			};
 			const onMove = (ev: MouseEvent | TouchEvent) => {
-				// A touchend carries no touches; a second finger means the rider
-				// is pinching, not dragging. Either way, keep the last position.
-				const point = 'touches' in ev ? (ev.touches.length === 1 ? ev.touches[0] : null) : ev;
-				if (!point) return;
+				// Once a second finger joins, this is a pinch rather than a route
+				// drag. Cancel the whole gesture: a later touchend must not commit
+				// the last one-finger position as a phantom via.
+				if ('touches' in ev && ev.touches.length !== 1) {
+					cancelTouch();
+					return;
+				}
+				const point = 'touches' in ev ? ev.touches[0] : ev;
 				const rect = canvas.getBoundingClientRect();
 				const current = { x: point.clientX - rect.left, y: point.clientY - rect.top };
 				if (!dragActivated && !pointsWithin(current, grabPoint, DRAG_ACTIVATION_PX)) {
@@ -899,9 +922,8 @@
 				setSourceData(m, 'drag-point', pointGeoJSON([last.lng, last.lat]));
 			};
 			const onEnd = () => {
-				window.removeEventListener(moveEvent, onMove);
-				window.removeEventListener(endEvent, onEnd);
-				setSourceData(m, 'drag-point', pointGeoJSON(null));
+				cleanup();
+				if (touchCancelled) return;
 				// A stationary touch on the route starts this drag handler and the
 				// map's long-press menu timer together. Once the timer wins, lifting
 				// the finger belongs to the menu gesture and must not also insert a
@@ -919,6 +941,7 @@
 			};
 			window.addEventListener(moveEvent, onMove);
 			window.addEventListener(endEvent, onEnd);
+			if (kind === 'touch') window.addEventListener('touchcancel', cancelTouch);
 		};
 
 		// Waypoint markers sit on the route line and their DOM events bubble to
@@ -997,10 +1020,6 @@
 			el.addEventListener(
 				'touchstart',
 				(event) => {
-					// The marker owns this gesture. Letting it bubble starts the map's
-					// parallel long-press timer, which then overwrites the marker menu
-					// with a generic canvas menu at the same instant.
-					event.stopPropagation();
 					if (event.touches.length !== 1) return;
 					const touch = event.touches[0];
 					markerTimer = setTimeout(() => {
