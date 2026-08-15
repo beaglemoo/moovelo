@@ -829,12 +829,16 @@
 		// without moving or lifting) opens the same menu.
 		let pressTimer: ReturnType<typeof setTimeout> | null = null;
 		let pressOrigin: { x: number; y: number } | null = null;
+		const cancelCanvasMultiTouch = (event: TouchEvent) => {
+			if (event.touches.length !== 1) cancelPress();
+		};
 		const cancelPress = () => {
 			if (pressTimer) {
 				clearTimeout(pressTimer);
 				pressTimer = null;
 			}
 			pressOrigin = null;
+			window.removeEventListener('touchstart', cancelCanvasMultiTouch);
 		};
 		m.on('touchstart', (e) => {
 			cancelPress();
@@ -851,6 +855,8 @@
 			pressOrigin = { x: point.x, y: point.y };
 			pressTimer = setTimeout(() => {
 				pressTimer = null;
+				pressOrigin = null;
+				window.removeEventListener('touchstart', cancelCanvasMultiTouch);
 				recordLongPress(point);
 				const onRoute = isOnRoute(m, point);
 				openMenu({
@@ -861,6 +867,10 @@
 					onRoute
 				});
 			}, 600);
+			// A second finger can land on a floating control, outside MapLibre's
+			// event surface. Observe the whole window for the lifetime of this
+			// press so an overlay touch cancels the canvas/route long-press too.
+			window.addEventListener('touchstart', cancelCanvasMultiTouch);
 		});
 		m.on('touchmove', (e) => {
 			if (
@@ -1066,6 +1076,7 @@
 			});
 			// Long-press on a marker opens its menu on touch devices.
 			let markerTimer: ReturnType<typeof setTimeout> | null = null;
+			let markerPressOrigin: { x: number; y: number } | null = null;
 			const cancelMarkerMultiTouch = (event: TouchEvent) => {
 				if (event.touches.length !== 1) cancelMarkerPress();
 			};
@@ -1074,6 +1085,7 @@
 					clearTimeout(markerTimer);
 					markerTimer = null;
 				}
+				markerPressOrigin = null;
 				window.removeEventListener('touchstart', cancelMarkerMultiTouch);
 			};
 			el.addEventListener(
@@ -1084,8 +1096,10 @@
 					cancelMarkerPress();
 					if (event.touches.length !== 1) return;
 					const touch = event.touches[0];
+					markerPressOrigin = { x: touch.clientX, y: touch.clientY };
 					markerTimer = setTimeout(() => {
 						markerTimer = null;
+						markerPressOrigin = null;
 						window.removeEventListener('touchstart', cancelMarkerMultiTouch);
 						const rect = container.getBoundingClientRect();
 						const point = {
@@ -1107,7 +1121,22 @@
 				{ passive: true }
 			);
 			el.addEventListener('touchend', cancelMarkerPress);
-			el.addEventListener('touchmove', cancelMarkerPress);
+			el.addEventListener('touchmove', (event) => {
+				if (event.touches.length !== 1 || !markerPressOrigin) {
+					cancelMarkerPress();
+					return;
+				}
+				const touch = event.touches[0];
+				if (
+					!pointsWithin(
+						{ x: touch.clientX, y: touch.clientY },
+						markerPressOrigin,
+						DRAG_ACTIVATION_PX
+					)
+				) {
+					cancelMarkerPress();
+				}
+			});
 			el.addEventListener('touchcancel', cancelMarkerPress);
 			return marker;
 		});
