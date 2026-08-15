@@ -820,6 +820,10 @@ test.describe('mobile PWA', () => {
 		const routePoint = { x: box!.x + box!.width * 0.5, y: box!.y + box!.height * 0.5 };
 		await webKitTouchGesture(page, canvas, routePoint, { holdMs: 650 });
 		await expect(page.getByRole('menuitem', { name: 'Avoid this road' })).toBeVisible();
+		// WebKit may synthesize a click where the long-press began. That click
+		// belongs to the same gesture and must not immediately close its menu.
+		await page.mouse.click(routePoint.x, routePoint.y);
+		await expect(page.getByRole('menuitem', { name: 'Avoid this road' })).toBeVisible();
 		await page.touchscreen.tap(box!.x + box!.width * 0.2, box!.y + box!.height * 0.2);
 		await expect(page.locator('.context-menu')).toHaveCount(0);
 		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
