@@ -385,6 +385,35 @@ test.describe('mobile PWA', () => {
 		expect(await page.evaluate((key) => localStorage.getItem(key), GUIDE_STORAGE_KEY)).toBe('1');
 	});
 
+	for (const action of ['From', 'To']) {
+		test(`dismisses the guide after choosing search result ${action}`, async ({ page }) => {
+			await mockAuthenticatedPlanner(page, { search_enabled: true });
+			await page.route('**/api/places/search?**', (route) =>
+				route.fulfill({
+					json: [
+						{
+							id: 1,
+							name: 'Tring',
+							place_type: 'town',
+							lat: 51.794,
+							lon: -0.66,
+							distance_m: 1200
+						}
+					]
+				})
+			);
+			await page.goto('/');
+			await page.getByPlaceholder('Search for a place').fill('Tring');
+			await page
+				.getByRole('option', { name: /Tring/ })
+				.getByRole('button', { name: action, exact: true })
+				.tap();
+			await expect(page.locator('.maplibregl-marker')).toHaveCount(1);
+			await expect(page.locator('.planner-guide')).toHaveCount(0);
+			expect(await page.evaluate((key) => localStorage.getItem(key), GUIDE_STORAGE_KEY)).toBe('1');
+		});
+	}
+
 	for (const action of ['Route from here', 'Route to here']) {
 		test(`dismisses the guide after the ${action.toLowerCase()} action`, async ({ page }) => {
 			await mockAuthenticatedPlanner(page);
@@ -441,6 +470,44 @@ test.describe('mobile PWA', () => {
 		await expect(page.locator('.results')).toHaveCount(0);
 		await expect(page.locator('.planner-guide')).toBeVisible();
 	});
+
+	for (const dismissal of ['outside click', 'Escape']) {
+		test(`does not reopen an in-flight search after ${dismissal}`, async ({ page }) => {
+			await mockAuthenticatedPlanner(page, { search_enabled: true });
+			let releaseSearch!: () => void;
+			const searchReleased = new Promise<void>((resolve) => (releaseSearch = resolve));
+			let searchRequested!: () => void;
+			const searchRequestSeen = new Promise<void>((resolve) => (searchRequested = resolve));
+			await page.route('**/api/places/search?**', async (route) => {
+				searchRequested();
+				await searchReleased;
+				await route.fulfill({
+					json: [
+						{
+							id: 1,
+							name: 'Late Tring result',
+							place_type: 'town',
+							lat: 51.794,
+							lon: -0.66,
+							distance_m: 1200
+						}
+					]
+				});
+			});
+			await page.goto('/');
+			const search = page.getByPlaceholder('Search for a place');
+			await search.fill('Tring');
+			await searchRequestSeen;
+			if (dismissal === 'Escape') await search.press('Escape');
+			else await page.locator('.brand').tap();
+			releaseSearch();
+
+			await page.waitForTimeout(100);
+			await expect(page.getByText('Late Tring result', { exact: true })).toHaveCount(0);
+			await expect(page.locator('.results')).toHaveCount(0);
+			await expect(page.locator('.planner-guide')).toBeVisible();
+		});
+	}
 
 	test('does not show an older search response during the next query debounce', async ({
 		page
@@ -746,6 +813,21 @@ test.describe('mobile PWA', () => {
 		expect(assistantBox).not.toBeNull();
 		expect(assistantBox!.x).toBeGreaterThanOrEqual(mapBox!.x);
 		expect(assistantBox!.x + assistantBox!.width).toBeLessThanOrEqual(mapBox!.x + mapBox!.width);
+		const geolocate = page.locator('.maplibregl-ctrl-geolocate');
+		await expectNoOverlap(
+			page.locator('.assistant:not(.collapsed)'),
+			geolocate,
+			'844: expanded assistant vs geolocate'
+		);
+		const geolocateOwnsCentre = await geolocate.evaluate((element) => {
+			const rect = element.getBoundingClientRect();
+			return (
+				document
+					.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+					?.closest('button') === element
+			);
+		});
+		expect(geolocateOwnsCentre).toBe(true);
 	});
 
 	test('contains scrolling and keeps both control rows touchable', async ({ page }) => {
@@ -910,6 +992,47 @@ test.describe('mobile PWA', () => {
 		await expect(page).toHaveURL(/\/login$/);
 		await expect(page.locator('nav')).toHaveCount(0);
 	});
+});
+
+test('reclamps the expanded assistant at the desktop breakpoint', async ({ page }) => {
+	await page.setViewportSize({ width: 901, height: 720 });
+	await page.addInitScript(() =>
+		localStorage.setItem(
+			'moovelo:assistant-box',
+			JSON.stringify({ collapsed: true, left: 1400, top: 100 })
+		)
+	);
+	await mockAuthenticatedPlanner(page, { assistant_enabled: true });
+	await page.route('**/api/routes/planned', (route) =>
+		route.fulfill({ json: savedRoute('planned') })
+	);
+	await page.goto('/?route=planned');
+	await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+	await page.getByRole('button', { name: 'Ask for a route' }).click();
+
+	const mapArea = page.locator('.map-area');
+	const expanded = page.locator('.assistant:not(.collapsed)');
+	const close = expanded.getByRole('button', { name: 'Collapse the assistant' });
+	await expect(expanded.getByRole('textbox', { name: 'Ask the route assistant' })).toBeVisible();
+	await expect.poll(async () => (await expanded.boundingBox())?.x ?? -1).toBeGreaterThanOrEqual(0);
+	await expect
+		.poll(async () => {
+			const mapBox = await mapArea.boundingBox();
+			const assistantBox = await expanded.boundingBox();
+			if (!mapBox || !assistantBox) return Number.POSITIVE_INFINITY;
+			return assistantBox.x + assistantBox.width - (mapBox.x + mapBox.width);
+		})
+		.toBeLessThanOrEqual(0);
+	await expect(close).toBeVisible();
+	const closeOwnsCentre = await close.evaluate((element) => {
+		const rect = element.getBoundingClientRect();
+		return (
+			document
+				.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+				?.closest('button') === element
+		);
+	});
+	expect(closeOwnsCentre).toBe(true);
 });
 
 test('desktop navigation and ordinary-page scrolling remain unchanged', async ({ page }) => {
