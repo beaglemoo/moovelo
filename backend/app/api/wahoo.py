@@ -6,7 +6,7 @@ from fastapi import APIRouter, Cookie, HTTPException
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
-from app.api.deps import DbDep, UserDep
+from app.api.deps import DbDep, UserDep, reload_or_404
 from app.api.routes import get_owned_route
 from app.config import settings
 from app.models import WahooAccount
@@ -108,6 +108,6 @@ async def push(route_id: uuid.UUID, db: DbDep, user: UserDep) -> RouteSummary:
     route.wahoo_status = "queued"
     route.wahoo_error = None
     await db.commit()
-    await db.refresh(route)
+    route = await reload_or_404(db, route, "Route not found")
     queue.enqueue(route.id)
     return RouteSummary.from_route(route)

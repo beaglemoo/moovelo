@@ -9,7 +9,7 @@ from geoalchemy2 import WKTElement
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import DbDep, UserDep, refresh_or_404
+from app.api.deps import DbDep, UserDep, reload_or_404
 from app.api.settings import get_or_default_settings
 from app.models import Activity, Route
 from app.schemas import (
@@ -253,7 +253,7 @@ async def import_route_file(
     _apply_snapshot(route, imported.snapshot)
     db.add(route)
     await db.commit()
-    await db.refresh(route)
+    route = await reload_or_404(db, route, "Route not found")
     return await _saved(route, db, user.id)
 
 
@@ -302,7 +302,7 @@ async def save_route(body: RouteSaveRequest, db: DbDep, user: UserDep) -> SavedR
     _apply_snapshot(route, body.snapshot)
     db.add(route)
     await db.commit()
-    await db.refresh(route)
+    route = await reload_or_404(db, route, "Route not found")
     return await _saved(route, db, user.id)
 
 
@@ -389,7 +389,7 @@ async def update_route(
     await db.commit()
     if body.snapshot is not None:
         await _rematch_linked_activities(route.id, db)
-    await refresh_or_404(db, route, "Route not found")
+    route = await reload_or_404(db, route, "Route not found")
     return await _saved(route, db, user.id)
 
 
@@ -655,7 +655,7 @@ async def share_route(route_id: uuid.UUID, db: DbDep, user: UserDep) -> SavedRou
         route.summary = await generate_summary(route, config)
         route.summary_signature = current_signature if route.summary else None
     await db.commit()
-    await db.refresh(route)
+    route = await reload_or_404(db, route, "Route not found")
     return await _saved(route, db, user.id)
 
 
@@ -664,7 +664,7 @@ async def revoke_share(route_id: uuid.UUID, db: DbDep, user: UserDep) -> SavedRo
     route = await get_owned_route(db, user, route_id)
     route.share_token = None
     await db.commit()
-    await db.refresh(route)
+    route = await reload_or_404(db, route, "Route not found")
     return await _saved(route, db, user.id)
 
 

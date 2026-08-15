@@ -21,7 +21,7 @@ from fastapi.responses import Response
 from geoalchemy2.functions import ST_AsText
 from sqlalchemy import delete, exists, func, select
 
-from app.api.deps import DbDep, UserDep, refresh_or_404
+from app.api.deps import DbDep, UserDep, reload_or_404
 from app.models import Activity, Route
 from app.schemas import (
     ActivityDetail,
@@ -101,17 +101,26 @@ async def import_activity(
     # inline rather than through a queue - see services/route_match.py.
     # Never allowed to fail the import itself: the ride is the valuable
     # thing, its route link is an enrichment.
+    # The id in a local, and every log below uses it rather than the
+    # instance. An earlier version logged `activity.id` from inside the
+    # except block, and a failed refresh leaves the instance expired - so
+    # the attribute read raised MissingGreenlet from within the handler
+    # that existed to contain the failure, and a durably-committed import
+    # 500'd anyway. A guard that touches the thing it is guarding is not a
+    # guard.
+    activity_id = activity.id
     try:
-        matched = await match_activity_to_route(activity.id)
-        if matched is not None:
-            # It committed on its own private session, so our `activity` still
-            # holds the pre-match row - refresh or the response reports the
-            # ride as unmatched when it was in fact just matched. Guarded for
-            # the same reason the match itself is: this is one SELECT for an
-            # enrichment, and the ride is already durably committed above.
-            await db.refresh(activity)
+        matched = await match_activity_to_route(activity_id)
     except Exception:  # noqa: BLE001 - see comment above
-        logger.warning("route match failed for activity %s", activity.id, exc_info=True)
+        logger.warning("route match failed for activity %s", activity_id, exc_info=True)
+        matched = None
+    if matched is not None:
+        # It committed on its own private session, so our `activity` still
+        # holds the pre-match row - re-read, or the response reports the ride
+        # as unmatched when it was in fact just matched. Outside the except
+        # on purpose: this can 404 if the ride was deleted meanwhile, and
+        # that is a real answer the handler must not swallow.
+        activity = await reload_or_404(db, activity, "Activity not found")
     return await _detail(activity, db)
 
 
@@ -425,6 +434,7 @@ async def set_activity_route(
     activity.match_locked = True
     activity.match_confidence = None
     await db.commit()
+    activity = await reload_or_404(db, activity, "Activity not found")
     return await _detail(activity, db)
 
 
@@ -438,7 +448,7 @@ async def rematch_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> 
     """
     activity = await _owned(activity_id, db, user.id)
     await match_activity_to_route(activity.id, clear_if_unmatched=True)
-    await refresh_or_404(db, activity, "Activity not found")
+    activity = await reload_or_404(db, activity, "Activity not found")
     return await _detail(activity, db)
 
 

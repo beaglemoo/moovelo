@@ -1389,3 +1389,141 @@ async def test_rematch_of_a_concurrently_deleted_activity_404s_rather_than_500s(
 
     assert deleted, "the delete never landed; the race was not reproduced"
     assert response.status_code == 404, response.text
+
+
+async def _delete_activity_elsewhere(
+    db_factory: async_sessionmaker[AsyncSession], activity_id: uuid.UUID
+) -> None:
+    """Delete a row from an independent session, as a concurrent request would."""
+    async with db_factory() as other:
+        await other.execute(delete(Activity).where(Activity.id == activity_id))
+        await other.commit()
+
+
+async def test_import_survives_a_delete_landing_in_the_post_match_window(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The post-match re-read must not 500 a durably-committed import.
+
+    This is the round-5 fix's own follow-up refresh, and it reintroduced
+    the family that fix existed to close. Two faults compounded: the
+    refresh raised on a deleted row, and the `except` block that caught it
+    then read `activity.id` off the now-EXPIRED instance, raising
+    MissingGreenlet straight out of the handler. A guard that touches the
+    thing it is guarding is not a guard, so the id is captured in a local
+    and the re-read sits outside the try.
+
+    404, not 500: the ride genuinely is gone by the time the response is
+    built, and that is a real answer rather than a crash.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    db.add(_route(user_id, _tilted_points(), RUN_LENGTH_M))
+    await db.commit()
+
+    real = match_route_module.match_activity_to_route
+    raced = False
+
+    async def deleting_match(activity_id: uuid.UUID, **k: object) -> uuid.UUID | None:
+        nonlocal raced
+        result = await real(activity_id, **k)  # type: ignore[arg-type]
+        await _delete_activity_elsewhere(db_factory, activity_id)
+        raced = True
+        return result
+
+    monkeypatch.setattr("app.api.activities.match_activity_to_route", deleting_match)
+    response = await client.post(
+        "/api/activities/import",
+        files={"file": ("ride.gpx", _gpx_of(_tilted_points()), "application/gpx+xml")},
+    )
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+    assert "500" not in str(response.status_code)
+
+
+async def test_manual_route_link_survives_a_concurrent_delete(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PUT .../route commits and then renders the row; a delete in that gap
+    must 404 rather than 500."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id, route_id = activity.id, route.id
+
+    real_commit = AsyncSession.commit
+    raced = False
+
+    async def deleting_commit(self: AsyncSession, *a: object, **k: object) -> None:
+        await real_commit(self)
+        nonlocal raced
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        if not raced and outer is not None and outer.f_code.co_name == "set_activity_route":
+            raced = True
+            await _delete_activity_elsewhere(db_factory, activity_id)
+
+    monkeypatch.setattr(AsyncSession, "commit", deleting_commit)
+    response = await client.put(
+        f"/api/activities/{activity_id}/route", json={"route_id": str(route_id)}
+    )
+    monkeypatch.undo()
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+
+async def test_sharing_a_route_deleted_mid_request_404s(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """share_route's window is the widest in the app.
+
+    It commits and then renders the route, and its summary branch runs an
+    LLM call behind a 30s timeout on essentially every first share - so a
+    rider deleting the same route from another tab has a long window to
+    land in. It kept a bare db.refresh after the two Phase 11 sites were
+    given refresh_or_404, which is the same bug one call site over: naming
+    call sites is not a mechanism.
+
+    Included even though the helper is shared with the endpoints tested
+    above, because "the helper is proven elsewhere" is precisely the
+    reasoning that left this one behind.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add(route)
+    await db.commit()
+    route_id = route.id
+
+    real_commit = AsyncSession.commit
+    raced = False
+
+    async def deleting_commit(self: AsyncSession, *a: object, **k: object) -> None:
+        await real_commit(self)
+        nonlocal raced
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        if not raced and outer is not None and outer.f_code.co_name == "share_route":
+            raced = True
+            async with db_factory() as other:
+                await other.execute(delete(Route).where(Route.id == route_id))
+                await other.commit()
+
+    monkeypatch.setattr(AsyncSession, "commit", deleting_commit)
+    response = await client.post(f"/api/routes/{route_id}/share")
+    monkeypatch.undo()
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
