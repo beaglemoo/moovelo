@@ -253,7 +253,7 @@ async def import_route_file(
     _apply_snapshot(route, imported.snapshot)
     db.add(route)
     await db.commit()
-    route = await reload_or_404(db, route, "Route not found")
+    await db.refresh(route)
     return await _saved(route, db, user.id)
 
 
@@ -302,7 +302,7 @@ async def save_route(body: RouteSaveRequest, db: DbDep, user: UserDep) -> SavedR
     _apply_snapshot(route, body.snapshot)
     db.add(route)
     await db.commit()
-    route = await reload_or_404(db, route, "Route not found")
+    await db.refresh(route)
     return await _saved(route, db, user.id)
 
 
