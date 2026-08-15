@@ -194,7 +194,9 @@ async def match_activity(
         # with no log at all - worse than the round-4 bug the shield fixed.
         # WayMatchQueue.stop() awaits the tracked set so an orderly
         # shutdown lets in-flight un-claims land; _unclaim logs its own
-        # abort so even a forced kill is never silent.
+        # abort so the runner's forced cancellation is never silent. (An
+        # OS-level SIGKILL runs no Python at all and cannot be logged by
+        # anything - see the SHUTDOWN_WAIT_S comment.)
         unclaim_task = asyncio.ensure_future(_unclaim(act_id, claimed_at))
         _pending_unclaims.add(unclaim_task)
         unclaim_task.add_done_callback(_pending_unclaims.discard)
@@ -245,8 +247,13 @@ SHUTDOWN_WAIT_S = 5.0
 async def _unclaim(act_id: uuid.UUID, claimed_at: datetime) -> None:
     """Reset a claim that should not stand, on a session of its own.
 
-    Raises only CancelledError - a forced kill at process exit, logged
-    here so it is never silent. Every ordinary failure is logged and
+    Raises only CancelledError - the runner's forced cancellation of a
+    still-pending task at process exit, logged here so it is never
+    silent. (That covers every kill Python gets to see; an OS-level
+    SIGKILL runs no code and nothing anywhere can log it - the
+    SHUTDOWN_WAIT_S bound exists to keep an orderly shutdown short
+    enough that a sized SIGTERM grace period is not overrun.) Every
+    ordinary failure is logged and
     swallowed: the ride stays stranded as attempted-forever (the
     documented residual), which must not mask the original error the
     caller is already propagating."""
@@ -357,8 +364,10 @@ class WayMatchQueue:
         # handler finish (including starting an un-claim); awaiting the
         # tracked un-claims lets those single UPDATEs land before the loop
         # goes away. asyncio.wait never raises the tasks' own exceptions,
-        # and anything still pending at the bound is left for the runner -
-        # logged by _unclaim's own abort handler, so never silent.
+        # and anything still pending at the bound is left for the runner's
+        # cancellation - logged by _unclaim's own abort handler, so that
+        # path is never silent (a SIGKILL after the grace period is the
+        # one exit nothing can log).
         # One deadline shared by both waits: the worker and the un-claims
         # can be the same wait in disguise (a worker whose cancellation
         # landed before the shield only finishes when its un-claim does),
