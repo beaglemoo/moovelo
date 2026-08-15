@@ -96,10 +96,12 @@ async def match_activity(
     stranded as attempted-forever and invisible to every future backfill.
     The un-claim is keyed on the exact claim timestamp this call wrote, so
     if anything else has since touched `ways_matched_at` (a re-derive on
-    this same worker) it is inert rather than clobbering that write. A hard
-    process crash between claim and un-claim still strands the ride - the
-    same residue an interrupted job has always left, recoverable by a
-    delete-triggered re-derive - but no software failure path does.
+    this same worker) it is inert rather than clobbering that write. Two
+    residual ways a ride can still strand as attempted-forever: a hard
+    process crash between claim and un-claim, and the un-claim itself
+    failing against a dead connection (logged loudly). Both are the same
+    residue an interrupted job has always left, recoverable by a
+    delete-triggered re-derive; every ordinary exception path un-claims.
 
     A matching failure - the track sits outside the loaded map extract,
     Valhalla is still building tiles, or it is simply unreachable - must
@@ -131,10 +133,17 @@ async def match_activity(
         await db.commit()
         return None
 
-    wkt = await db.scalar(select(ST_AsText(Activity.geom)).where(Activity.id == act_id))
-    await db.commit()  # claim durable, row lock released - BEFORE any network work
-
     try:
+        # The try block starts HERE, directly after the claim UPDATE - review
+        # of this fix proved that starting it after the commit below leaves a
+        # commit-ack-lost failure (the server applied the COMMIT, the
+        # connection died before the ack) stranding the ride claimed-forever
+        # with no un-claim ever attempted. Inside the handler the un-claim's
+        # timestamp predicate sorts the cases out: a claim that never landed
+        # matches nothing (inert), a claim that landed gets reset.
+        wkt = await db.scalar(select(ST_AsText(Activity.geom)).where(Activity.id == act_id))
+        await db.commit()  # claim durable, row lock released - BEFORE any network work
+
         shape: list[Point] = coords_from_wkt(wkt)
         lengths = await valhalla.match_ways(shape) if len(shape) >= 2 else None
         way_ids = {
