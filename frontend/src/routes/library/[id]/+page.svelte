@@ -175,7 +175,14 @@
 									<span class="vs">vs {elevation(route.ascent_m, units.system)} planned</span>
 								</td>
 								<td data-label="Match">
-									{#if item.match_confidence !== null}
+									{#if item.match_stale}
+										<span
+											class="stale"
+											title="This route was edited after the ride was matched to it, so the comparison is against a shape the ride never followed."
+										>
+											before edit
+										</span>
+									{:else if item.match_confidence !== null}
 										{Math.round(item.match_confidence * 100)}%
 									{:else}
 										<span class="muted">manual</span>
@@ -292,6 +299,11 @@
 	}
 	.muted {
 		color: var(--text-muted);
+	}
+	.stale {
+		color: var(--warning-text);
+		border-bottom: 1px dotted currentColor;
+		cursor: help;
 	}
 	@media (max-width: 640px) {
 		table,

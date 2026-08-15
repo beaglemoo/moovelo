@@ -260,6 +260,14 @@
 				<p class="error">{pickerError}</p>
 			{/if}
 
+			{#if activity.match_stale}
+				<p class="stale-note">
+					This route has been edited since the ride was matched to it, so the comparison below is
+					against a shape the ride never followed. Re-run matching, or pick the route again, to
+					refresh it.
+				</p>
+			{/if}
+
 			{#if matchedRoute}
 				<p class="route-link">
 					<a href={`/library/${matchedRoute.id}`}>{matchedRoute.name}</a>
@@ -364,6 +372,15 @@
 		color: var(--text);
 		margin: 0 0 0.6rem;
 	}
+	.stale-note {
+		margin: 0.6rem 0 0;
+		padding: 0.5rem 0.7rem;
+		border-left: 3px solid var(--warning);
+		background: var(--surface-2, transparent);
+		color: var(--warning-text);
+		font-size: 0.9rem;
+	}
+
 	.rematch {
 		display: flex;
 		align-items: center;
