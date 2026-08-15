@@ -568,6 +568,38 @@ test.describe('mobile PWA', () => {
 		await expect(page.getByText('Old Tr result', { exact: true })).toHaveCount(0);
 	});
 
+	test('does not select a rendered result after the query changes', async ({ page }) => {
+		await mockAuthenticatedPlanner(page, { search_enabled: true });
+		await page.route('**/api/places/search?**', async (route) => {
+			const term = new URL(route.request().url()).searchParams.get('q');
+			await route.fulfill({
+				json: [
+					{
+						id: term === 'Tr' ? 1 : 2,
+						name: term === 'Tr' ? 'Rendered Tr result' : 'Current Tring result',
+						place_type: 'town',
+						lat: term === 'Tr' ? 51.794 : 51.795,
+						lon: term === 'Tr' ? -0.66 : -0.65,
+						distance_m: term === 'Tr' ? 1 : 2
+					}
+				]
+			});
+		});
+		await page.goto('/');
+		const search = page.getByPlaceholder('Search for a place');
+		await search.fill('Tr');
+		await expect(page.getByText('Rendered Tr result', { exact: true })).toBeVisible();
+
+		await search.fill('Tring');
+		await expect(page.locator('.results')).toHaveCount(0);
+		await search.press('Enter');
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(0);
+		await expect(page.locator('.planner-guide')).toBeVisible();
+		expect(await page.evaluate((key) => localStorage.getItem(key), GUIDE_STORAGE_KEY)).toBeNull();
+
+		await expect(page.getByText('Current Tring result', { exact: true })).toBeVisible();
+	});
+
 	test('never flashes the first-run guide while a saved route is loading', async ({ page }) => {
 		await page.addInitScript(() => {
 			const state = window as typeof window & { plannerGuideWasRendered?: boolean };
