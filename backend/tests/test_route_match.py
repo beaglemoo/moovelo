@@ -37,6 +37,7 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.api.activities as activities_module
+import app.api.routes as routes_module
 import app.services.route_match as match_route_module
 import app.services.route_match as route_match
 from app.models import Activity, Route, User
@@ -1621,17 +1622,26 @@ async def test_detail_404s_when_the_row_vanishes_after_the_liveness_check(
     assert response.status_code == 404, response.text
 
 
-async def test_rematch_recovers_a_ride_orphaned_by_deleting_its_matched_route(
+async def test_a_ride_orphaned_by_deleting_its_route_stays_locked(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    """A manual pick whose route is later deleted must not freeze the ride.
+    """Pins a KNOWN LIMITATION, not desired behaviour.
 
-    The FK nulls route_id and leaves match_locked set, which is right on its
-    own terms - but it made the ride permanently invisible to every
-    auto-match pass, including the endpoint whose entire job is to re-run
-    one, and the frontend shows it identically to a ride that was never
-    matched. The rider never said "no route"; the route they picked was
-    deleted.
+    Deleting a route a rider picked by hand nulls route_id via the FK and
+    leaves match_locked set, so the ride is invisible to every auto-match
+    pass and cannot be recovered except by picking a route again.
+
+    A conditional unlock in rematch_activity was written for this and
+    reverted: nothing in the frontend calls that endpoint, the flag cannot
+    distinguish an orphan from a deliberate "stop guessing" clear, and the
+    unlock itself was a read-then-write race on the flag round 6 had moved
+    into an atomic UPDATE. Fixing it properly needs a column, a migration
+    and a way for a rider to reach the endpoint - design decisions, not a
+    race, and out of scope for a review fix.
+
+    This test exists so the limitation is recorded and so a future change
+    to it is deliberate rather than accidental. If it starts failing
+    because someone fixed the orphan case, that is good news: replace it.
     """
     await register(client, "rider@example.com")
     user_id = await _user_id(db, "rider@example.com")
@@ -1641,20 +1651,9 @@ async def test_rematch_recovers_a_ride_orphaned_by_deleting_its_matched_route(
     await db.commit()
     activity_id, picked_id = activity.id, picked.id
 
-    linked = await client.put(
-        f"/api/activities/{activity_id}/route", json={"route_id": str(picked_id)}
-    )
-    assert linked.status_code == 200, linked.text
-    assert linked.json()["match_locked"] is True
-
+    await client.put(f"/api/activities/{activity_id}/route", json={"route_id": str(picked_id)})
     assert (await client.delete(f"/api/routes/{picked_id}")).status_code == 204
 
-    orphaned = await client.get(f"/api/activities/{activity_id}")
-    assert orphaned.json()["route_id"] is None
-    assert orphaned.json()["match_locked"] is True, "fixture: the lock should survive the delete"
-
-    # A replacement route on the same roads, exactly what a rider re-planning
-    # would produce.
     replacement = _route(user_id, _north_leg(), RUN_LENGTH_M)
     db.add(replacement)
     await db.commit()
@@ -1662,7 +1661,31 @@ async def test_rematch_recovers_a_ride_orphaned_by_deleting_its_matched_route(
     response = await client.post(f"/api/activities/{activity_id}/rematch")
 
     assert response.status_code == 200, response.text
-    assert response.json()["route_id"] == str(replacement.id)
+    assert response.json()["route_id"] is None, "known limitation: the orphan stays unmatched"
+    assert response.json()["match_locked"] is True
+
+
+async def test_rematch_does_not_undo_a_deliberate_clear(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """`route_id` null with `match_locked` set is how a rider says "there is
+    no route for this ride, stop guessing" - docs/architecture.md documents
+    that pairing. A rematch must not quietly re-link it."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    candidate = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([candidate, activity])
+    await db.commit()
+
+    cleared = await client.put(f"/api/activities/{activity.id}/route", json={"route_id": None})
+    assert cleared.status_code == 200, cleared.text
+
+    response = await client.post(f"/api/activities/{activity.id}/rematch")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["route_id"] is None, "the rider's clear was undone"
+    assert response.json()["match_locked"] is True
 
 
 async def test_rematch_does_not_discard_a_live_manual_pick(
@@ -1685,3 +1708,50 @@ async def test_rematch_does_not_discard_a_live_manual_pick(
     assert response.status_code == 200, response.text
     assert response.json()["route_id"] == str(chosen.id), "the rider's pick was discarded"
     assert response.json()["match_locked"] is True
+
+
+async def test_route_activities_404s_when_the_route_is_deleted_mid_request(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same liveness shape as _detail, in a sibling endpoint.
+
+    route_activities owns the route once, awaits a settings read inside
+    _ride_time_for, and only then queries the rides. A DELETE landing in
+    that window used to answer 200 with an empty `activities` list - which
+    reads as "nothing has matched this route yet" - beside a
+    predicted_time_s computed from the deleted route's own elevation. The
+    rides had not vanished; the FK had unlinked them, so a rider's locked
+    manual match was exactly what disappeared from the answer.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    route_id = route.id
+    activity.route_id = route_id
+    activity.match_locked = True
+    await db.commit()
+
+    real = routes_module._ride_time_for
+    raced = False
+
+    async def deleting_ride_time(*a: object, **k: object) -> object:
+        result = await real(*a, **k)  # type: ignore[arg-type]
+        nonlocal raced
+        if not raced:
+            raced = True
+            async with db_factory() as other:
+                await other.execute(delete(Route).where(Route.id == route_id))
+                await other.commit()
+        return result
+
+    monkeypatch.setattr("app.api.routes._ride_time_for", deleting_ride_time)
+    response = await client.get(f"/api/routes/{route_id}/activities")
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text

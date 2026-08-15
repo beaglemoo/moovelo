@@ -454,33 +454,30 @@ async def set_activity_route(
 async def rematch_activity(activity_id: uuid.UUID, db: DbDep, user: UserDep) -> ActivityDetail:
     """Re-run auto-matching for one ride.
 
-    A no-op while a rider's own pick is in place: `match_locked` with a
-    route still attached means they chose that route, and asking for a
-    rematch is not a reason to discard it.
+    A no-op if the rider has already picked or cleared the match by hand -
+    see match_activity_to_route's own match_locked check, which this relies
+    on rather than duplicating.
 
-    It is NOT a no-op when the flag is set but no route is attached, and
-    that case is why this endpoint touches the flag at all. A route can be
-    deleted out from under a manual pick: the FK nulls `route_id`, and the
-    lock stays, which is correct in itself - but it leaves the ride
-    permanently invisible to every future auto-match pass, including this
-    endpoint, with the frontend rendering it exactly like a ride that was
-    simply never matched. The rider never said "no route for this ride";
-    the route they picked vanished. Pressing Rematch is them asking, in as
-    many words, for the guess to be made again.
+    KNOWN LIMITATION, deliberately left in place. Deleting a route that a
+    rider picked by hand nulls `route_id` through the FK and leaves
+    `match_locked` set, so the ride becomes invisible to every auto-match
+    pass, including this one, with no way back but picking a route again.
 
-    (`route_id IS NULL` with the flag set also covers a deliberate clear.
-    Re-deriving there is the same answer: the rider pressed the button.)
+    A conditional unlock here was tried and reverted, because all three of
+    its premises were wrong. It justified itself as "the rider pressed
+    Rematch", and nothing in the frontend calls this endpoint at all. It
+    could not tell an orphaned lock from a deliberate clear - one flag, two
+    causes - so it also undid "stop guessing", which docs/architecture.md
+    documents as a supported decision. And the unlock was a plain
+    read-then-write on the very flag round 6 moved into an atomic UPDATE
+    predicate, so a manual pick landing in the window was un-locked and then
+    erased outright by the clear_if_unmatched pass that followed.
 
-    The two states are indistinguishable in the schema - one flag, two
-    causes - which is the same shape as the bug round 8 fixed in a return
-    value. Telling them apart properly would need a column and a migration;
-    keying on "is there a pick to protect" needs neither and removes the
-    stuck state, so that is what this does.
+    Fixing it properly means distinguishing the two states (a column and a
+    migration) and giving the rider a way to reach this endpoint. Both are
+    design decisions, not races, and neither belongs in a review fix.
     """
     activity = await _owned(activity_id, db, user.id)
-    if activity.match_locked and activity.route_id is None:
-        activity.match_locked = False
-        await db.commit()
     await match_activity_to_route(activity.id, clear_if_unmatched=True)
     activity = await reload_or_404(db, activity, "Activity not found")
     return await _detail(activity, db)

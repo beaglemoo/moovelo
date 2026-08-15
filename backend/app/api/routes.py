@@ -329,6 +329,26 @@ async def route_activities(
     ride_time = await _ride_time_for(route, db, user.id)
     predicted_time_s = ride_time[-1].time_s if ride_time else None
 
+    # Re-checked here, not only by get_owned_route above. _ride_time_for
+    # awaits a settings read in between, and a DELETE landing in that window
+    # leaves this answering 200 with an empty `activities` list - which reads
+    # as "no rides have matched this route yet" - beside a predicted_time_s
+    # computed from the deleted route's own elevation. The rides did not
+    # vanish; activities.route_id is ON DELETE SET NULL, so they were
+    # unlinked, and a rider's manually locked match is exactly what gets
+    # silently dropped from the answer.
+    #
+    # Same lesson as _detail in api/activities.py: a liveness fact does not
+    # survive the next await, so the check belongs at the last read.
+    #
+    # Via reload_or_404, not a bare db.get. A plain get is served from the
+    # session's identity map and never reaches the database, so it happily
+    # returns the route this request loaded moments ago and reports a
+    # deleted row as present - written that way first, and the test below
+    # failed with a 200 until it was corrected. populate_existing=True,
+    # which the helper already passes, is what forces the re-read.
+    route = await reload_or_404(db, route, "Route not found")
+
     ordering = func.coalesce(Activity.started_at, Activity.created_at)
     rows = (
         (
