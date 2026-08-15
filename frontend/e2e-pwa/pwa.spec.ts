@@ -185,60 +185,75 @@ test.describe('mobile PWA', () => {
 	test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
 	test('uses a crisp map-paper header in light and dark themes', async ({ page }) => {
-		await page.addInitScript(() => localStorage.setItem('moovelo:theme', 'dark'));
 		await mockAuthenticatedPlanner(page);
 		await page.goto('/');
 
-		const nav = page.locator('nav');
-		const menuButton = page.getByRole('button', { name: 'Menu' });
-		await expect(nav).toBeVisible();
-		await expect(menuButton).toBeVisible();
-		const closed = await page.evaluate(() => {
-			const navStyle = getComputedStyle(document.querySelector('nav')!);
-			const menuStyle = getComputedStyle(document.querySelector('.mobile-menu-toggle')!);
-			return {
-				navHeight: document.querySelector('nav')!.getBoundingClientRect().height,
-				navBackground: navStyle.backgroundColor,
-				navColor: navStyle.color,
-				navFilter: navStyle.filter,
-				navBackdropFilter: navStyle.backdropFilter,
-				navBoxShadow: navStyle.boxShadow,
-				menuHeight: document.querySelector('.mobile-menu-toggle')!.getBoundingClientRect().height,
-				menuBackground: menuStyle.backgroundColor,
-				menuColor: menuStyle.color,
-				menuBorder: menuStyle.borderColor
-			};
-		});
-		expect(closed).toEqual({
-			navHeight: 44,
-			navBackground: 'rgb(238, 232, 213)',
-			navColor: 'rgb(7, 54, 66)',
-			navFilter: 'none',
-			navBackdropFilter: 'none',
-			navBoxShadow: 'none',
-			menuHeight: 44,
-			menuBackground: 'rgba(0, 0, 0, 0)',
-			menuColor: 'rgb(7, 54, 66)',
-			menuBorder: 'rgb(38, 139, 210)'
-		});
+		for (const theme of ['light', 'dark']) {
+			await page.evaluate((value) => localStorage.setItem('moovelo:theme', value), theme);
+			await page.reload();
 
-		await menuButton.focus();
-		const focus = await menuButton.evaluate((button) => {
-			const style = getComputedStyle(button);
-			return { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor };
-		});
-		expect(focus).toEqual({ style: 'solid', width: '3px', color: 'rgb(38, 139, 210)' });
+			const nav = page.locator('nav');
+			const menuButton = page.getByRole('button', { name: 'Menu' });
+			await expect(nav).toBeVisible();
+			await expect(menuButton).toBeVisible();
+			const closed = await page.evaluate(() => {
+				const navStyle = getComputedStyle(document.querySelector('nav')!);
+				const menuStyle = getComputedStyle(document.querySelector('.mobile-menu-toggle')!);
+				return {
+					navHeight: document.querySelector('nav')!.getBoundingClientRect().height,
+					navBackground: navStyle.backgroundColor,
+					navColor: navStyle.color,
+					navFilter: navStyle.filter,
+					navBackdropFilter: navStyle.backdropFilter,
+					navWebkitBackdropFilter: navStyle.getPropertyValue('-webkit-backdrop-filter') || 'none',
+					navBoxShadow: navStyle.boxShadow,
+					navDivider: `${navStyle.borderBottomWidth} ${navStyle.borderBottomStyle} ${navStyle.borderBottomColor}`,
+					menuHeight: document.querySelector('.mobile-menu-toggle')!.getBoundingClientRect().height,
+					menuBackground: menuStyle.backgroundColor,
+					menuColor: menuStyle.color,
+					menuBorder: menuStyle.borderColor
+				};
+			});
+			expect(closed, theme).toEqual({
+				navHeight: 44,
+				navBackground: 'rgb(238, 232, 213)',
+				navColor: 'rgb(7, 54, 66)',
+				navFilter: 'none',
+				navBackdropFilter: 'none',
+				navWebkitBackdropFilter: 'none',
+				navBoxShadow: 'none',
+				navDivider: '1px solid rgb(147, 161, 161)',
+				menuHeight: 44,
+				menuBackground: 'rgba(0, 0, 0, 0)',
+				menuColor: 'rgb(7, 54, 66)',
+				menuBorder: 'rgb(38, 139, 210)'
+			});
 
-		await page.keyboard.press('Enter');
-		await expect(menuButton).toHaveAttribute('aria-expanded', 'true');
-		const expanded = await menuButton.evaluate((button) => {
-			const style = getComputedStyle(button);
-			return { background: style.backgroundColor, color: style.color };
-		});
-		expect(expanded).toEqual({ background: 'rgb(26, 111, 176)', color: 'rgb(255, 255, 255)' });
-		const menuBox = await page.locator('.mobile-menu').boundingBox();
-		expect(menuBox).not.toBeNull();
-		expect(menuBox!.y).toBe(44);
+			await menuButton.focus();
+			const focus = await menuButton.evaluate((button) => {
+				const style = getComputedStyle(button);
+				return { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor };
+			});
+			expect(focus, theme).toEqual({
+				style: 'solid',
+				width: '3px',
+				color: 'rgb(38, 139, 210)'
+			});
+
+			await page.keyboard.press('Enter');
+			await expect(menuButton).toHaveAttribute('aria-expanded', 'true');
+			const expanded = await menuButton.evaluate((button) => {
+				const style = getComputedStyle(button);
+				return { background: style.backgroundColor, color: style.color };
+			});
+			expect(expanded, theme).toEqual({
+				background: 'rgb(26, 111, 176)',
+				color: 'rgb(255, 255, 255)'
+			});
+			const menuBox = await page.locator('.mobile-menu').boundingBox();
+			expect(menuBox).not.toBeNull();
+			expect(menuBox!.y).toBe(44);
+		}
 	});
 
 	test('shows, dismisses and persists the planner guide without startup flash', async ({
@@ -427,6 +442,65 @@ test.describe('mobile PWA', () => {
 		await expect(page.locator('.planner-guide')).toBeVisible();
 	});
 
+	test('does not show an older search response during the next query debounce', async ({
+		page
+	}) => {
+		await mockAuthenticatedPlanner(page, { search_enabled: true });
+		let releaseOld!: () => void;
+		const oldReleased = new Promise<void>((resolve) => (releaseOld = resolve));
+		let oldRequested!: () => void;
+		const oldRequestSeen = new Promise<void>((resolve) => (oldRequested = resolve));
+		await page.route('**/api/places/search?**', async (route) => {
+			const term = new URL(route.request().url()).searchParams.get('q');
+			if (term === 'Tr') {
+				oldRequested();
+				await oldReleased;
+				await route.fulfill({
+					json: [
+						{
+							id: 1,
+							name: 'Old Tr result',
+							place_type: 'town',
+							lat: 51.794,
+							lon: -0.66,
+							distance_m: 1
+						}
+					]
+				});
+				return;
+			}
+			await route.fulfill({
+				json: [
+					{
+						id: 2,
+						name: 'Current Tring result',
+						place_type: 'town',
+						lat: 51.795,
+						lon: -0.65,
+						distance_m: 2
+					}
+				]
+			});
+		});
+		await page.goto('/');
+		const search = page.getByPlaceholder('Search for a place');
+		await search.fill('Tr');
+		await oldRequestSeen;
+		await search.fill('Tring');
+		releaseOld();
+
+		// The old response lands inside the replacement query's debounce
+		// window. It must remain cancelled instead of reopening stale actions
+		// for text that is no longer in the input.
+		await page.waitForTimeout(100);
+		await expect(page.getByText('Old Tr result', { exact: true })).toHaveCount(0);
+		await expect(page.locator('.results')).toHaveCount(0);
+		await expect(page.locator('.planner-guide')).toBeVisible();
+
+		await expect(page.getByText('Current Tring result', { exact: true })).toBeVisible();
+		await expect(page.getByText('Old Tr result', { exact: true })).toHaveCount(0);
+	});
+
 	test('never flashes the first-run guide while a saved route is loading', async ({ page }) => {
 		await page.addInitScript(() => {
 			const state = window as typeof window & { plannerGuideWasRendered?: boolean };
@@ -492,13 +566,16 @@ test.describe('mobile PWA', () => {
 		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
 		await expect(page.locator('.planner-guide')).toHaveCount(0);
 
-		const box = await canvas.boundingBox();
-		expect(box).not.toBeNull();
-		await page.mouse.click(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5, {
-			button: 'right'
-		});
-		await page.getByRole('menuitem', { name: 'Avoid this road' }).click();
-		await expect(page.locator('.avoid-chip')).toHaveCount(1);
+		for (const index of [0, 1, 2]) {
+			const box = await canvas.boundingBox();
+			expect(box).not.toBeNull();
+			await page.mouse.click(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5, {
+				button: 'right'
+			});
+			await page.getByRole('menuitem', { name: 'Avoid this road' }).click();
+			await expect(page.locator('.avoid-chip')).toHaveCount(index + 1);
+			await expect(page.locator('.banner')).toHaveCount(0);
+		}
 
 		await page.getByRole('button', { name: 'Remove waypoint 1' }).click();
 		await expect(page.locator('.maplibregl-marker')).toHaveCount(1);
@@ -511,11 +588,24 @@ test.describe('mobile PWA', () => {
 			{ width: 844, height: 390 }
 		]) {
 			await page.setViewportSize(viewport);
+			const guide = page.locator('.planner-guide');
+			await expectNoOverlap(guide, page.locator('.avoids'), `${viewport.width}: avoid chips`);
+			await expectNoOverlap(guide, page.locator('.toolbar'), `${viewport.width}: toolbar`);
+			await expectNoOverlap(guide, page.locator('.search-bar'), `${viewport.width}: search`);
 			await expectNoOverlap(
-				page.locator('.planner-guide'),
-				page.locator('.avoids'),
-				`${viewport.width}: avoid chips`
+				guide,
+				page.locator('.maplibregl-ctrl-top-right'),
+				`${viewport.width}: zoom controls`
 			);
+			await expectNoOverlap(guide, page.locator('.basemap-switch'), `${viewport.width}: basemap`);
+			await expectNoOverlap(guide, page.locator('.assistant-pill'), `${viewport.width}: assistant`);
+			const dimensions = await page.evaluate(() => ({
+				clientWidth: document.documentElement.clientWidth,
+				scrollWidth: document.documentElement.scrollWidth,
+				bodyScrollWidth: document.body.scrollWidth
+			}));
+			expect(dimensions.scrollWidth).toBe(dimensions.clientWidth);
+			expect(dimensions.bodyScrollWidth).toBe(dimensions.clientWidth);
 		}
 	});
 
@@ -556,6 +646,12 @@ test.describe('mobile PWA', () => {
 	});
 
 	test('keeps the collapsed assistant compact and edge-anchored on mobile', async ({ page }) => {
+		await page.addInitScript(() =>
+			localStorage.setItem(
+				'moovelo:assistant-box',
+				JSON.stringify({ collapsed: true, left: 1400, top: 100 })
+			)
+		);
 		await mockAuthenticatedPlanner(page, { assistant_enabled: true });
 		await page.route('**/api/routes/planned', (route) =>
 			route.fulfill({ json: savedRoute('planned') })
@@ -589,7 +685,67 @@ test.describe('mobile PWA', () => {
 				page.locator('.basemap-switch'),
 				`${viewport.width}: basemap`
 			);
+
+			await button.tap();
+			const expanded = page.locator('.assistant:not(.collapsed)');
+			const close = expanded.getByRole('button', { name: 'Collapse the assistant' });
+			await expect(expanded).toBeVisible();
+			await expect(
+				expanded.getByRole('textbox', { name: 'Ask the route assistant' })
+			).toBeVisible();
+			const expandedBox = await expanded.boundingBox();
+			const closeBox = await close.boundingBox();
+			expect(expandedBox).not.toBeNull();
+			expect(closeBox).not.toBeNull();
+			expect(expandedBox!.x).toBeGreaterThanOrEqual(mapBox!.x);
+			expect(expandedBox!.x + expandedBox!.width).toBeLessThanOrEqual(mapBox!.x + mapBox!.width);
+			expect(closeBox!.width).toBeGreaterThanOrEqual(44);
+			expect(closeBox!.height).toBeGreaterThanOrEqual(44);
+			const closeOwnsCentre = await close.evaluate((element) => {
+				const rect = element.getBoundingClientRect();
+				return (
+					document
+						.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+						?.closest('button') === element
+				);
+			});
+			expect(closeOwnsCentre, `${viewport.width}: collapse target should sit above toolbar`).toBe(
+				true
+			);
+			const dimensions = await page.evaluate(() => ({
+				clientWidth: document.documentElement.clientWidth,
+				scrollWidth: document.documentElement.scrollWidth,
+				bodyScrollWidth: document.body.scrollWidth
+			}));
+			expect(dimensions.scrollWidth).toBe(dimensions.clientWidth);
+			expect(dimensions.bodyScrollWidth).toBe(dimensions.clientWidth);
+			await close.tap();
+			await expect(page.locator('.assistant.collapsed')).toBeVisible();
 		}
+	});
+
+	test('keeps the expanded assistant onscreen after a desktop drag', async ({ page }) => {
+		await page.setViewportSize({ width: 844, height: 390 });
+		await page.addInitScript(() =>
+			localStorage.setItem(
+				'moovelo:assistant-box',
+				JSON.stringify({ collapsed: true, left: 1400, top: 100 })
+			)
+		);
+		await mockAuthenticatedPlanner(page, { assistant_enabled: true });
+		await page.route('**/api/routes/planned', (route) =>
+			route.fulfill({ json: savedRoute('planned') })
+		);
+		await page.goto('/?route=planned');
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+		await page.getByRole('button', { name: 'Ask for a route' }).tap();
+
+		const mapBox = await page.locator('.map-area').boundingBox();
+		const assistantBox = await page.locator('.assistant:not(.collapsed)').boundingBox();
+		expect(mapBox).not.toBeNull();
+		expect(assistantBox).not.toBeNull();
+		expect(assistantBox!.x).toBeGreaterThanOrEqual(mapBox!.x);
+		expect(assistantBox!.x + assistantBox!.width).toBeLessThanOrEqual(mapBox!.x + mapBox!.width);
 	});
 
 	test('contains scrolling and keeps both control rows touchable', async ({ page }) => {
@@ -758,7 +914,13 @@ test.describe('mobile PWA', () => {
 
 test('desktop navigation and ordinary-page scrolling remain unchanged', async ({ page }) => {
 	await page.setViewportSize({ width: 1024, height: 720 });
-	await mockAuthenticatedPlanner(page);
+	await page.addInitScript(() =>
+		localStorage.setItem(
+			'moovelo:assistant-box',
+			JSON.stringify({ collapsed: true, left: 120, top: 100 })
+		)
+	);
+	await mockAuthenticatedPlanner(page, { assistant_enabled: true });
 	await page.route('**/api/routes/tags', (route) => route.fulfill({ json: [] }));
 	await page.route('**/api/routes', (route) => route.fulfill({ json: [] }));
 	await page.goto('/');
@@ -767,6 +929,14 @@ test('desktop navigation and ordinary-page scrolling remain unchanged', async ({
 	await expect(page.locator('.desktop-nav')).toBeVisible();
 	await expect(page.locator('.mobile-menu-toggle')).toBeHidden();
 	await expect(page.locator('.planner-guide')).toBeVisible();
+	const desktopAssistant = page.locator('.assistant.collapsed');
+	const desktopAssistantButton = desktopAssistant.getByRole('button', { name: 'Ask for a route' });
+	await expect(desktopAssistantButton.locator('.assistant-pill-long')).toBeVisible();
+	await expect(desktopAssistantButton.locator('.assistant-pill-short')).toBeHidden();
+	expect(
+		await desktopAssistantButton.evaluate((element) => (element as HTMLElement).innerText.trim())
+	).toBe('Ask for a route');
+	expect((await desktopAssistant.boundingBox())?.x).toBe(120);
 	await expectNoOverlap(
 		page.locator('.planner-guide'),
 		page.locator('.toolbar'),
@@ -784,6 +954,9 @@ test('desktop navigation and ordinary-page scrolling remain unchanged', async ({
 	await expect(page.locator('.desktop-nav')).toBeVisible();
 	await expect(page.locator('.mobile-menu-toggle')).toBeHidden();
 	expect(await nav.evaluate((element) => element.getBoundingClientRect().height)).toBe(42);
+	await expect(desktopAssistantButton.locator('.assistant-pill-long')).toBeVisible();
+	await expect(desktopAssistantButton.locator('.assistant-pill-short')).toBeHidden();
+	expect((await desktopAssistant.boundingBox())?.x).toBe(120);
 
 	await page.locator('.desktop-nav').getByRole('link', { name: 'Library' }).click();
 	await expect(page).toHaveURL(/\/library$/);
