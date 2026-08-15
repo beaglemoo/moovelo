@@ -440,10 +440,10 @@
 
 <style>
 	/* Bottom-right is the only corner nothing else claims: the left column is
-	   the toolbar, search bar and avoid chips top to bottom; top-right is the
-	   loop/alternates cards and MapLibre's own zoom stack; bottom-left is the
-	   basemap switch and cycle-route toggle; bottom-centre is the hint/error
-	   banner. z-index 8 sits above the toolbar tier (5-6) and below the
+	   the toolbar, search bar, avoid chips and planner guide top to bottom;
+	   top-right is the loop/alternates cards and MapLibre's own zoom stack;
+	   bottom-left is the basemap switch and cycle-route toggle; bottom-centre
+	   is the error banner. z-index 8 sits above the toolbar tier (5-6) and below the
 	   context menu and preset popover (10) and the save dialog (20). */
 	.assistant {
 		position: absolute;
@@ -508,17 +508,10 @@
 	   and this card were in one tree: each was built against a map the other
 	   had not touched yet.
 
-	   Below THAT, +page.svelte's own .hint ("Click the map to add
-	   waypoints...") sits centred at bottom: 18px and, with no route planned
-	   yet, is on screen at the exact same moment as this pill's default
-	   collapsed state - the two are the very first thing a new rider sees.
-	   .hint has no max-width, so on a narrow phone its text wraps to two or
-	   three lines and grows to 65-85px tall; bottom: 68px left only a sliver
-	   of that covered before the pill's own box started, and measuring both
-	   boxes at real phone widths (360-428px) confirmed they overlapped at
-	   every one of them. 120px clears a three-line .hint (bottom 18 to
-	   ~102px) with room to spare, and still sits well clear of the map
-	   control row's own 58px ceiling. */
+	   The planner guide moved into the measured top stack in v0.9.3. Keep the
+	   established 120px assistant position rather than moving another control
+	   during that polish pass; it remains well clear of the map control row's
+	   58px ceiling and avoids changing an installed rider's learned target. */
 	@media (max-width: 760px) {
 		.assistant {
 			left: 10px !important;

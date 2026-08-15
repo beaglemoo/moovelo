@@ -68,6 +68,7 @@
 	// for this mounted app session.
 	let plannerGuideReady = $state(false);
 	let plannerGuideDismissed = $state(false);
+	let searchResultsOpen = $state(false);
 	onMount(() => {
 		plannerGuideDismissed = sessionPlannerGuideDismissed;
 		try {
@@ -1552,7 +1553,11 @@
 		{/if}
 		{#if config?.search_enabled}
 			<div class="search-bar" bind:this={searchBarEl} style="top: {searchBarTop}px">
-				<PlaceSearch near={mapCentre} onPick={pickPlace} />
+				<PlaceSearch
+					near={mapCentre}
+					onPick={pickPlace}
+					onOpenChange={(open) => (searchResultsOpen = open)}
+				/>
 			</div>
 		{/if}
 		{#if loopOrigin}
@@ -1760,7 +1765,7 @@
 				</form>
 			</div>
 		{/if}
-		{#if plannerGuideReady && !plannerGuideDismissed && waypoints.length < 2}
+		{#if plannerGuideReady && !plannerGuideDismissed && !searchResultsOpen && waypoints.length < 2}
 			<div
 				class="planner-guide"
 				role="note"

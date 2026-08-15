@@ -8,9 +8,12 @@
 		 * looking at. Many English places share a name. */
 		near: { lat: number; lon: number } | null;
 		onPick: (place: PlaceResult, action: 'from' | 'add' | 'to') => void;
+		/** Lets the planner yield its guide while this absolute dropdown is
+		 * open, rather than placing another card over the result actions. */
+		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { near, onPick }: Props = $props();
+	let { near, onPick, onOpenChange }: Props = $props();
 
 	// Two characters is the server's minimum too; sending one would only
 	// earn a 422.
@@ -23,6 +26,8 @@
 	let active = $state(-1);
 	let searching = $state(false);
 	let failed = $state(false);
+
+	$effect(() => onOpenChange?.(open));
 
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let inflight: AbortController | null = null;

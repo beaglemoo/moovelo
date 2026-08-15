@@ -572,7 +572,7 @@
 		}
 		.mobile-menu {
 			position: absolute;
-			top: 100%;
+			top: 44px;
 			left: 0.5rem;
 			right: 0.5rem;
 			display: flex;
