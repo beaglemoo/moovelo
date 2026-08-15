@@ -63,6 +63,13 @@
 		inflight?.abort();
 		inflight = null;
 		searching = false;
+		// A completed result belongs to the text that produced it. Clear it
+		// immediately while the replacement debounce is pending so Enter (or a
+		// fast tap) cannot choose stale coordinates under the new query.
+		results = [];
+		active = -1;
+		open = false;
+		failed = false;
 		timer = setTimeout(() => {
 			timer = null;
 			void run(term);
