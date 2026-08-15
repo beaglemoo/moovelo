@@ -395,6 +395,46 @@ test.describe('mobile PWA', () => {
 		expect(await page.evaluate((key) => localStorage.getItem(key), GUIDE_STORAGE_KEY)).toBeNull();
 	});
 
+	test('stacks the guide below avoid chips when a loaded route loses an endpoint', async ({
+		page
+	}) => {
+		await mockAuthenticatedPlanner(page, { search_enabled: true, assistant_enabled: true });
+		await page.route('**/api/routes/planned', (route) =>
+			route.fulfill({ json: savedRoute('planned') })
+		);
+		await page.route('**/api/route', (route) => route.fulfill({ json: savedRoute('planned') }));
+		await page.goto('/?route=planned');
+		const canvas = await waitForMap(page);
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+		await expect(page.locator('.planner-guide')).toHaveCount(0);
+
+		const box = await canvas.boundingBox();
+		expect(box).not.toBeNull();
+		await page.mouse.click(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5, {
+			button: 'right'
+		});
+		await page.getByRole('menuitem', { name: 'Avoid this road' }).click();
+		await expect(page.locator('.avoid-chip')).toHaveCount(1);
+
+		await page.getByRole('button', { name: 'Remove waypoint 1' }).click();
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(1);
+		await expect(page.locator('.planner-guide')).toBeVisible();
+		expect(await page.evaluate((key) => localStorage.getItem(key), GUIDE_STORAGE_KEY)).toBeNull();
+
+		for (const viewport of [
+			{ width: 320, height: 568 },
+			{ width: 390, height: 844 },
+			{ width: 844, height: 390 }
+		]) {
+			await page.setViewportSize(viewport);
+			await expectNoOverlap(
+				page.locator('.planner-guide'),
+				page.locator('.avoids'),
+				`${viewport.width}: avoid chips`
+			);
+		}
+	});
+
 	test('keeps the guide clear of every top and bottom overlay at phone sizes', async ({ page }) => {
 		await mockAuthenticatedPlanner(page, { search_enabled: true, assistant_enabled: true });
 		await page.route('**/api/routes/missing', (route) =>
