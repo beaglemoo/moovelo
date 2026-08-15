@@ -83,6 +83,10 @@ jobs:
       - run: npm run check
       - run: npm run lint
       - run: npm run build
+      # Service workers do not exist under vite dev. Run the PWA suite against
+      # its production preview so mobile-shell and offline regressions gate PRs.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e:pwa
 
   scripts:
     runs-on: ubuntu-latest
