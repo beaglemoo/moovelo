@@ -91,14 +91,15 @@ type ClientPoint = { x: number; y: number };
 
 async function dispatchWebKitTouch(
 	target: Locator,
-	type: 'touchstart' | 'touchmove' | 'touchend',
+	type: 'touchstart' | 'touchmove' | 'touchend' | 'touchcancel',
 	point: ClientPoint
 ) {
 	await target.evaluate(
 		(element, { type, point }) => {
 			const touch = document.createTouch(window, element, 1, point.x, point.y);
 			const changedTouches = document.createTouchList(touch);
-			const activeTouches = type === 'touchend' ? document.createTouchList() : changedTouches;
+			const activeTouches =
+				type === 'touchend' || type === 'touchcancel' ? document.createTouchList() : changedTouches;
 			element.dispatchEvent(
 				new TouchEvent(type, {
 					bubbles: true,
@@ -110,6 +111,33 @@ async function dispatchWebKitTouch(
 			);
 		},
 		{ type, point }
+	);
+}
+
+async function dispatchWebKitMultiTouch(
+	target: Locator,
+	type: 'touchmove' | 'touchend',
+	points: [ClientPoint, ClientPoint]
+) {
+	await target.evaluate(
+		(element, { type, points }) => {
+			const changedTouches = document.createTouchList(
+				...points.map((point, index) =>
+					document.createTouch(window, element, index + 1, point.x, point.y)
+				)
+			);
+			const activeTouches = type === 'touchend' ? document.createTouchList() : changedTouches;
+			element.dispatchEvent(
+				new TouchEvent(type, {
+					bubbles: true,
+					cancelable: true,
+					touches: activeTouches,
+					targetTouches: activeTouches,
+					changedTouches
+				})
+			);
+		},
+		{ type, points }
 	);
 }
 
@@ -802,6 +830,82 @@ test.describe('mobile PWA', () => {
 		);
 		await expect(page.getByRole('menuitem', { name: 'Remove waypoint' })).toBeVisible();
 		await expect(page.getByRole('menuitem', { name: 'Route from here' })).toHaveCount(0);
+	});
+
+	test('keeps touch dragging available on waypoint markers', async ({ page, browserName }) => {
+		test.skip(browserName !== 'webkit', 'WebKit exercises the iPhone touch gesture');
+		await mockAuthenticatedPlanner(page);
+		await page.route('**/api/routes/planned', (route) =>
+			route.fulfill({ json: savedRoute('planned') })
+		);
+		await page.goto('/?route=planned');
+		await waitForMap(page);
+		const marker = page.locator('.maplibregl-marker').first();
+		const before = await marker.boundingBox();
+		expect(before).not.toBeNull();
+		const start = {
+			x: before!.x + before!.width * 0.5,
+			y: before!.y + before!.height * 0.5
+		};
+		await webKitTouchGesture(page, marker, start, {
+			moveTo: { x: start.x + 40, y: start.y + 20 }
+		});
+		await expect
+			.poll(async () => {
+				const after = await marker.boundingBox();
+				return after ? Math.hypot(after.x - before!.x, after.y - before!.y) : 0;
+			})
+			.toBeGreaterThan(10);
+	});
+
+	test('cancels an active route drag when a pinch begins', async ({ page, browserName }) => {
+		test.skip(browserName !== 'webkit', 'WebKit exercises the iPhone touch gesture');
+		await mockAuthenticatedPlanner(page);
+		await page.route('**/api/routes/planned', (route) =>
+			route.fulfill({ json: savedRoute('planned') })
+		);
+		await page.goto('/?route=planned');
+		const canvas = await waitForMap(page);
+		const box = await canvas.boundingBox();
+		expect(box).not.toBeNull();
+		const start = { x: box!.x + box!.width * 0.5, y: box!.y + box!.height * 0.5 };
+		const moved = { x: start.x + 30, y: start.y };
+		await dispatchWebKitTouch(canvas, 'touchstart', start);
+		await dispatchWebKitTouch(canvas, 'touchmove', moved);
+		await dispatchWebKitMultiTouch(canvas, 'touchmove', [
+			moved,
+			{ x: moved.x + 20, y: moved.y + 20 }
+		]);
+		await dispatchWebKitMultiTouch(canvas, 'touchend', [
+			moved,
+			{ x: moved.x + 20, y: moved.y + 20 }
+		]);
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+	});
+
+	test('cancels route drag state after touchcancel', async ({ page, browserName }) => {
+		test.skip(browserName !== 'webkit', 'WebKit exercises the iPhone touch gesture');
+		await mockAuthenticatedPlanner(page);
+		await page.route('**/api/routes/planned', (route) =>
+			route.fulfill({ json: savedRoute('planned') })
+		);
+		await page.goto('/?route=planned');
+		const canvas = await waitForMap(page);
+		const box = await canvas.boundingBox();
+		expect(box).not.toBeNull();
+		const start = { x: box!.x + box!.width * 0.5, y: box!.y + box!.height * 0.5 };
+		const moved = { x: start.x + 30, y: start.y };
+		await dispatchWebKitTouch(canvas, 'touchstart', start);
+		await dispatchWebKitTouch(canvas, 'touchmove', moved);
+		await dispatchWebKitTouch(canvas, 'touchcancel', moved);
+		// A later gesture's touchend must not complete the cancelled drag. Use
+		// synthetic touch events here so this probe does not also create the
+		// normal map click that intentionally adds a waypoint.
+		await webKitTouchGesture(page, canvas, {
+			x: box!.x + box!.width * 0.2,
+			y: box!.y + box!.height * 0.2
+		});
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
 	});
 
 	test('closes a route long-press menu on the next off-origin tap', async ({
