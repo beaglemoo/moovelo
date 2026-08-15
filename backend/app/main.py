@@ -1,3 +1,4 @@
+import logging
 import mimetypes
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -7,6 +8,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm.exc import StaleDataError
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, Response
 
@@ -77,7 +79,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await app.state.valhalla.close()
 
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Moovelo", lifespan=lifespan)
+
+
+@app.exception_handler(StaleDataError)
+async def _row_deleted_during_request(request: Request, exc: Exception) -> Response:
+    """A row deleted while this request was mutating it is a 404, not a 500.
+
+    Registered once, for the whole app, on purpose. Every handler that loads
+    a row, changes an attribute and commits has this race - two tabs, a
+    rename against a delete - and SQLAlchemy's unit of work raises
+    StaleDataError from inside `commit()` when its UPDATE matches no rows.
+    Unhandled, that is a 500 for an ordinary pair of user actions.
+    Reproduced on update_route, revoke_share, set_activity_route and
+    update_preset; the same shape exists at 29 commit sites across nine
+    modules and predates the phase that found it.
+
+    This is deliberately a policy rather than a patch. Fixing it endpoint by
+    endpoint was tried and does not converge - each fix narrows a window and
+    the next review finds the residue, three rounds running - because "check
+    just before the write" can never be late enough. Answering the question
+    once, where every write already funnels through, is the only version of
+    this that stays fixed as endpoints are added.
+
+    404 rather than 409: the caller asked to change something that no longer
+    exists, and their own next read would say the same. A 409 would suggest
+    retrying, and retrying will not bring the row back.
+    """
+    logger.info("row deleted during request: %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=404, content={"detail": "Not found"})
 
 
 @app.middleware("http")

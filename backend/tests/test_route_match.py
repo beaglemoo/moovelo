@@ -1622,26 +1622,18 @@ async def test_detail_404s_when_the_row_vanishes_after_the_liveness_check(
     assert response.status_code == 404, response.text
 
 
-async def test_a_ride_orphaned_by_deleting_its_route_stays_locked(
+async def test_deleting_a_route_unlocks_the_rides_that_named_it(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    """Pins a KNOWN LIMITATION, not desired behaviour.
+    """A manual pick is a decision about a particular route, so deleting
+    that route must not leave the ride frozen.
 
-    Deleting a route a rider picked by hand nulls route_id via the FK and
-    leaves match_locked set, so the ride is invisible to every auto-match
-    pass and cannot be recovered except by picking a route again.
-
-    A conditional unlock in rematch_activity was written for this and
-    reverted: nothing in the frontend calls that endpoint, the flag cannot
-    distinguish an orphan from a deliberate "stop guessing" clear, and the
-    unlock itself was a read-then-write race on the flag round 6 had moved
-    into an atomic UPDATE. Fixing it properly needs a column, a migration
-    and a way for a rider to reach the endpoint - design decisions, not a
-    race, and out of scope for a review fix.
-
-    This test exists so the limitation is recorded and so a future change
-    to it is deliberate rather than accidental. If it starts failing
-    because someone fixed the orphan case, that is good news: replace it.
+    Before, the FK nulled route_id and left match_locked set: the ride
+    became invisible to every auto-match pass, looked in the API and the UI
+    exactly like a ride that had never matched, and could only be recovered
+    by remembering the deleted route. The BEFORE DELETE trigger on routes
+    clears the flag, because the deletion is the only place that knows this
+    is an orphan rather than a rider's "stop guessing".
     """
     await register(client, "rider@example.com")
     user_id = await _user_id(db, "rider@example.com")
@@ -1651,18 +1643,48 @@ async def test_a_ride_orphaned_by_deleting_its_route_stays_locked(
     await db.commit()
     activity_id, picked_id = activity.id, picked.id
 
-    await client.put(f"/api/activities/{activity_id}/route", json={"route_id": str(picked_id)})
+    linked = await client.put(
+        f"/api/activities/{activity_id}/route", json={"route_id": str(picked_id)}
+    )
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["match_locked"] is True
+
     assert (await client.delete(f"/api/routes/{picked_id}")).status_code == 204
 
+    freed = await client.get(f"/api/activities/{activity_id}")
+    assert freed.status_code == 200
+    assert freed.json()["route_id"] is None
+    assert freed.json()["match_locked"] is False, "the orphaned lock was not cleared"
+
+    # And it is genuinely matchable again, not merely flagged differently.
     replacement = _route(user_id, _north_leg(), RUN_LENGTH_M)
     db.add(replacement)
     await db.commit()
+    rematched = await client.post(f"/api/activities/{activity_id}/rematch")
+    assert rematched.status_code == 200, rematched.text
+    assert rematched.json()["route_id"] == str(replacement.id)
 
-    response = await client.post(f"/api/activities/{activity_id}/rematch")
 
-    assert response.status_code == 200, response.text
-    assert response.json()["route_id"] is None, "known limitation: the orphan stays unmatched"
-    assert response.json()["match_locked"] is True
+async def test_deleting_a_route_leaves_another_rides_deliberate_clear_alone(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The trigger is scoped to rides that named the deleted route. A ride
+    the rider cleared by hand has no route_id at all, so it can never match
+    the trigger's WHERE and its "stop guessing" survives - which is the
+    distinction the endpoint-level attempt could not make."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    doomed = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    cleared_ride = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([doomed, cleared_ride])
+    await db.commit()
+
+    await client.put(f"/api/activities/{cleared_ride.id}/route", json={"route_id": None})
+    assert (await client.delete(f"/api/routes/{doomed.id}")).status_code == 204
+
+    still_cleared = await client.get(f"/api/activities/{cleared_ride.id}")
+    assert still_cleared.json()["route_id"] is None
+    assert still_cleared.json()["match_locked"] is True, "a deliberate clear was undone"
 
 
 async def test_rematch_does_not_undo_a_deliberate_clear(
@@ -1752,6 +1774,77 @@ async def test_route_activities_404s_when_the_route_is_deleted_mid_request(
 
     monkeypatch.setattr("app.api.routes._ride_time_for", deleting_ride_time)
     response = await client.get(f"/api/routes/{route_id}/activities")
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+
+async def test_migration_0019_and_create_all_agree_on_the_trigger(
+    db_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """The test schema is built by Base.metadata.create_all, not Alembic, so
+    a trigger declared only in a migration does not exist here and every
+    test of it would pass against nothing. This asserts the mirror is real:
+    the trigger the tests above rely on is present, on the right table and
+    the right event.
+
+    ix_routes_geom vs idx_routes_geom is the standing reminder that the two
+    schemas drift silently when nobody diffs them.
+    """
+    async with db_factory() as session:
+        row = (
+            await session.execute(
+                text("""
+                SELECT tgname, c.relname AS table_name
+                FROM pg_trigger t
+                JOIN pg_class c ON c.oid = t.tgrelid
+                WHERE tgname = 'routes_unlock_orphaned_matches'
+                """)
+            )
+        ).first()
+
+    assert row is not None, "create_all did not build the trigger migration 0019 creates"
+    assert row.table_name == "routes"
+
+
+async def test_editing_a_route_deleted_mid_commit_404s_rather_than_500s(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two tabs: a rename racing a delete of the same route.
+
+    SQLAlchemy's unit of work raises StaleDataError from inside commit()
+    when its UPDATE matches no rows, which was an unhandled 500 for an
+    ordinary pair of user actions. Handled once for the whole app in
+    main.py rather than at each of the 29 commit sites, because "check just
+    before the write" is never late enough - the check and the write are
+    still two statements.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add(route)
+    await db.commit()
+    route_id = route.id
+
+    real_commit = AsyncSession.commit
+    raced = False
+
+    async def deleting_commit(self: AsyncSession, *a: object, **k: object) -> None:
+        nonlocal raced
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        if not raced and outer is not None and outer.f_code.co_name == "update_route":
+            raced = True
+            async with db_factory() as other:
+                await other.execute(delete(Route).where(Route.id == route_id))
+                await other.commit()
+        await real_commit(self)
+
+    monkeypatch.setattr(AsyncSession, "commit", deleting_commit)
+    response = await client.patch(f"/api/routes/{route_id}", json={"name": "Renamed"})
+    monkeypatch.undo()
 
     assert raced, "the delete never landed; the race was not reproduced"
     assert response.status_code == 404, response.text
