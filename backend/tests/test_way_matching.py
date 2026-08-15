@@ -562,3 +562,49 @@ async def test_rederive_rebuilds_coverage_from_the_survivors(
         )
         # Only the surviving ride's way, credited exactly once.
         assert {(r.way_id, r.ride_count) for r in rebuilt} == {(999, 1)}
+
+
+async def test_a_hanging_rollback_cannot_delay_the_unclaim(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round 3's finding: a rollback that HANGS rather than raises (a
+    one-sided partition - no RST ever reaches the client, and nothing in
+    the stack sets a timeout) is a different failure from round 2's dead
+    connection, and sequencing the fresh-session un-claim after the
+    rollback kept the ride stranded for as long as the hang lasted. The
+    un-claim now runs first, so it must have landed even while the
+    caller's rollback is still hanging."""
+    import asyncio
+
+    monkeypatch.setattr("app.services.way_matching.session_factory", db_factory)
+    user = await _user(db)
+    activity = await _activity(db, user)
+    act_id = activity.id
+
+    async def exploding_match_ways(self: ValhallaClient, shape: object) -> dict[int, float]:
+        raise RuntimeError("bug in matching")
+
+    hang_entered = asyncio.Event()
+
+    async def hanging_rollback(self: AsyncSession) -> None:
+        hang_entered.set()
+        await asyncio.Event().wait()  # a socket read that never returns
+
+    monkeypatch.setattr(ValhallaClient, "match_ways", exploding_match_ways)
+    monkeypatch.setattr(AsyncSession, "rollback", hanging_rollback)
+
+    task = asyncio.ensure_future(match_activity(db, ValhallaClient(base_url=BASE), activity))
+    try:
+        await asyncio.wait_for(hang_entered.wait(), timeout=5)
+        assert not task.done()  # genuinely hung in the rollback
+
+        # The un-claim must already be durable while the hang persists.
+        async with db_factory() as fresh:
+            row = (await fresh.execute(select(Activity).where(Activity.id == act_id))).scalar_one()
+            assert row.ways_matched_at is None
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
