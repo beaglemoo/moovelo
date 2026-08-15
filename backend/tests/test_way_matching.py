@@ -313,6 +313,86 @@ async def test_two_jobs_cannot_double_credit_the_same_activity(db: AsyncSession)
     assert row.ride_count == 1
 
 
+async def test_the_claim_commits_before_valhalla_work_so_the_row_lock_is_not_held(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The claim UPDATE takes the activity's row lock. The old shape - claim,
+    match, one commit at the end - held that lock across the whole Valhalla
+    round trip (up to 30s per chunk), so a concurrent DELETE, manual route
+    link or rename on that ride blocked for the duration. The claim must be
+    committed before any network work: this probe runs *inside* the Valhalla
+    call and proves both halves from a second session - the claim is already
+    visible (committed), and a write to the same row succeeds inside a 1s
+    lock_timeout instead of stalling behind the worker."""
+    from sqlalchemy import text, update
+
+    user = await _user(db)
+    activity = await _activity(db, user)
+    act_id = activity.id
+    probe_ran: list[bool] = []
+
+    async def probing_match_ways(self: ValhallaClient, shape: object) -> dict[int, float]:
+        async with db_factory() as other:
+            await other.execute(text("SET LOCAL lock_timeout = '1s'"))
+            claimed_at = await other.scalar(
+                select(Activity.ways_matched_at).where(Activity.id == act_id)
+            )
+            assert claimed_at is not None, "claim not committed before Valhalla work"
+            # The write that used to block: raises OperationalError (lock
+            # timeout) if the worker still holds the row lock.
+            await other.execute(
+                update(Activity).where(Activity.id == act_id).values(name="renamed mid-match")
+            )
+            await other.commit()
+        probe_ran.append(True)
+        return {999: 100.0}
+
+    monkeypatch.setattr(ValhallaClient, "match_ways", probing_match_ways)
+    credited = await match_activity(db, ValhallaClient(base_url=BASE), activity)
+
+    assert probe_ran == [True]  # the contention actually happened
+    assert credited == 1
+    async with db_factory() as fresh:
+        row = (await fresh.execute(select(Activity).where(Activity.id == act_id))).scalar_one()
+        # The concurrent write survived the match's own commit.
+        assert row.name == "renamed mid-match"
+        assert row.ways_matched_at is not None
+
+
+async def test_an_unexpected_failure_unclaims_so_a_backfill_can_retry(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Committing the claim before the work makes it durable before the
+    outcome is known. Valhalla failing to place a track is not this case
+    (match_ways degrades that to None and the attempt is deliberately
+    recorded); an UNEXPECTED exception is - and it must un-claim, or the
+    ride reads as attempted forever and no backfill will ever retry it."""
+
+    async def exploding_match_ways(self: ValhallaClient, shape: object) -> dict[int, float]:
+        raise RuntimeError("bug in matching")
+
+    monkeypatch.setattr(ValhallaClient, "match_ways", exploding_match_ways)
+    user = await _user(db)
+    activity = await _activity(db, user)
+
+    with pytest.raises(RuntimeError, match="bug in matching"):
+        await match_activity(db, ValhallaClient(base_url=BASE), activity)
+
+    async with db_factory() as fresh:
+        row = (await fresh.execute(select(Activity).where(Activity.id == activity.id))).scalar_one()
+        assert row.ways_matched_at is None  # un-claimed: a backfill sees it again
+        credited = (
+            (await fresh.execute(select(ActivityWay).where(ActivityWay.user_id == user.id)))
+            .scalars()
+            .all()
+        )
+        assert credited == []
+
+
 @respx.mock
 async def test_rederive_rebuilds_coverage_from_the_survivors(
     db: AsyncSession,
