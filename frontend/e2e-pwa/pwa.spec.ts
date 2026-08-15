@@ -87,6 +87,45 @@ async function expectNoOverlap(first: Locator, second: Locator, label: string) {
 	expect(overlaps, label).toBeFalsy();
 }
 
+type ClientPoint = { x: number; y: number };
+
+async function dispatchWebKitTouch(
+	target: Locator,
+	type: 'touchstart' | 'touchmove' | 'touchend',
+	point: ClientPoint
+) {
+	await target.evaluate(
+		(element, { type, point }) => {
+			const touch = document.createTouch(window, element, 1, point.x, point.y);
+			const changedTouches = document.createTouchList(touch);
+			const activeTouches = type === 'touchend' ? document.createTouchList() : changedTouches;
+			element.dispatchEvent(
+				new TouchEvent(type, {
+					bubbles: true,
+					cancelable: true,
+					touches: activeTouches,
+					targetTouches: activeTouches,
+					changedTouches
+				})
+			);
+		},
+		{ type, point }
+	);
+}
+
+async function webKitTouchGesture(
+	page: Page,
+	target: Locator,
+	start: ClientPoint,
+	options: { holdMs?: number; moveTo?: ClientPoint } = {}
+) {
+	await dispatchWebKitTouch(target, 'touchstart', start);
+	if (options.holdMs) await page.waitForTimeout(options.holdMs);
+	const end = options.moveTo ?? start;
+	if (options.moveTo) await dispatchWebKitTouch(target, 'touchmove', end);
+	await dispatchWebKitTouch(target, 'touchend', end);
+}
+
 // Runs against a production build served by `vite preview` (see
 // playwright.pwa.config.ts). A service worker only exists in a real build, so
 // none of this is meaningful against the dev server.
@@ -671,34 +710,7 @@ test.describe('mobile PWA', () => {
 			expect(box).not.toBeNull();
 			const point = { x: box!.x + box!.width * 0.5, y: box!.y + box!.height * 0.5 };
 			if (browserName === 'webkit') {
-				await canvas.evaluate((element, { x, y }) => {
-					const touch = document.createTouch(window, element, 1, x, y);
-					const touches = document.createTouchList(touch);
-					element.dispatchEvent(
-						new TouchEvent('touchstart', {
-							bubbles: true,
-							cancelable: true,
-							touches,
-							targetTouches: touches,
-							changedTouches: touches
-						})
-					);
-				}, point);
-				await page.waitForTimeout(650);
-				await canvas.evaluate((element, { x, y }) => {
-					const touch = document.createTouch(window, element, 1, x, y);
-					const noTouches = document.createTouchList();
-					const changedTouches = document.createTouchList(touch);
-					element.dispatchEvent(
-						new TouchEvent('touchend', {
-							bubbles: true,
-							cancelable: true,
-							touches: noTouches,
-							targetTouches: noTouches,
-							changedTouches
-						})
-					);
-				}, point);
+				await webKitTouchGesture(page, canvas, point, { holdMs: 650 });
 				await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
 			} else {
 				await page.mouse.click(point.x, point.y, { button: 'right' });
@@ -738,6 +750,79 @@ test.describe('mobile PWA', () => {
 			expect(dimensions.scrollWidth).toBe(dimensions.clientWidth);
 			expect(dimensions.bodyScrollWidth).toBe(dimensions.clientWidth);
 		}
+	});
+
+	test('requires deliberate movement before a route touch inserts a via', async ({
+		page,
+		browserName
+	}) => {
+		test.skip(browserName !== 'webkit', 'WebKit exercises the iPhone touch gesture');
+		await mockAuthenticatedPlanner(page);
+		await page.route('**/api/routes/planned', (route) =>
+			route.fulfill({ json: savedRoute('planned') })
+		);
+		await page.goto('/?route=planned');
+		const canvas = await waitForMap(page);
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+		const box = await canvas.boundingBox();
+		expect(box).not.toBeNull();
+		const start = { x: box!.x + box!.width * 0.5, y: box!.y + box!.height * 0.5 };
+
+		await webKitTouchGesture(page, canvas, start, { holdMs: 100 });
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+		await webKitTouchGesture(page, canvas, start, {
+			moveTo: { x: start.x + 1, y: start.y + 1 }
+		});
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+		await webKitTouchGesture(page, canvas, start, {
+			moveTo: { x: start.x + 35, y: start.y }
+		});
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(3);
+	});
+
+	test('keeps the waypoint menu on a marker long press', async ({ page, browserName }) => {
+		test.skip(browserName !== 'webkit', 'WebKit exercises the iPhone touch gesture');
+		await mockAuthenticatedPlanner(page);
+		await page.route('**/api/routes/planned', (route) =>
+			route.fulfill({ json: savedRoute('planned') })
+		);
+		await page.goto('/?route=planned');
+		await waitForMap(page);
+		const marker = page.locator('.maplibregl-marker').first();
+		const markerBox = await marker.boundingBox();
+		expect(markerBox).not.toBeNull();
+		await webKitTouchGesture(
+			page,
+			marker,
+			{
+				x: markerBox!.x + markerBox!.width * 0.5,
+				y: markerBox!.y + markerBox!.height * 0.5
+			},
+			{ holdMs: 650 }
+		);
+		await expect(page.getByRole('menuitem', { name: 'Remove waypoint' })).toBeVisible();
+		await expect(page.getByRole('menuitem', { name: 'Route from here' })).toHaveCount(0);
+	});
+
+	test('closes a route long-press menu on the next off-origin tap', async ({
+		page,
+		browserName
+	}) => {
+		test.skip(browserName !== 'webkit', 'WebKit exercises the iPhone touch gesture');
+		await mockAuthenticatedPlanner(page);
+		await page.route('**/api/routes/planned', (route) =>
+			route.fulfill({ json: savedRoute('planned') })
+		);
+		await page.goto('/?route=planned');
+		const canvas = await waitForMap(page);
+		const box = await canvas.boundingBox();
+		expect(box).not.toBeNull();
+		const routePoint = { x: box!.x + box!.width * 0.5, y: box!.y + box!.height * 0.5 };
+		await webKitTouchGesture(page, canvas, routePoint, { holdMs: 650 });
+		await expect(page.getByRole('menuitem', { name: 'Avoid this road' })).toBeVisible();
+		await page.touchscreen.tap(box!.x + box!.width * 0.2, box!.y + box!.height * 0.2);
+		await expect(page.locator('.context-menu')).toHaveCount(0);
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
 	});
 
 	test('keeps the guide clear of every top and bottom overlay at phone sizes', async ({ page }) => {
