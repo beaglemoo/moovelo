@@ -445,6 +445,14 @@ async def set_activity_route(
     activity.route_id = body.route_id
     activity.match_locked = True
     activity.match_confidence = None
+    # A rider picking a route now is picking the shape it has now, so this is
+    # not a stale link whatever it was before. Cleared here explicitly
+    # because this endpoint writes the link DIRECTLY rather than through
+    # _store_match - which is where the claim that the flag "cannot drift,
+    # because every writer of a match clears it" turned out to be false.
+    # There were two writers, and only one of them cleared it, so a fresh
+    # manual pick stayed excluded from calibration for good.
+    activity.match_stale = False
     await db.commit()
     activity = await reload_or_404(db, activity, "Activity not found")
     return await _detail(activity, db)
@@ -557,6 +565,7 @@ def _summary(activity: Activity, route_name: str | None = None) -> ActivitySumma
         route_name=route_name,
         match_confidence=activity.match_confidence if linked else None,
         match_locked=activity.match_locked,
+        match_stale=activity.match_stale,
     )
 
 

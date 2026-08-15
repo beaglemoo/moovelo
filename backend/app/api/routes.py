@@ -382,6 +382,13 @@ async def route_activities(
                 moving_time_s=a.moving_time_s,
                 distance_m=a.distance_m,
                 ascent_m=a.ascent_m,
+                # Carried, not filtered out. The ride really did happen and
+                # really is linked to this route by the rider's own choice -
+                # hiding it would lose a row they put there. What must not
+                # happen is presenting its comparison as though it still
+                # described this route, so the flag travels with it and the
+                # page says so.
+                match_stale=a.match_stale,
                 match_confidence=a.match_confidence,
             )
             for a in rows
@@ -469,11 +476,15 @@ async def _rematch_linked_activities(route_id: uuid.UUID, db: AsyncSession) -> N
     # new elevation against the old moving time suggested 60 km/h for a real
     # 26 km/h rider. Flagged rather than broken, so the rider keeps their
     # link and the derived readings decline to use it.
-    await db.execute(
-        update(Activity)
-        .where(Activity.route_id == route_id, Activity.match_locked.is_(True))
-        .values(match_stale=True)
-    )
+    # Every ride linked to this route, not only the locked ones. A locked
+    # ride is skipped by the re-derive below by design; an UNLOCKED ride past
+    # the MAX_REDERIVE cap is skipped by accident, and both end up carrying a
+    # match made against geometry that is gone. Flagging the whole set first
+    # and letting each successful re-derive clear its own row (via
+    # _store_match) means the cap can move, or a re-derive can fail, without
+    # anything being left silently wrong - the flag is cleared by success
+    # rather than set by a guess about which rows will be reached.
+    await db.execute(update(Activity).where(Activity.route_id == route_id).values(match_stale=True))
     await db.commit()
     linked = (
         (

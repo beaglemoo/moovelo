@@ -517,7 +517,11 @@ class ActivityRouteLinkRequest(BaseModel):
 class RouteActivity(BaseModel):
     """One ride matched to a route, as GET /api/routes/{id}/activities lists
     it. No geometry - the ride detail page (GET /api/activities/{id}) is
-    where a rider goes to see the trace itself."""
+    where a rider goes to see the trace itself.
+
+    `match_stale` is the one field here a reader must not ignore: it means
+    this ride was matched against geometry the route no longer has, so the
+    comparison beside it is against a road the ride never took."""
 
     id: uuid.UUID
     name: str
@@ -526,6 +530,7 @@ class RouteActivity(BaseModel):
     moving_time_s: float | None = None
     distance_m: float
     ascent_m: float
+    match_stale: bool = False
     # 0-1 bidirectional coverage score, or null for a manual link - same
     # meaning as ActivitySummary.match_confidence, see route_match.py.
     match_confidence: float | None = None

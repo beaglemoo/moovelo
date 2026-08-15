@@ -43,6 +43,7 @@ import app.services.route_match as match_route_module
 import app.services.route_match as route_match
 from app.models import Activity, Route, Session, User
 from app.schemas import RouteResponse
+from app.services.auth import hash_password
 from app.services.geo import Point, destination_point
 from app.services.route_match import (
     COVERAGE_BUFFER_M,
@@ -2026,3 +2027,107 @@ async def test_a_zero_distance_activity_produces_no_phantom_climb(
 
     assert response.status_code == 200, response.text
     assert response.json()["climbs"] == [], "a zero-distance ride produced a phantom climb"
+
+
+async def test_match_stale_reaches_the_api(client: AsyncClient, db: AsyncSession) -> None:
+    """The flag was written to the database, read by calibration, and dropped
+    on the way out - `_summary` never read the column, so every response said
+    false whatever the row held. Five separate review lenses found it, which
+    is what a column plumbed in one direction earns."""
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add(route)
+    # Committed before the activity references it: no ORM relationship is
+    # declared between the two, so SQLAlchemy cannot order the inserts and
+    # the FK fires.
+    await db.commit()
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    activity.route_id = route.id
+    activity.match_locked = True
+    activity.match_stale = True
+    db.add(activity)
+    await db.commit()
+
+    detail = await client.get(f"/api/activities/{activity.id}")
+    assert detail.json()["match_stale"] is True
+
+    listed = await client.get("/api/activities")
+    row = next(r for r in listed.json() if r["id"] == str(activity.id))
+    assert row["match_stale"] is True
+
+    # And on the surface it was built to protect.
+    planned = await client.get(f"/api/routes/{route.id}/activities")
+    assert planned.status_code == 200, planned.text
+    assert planned.json()["activities"][0]["match_stale"] is True
+
+
+async def test_a_fresh_manual_pick_clears_the_stale_flag(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """PUT .../route writes the link directly, not through _store_match.
+
+    That is where "the flag cannot drift, because every writer of a match
+    clears it" turned out to be false: there were two writers and only one
+    cleared it, so a rider re-picking a route after a re-route stayed
+    excluded from their own calibration for good.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    activity.match_stale = True
+    db.add_all([route, activity])
+    await db.commit()
+
+    response = await client.put(
+        f"/api/activities/{activity.id}/route", json={"route_id": str(route.id)}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["match_stale"] is False
+    await db.refresh(activity)
+    assert activity.match_stale is False
+
+
+async def test_a_raced_duplicate_registration_is_409_not_404(
+    client: AsyncClient,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catching IntegrityError app-wide was too broad.
+
+    register() checks the email, then inserts. Two attempts can both pass
+    the check, and the loser's flush hits the unique constraint - which the
+    blanket policy turned into "404 Not found" for somebody creating an
+    account, while the very same endpoint answers 409 for the identical
+    condition on the branch where it wins. The exception type is not the
+    discriminator; the SQLSTATE is.
+    """
+    real_flush = AsyncSession.flush
+    raced = False
+
+    async def racing_flush(self: AsyncSession, *a: object, **k: object) -> None:
+        nonlocal raced
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        if not raced and outer is not None and outer.f_code.co_name == "create_user":
+            raced = True
+            async with db_factory() as other:
+                other.add(
+                    User(
+                        email="race@example.com",
+                        password_hash=hash_password("correct-horse-9"),
+                        is_admin=False,
+                    )
+                )
+                await other.commit()
+        await real_flush(self, *a, **k)
+
+    monkeypatch.setattr(AsyncSession, "flush", racing_flush)
+    response = await client.post(
+        "/api/auth/register", json={"email": "race@example.com", "password": "correct-horse-9"}
+    )
+    monkeypatch.undo()
+
+    assert raced, "the duplicate never landed; the race was not reproduced"
+    assert response.status_code == 409, response.text
