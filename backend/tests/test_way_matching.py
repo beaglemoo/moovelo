@@ -379,6 +379,9 @@ async def test_an_unexpected_failure_unclaims_so_a_backfill_can_retry(
     durable when the failure fires discriminates 'durable claim, then
     explicitly un-claimed' from 'no claim ever existed', so a wholesale
     revert of the mechanism fails here instead of passing by accident."""
+    # The un-claim runs on a fresh session from the module-level
+    # session_factory - point it at this test's throwaway database.
+    monkeypatch.setattr("app.services.way_matching.session_factory", db_factory)
     user = await _user(db)
     activity = await _activity(db, user)
     act_id = activity.id
@@ -420,6 +423,7 @@ async def test_a_lost_commit_ack_after_a_durable_claim_still_unclaims(
     future backfill. The handler must cover the claim commit itself; the
     timestamp predicate makes the un-claim inert when the claim never
     landed and a reset when it did."""
+    monkeypatch.setattr("app.services.way_matching.session_factory", db_factory)
     user = await _user(db)
     activity = await _activity(db, user)
     act_id = activity.id
@@ -445,6 +449,59 @@ async def test_a_lost_commit_ack_after_a_durable_claim_still_unclaims(
     async with db_factory() as fresh:
         row = (await fresh.execute(select(Activity).where(Activity.id == act_id))).scalar_one()
         assert row.ways_matched_at is None  # un-claimed despite the durable claim
+
+
+async def test_a_genuinely_dead_connection_still_unclaims_on_a_fresh_session(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ack-lost test above raises at the Python level over a healthy
+    connection, and review round 2 proved that is not the same failure:
+    when the connection genuinely dies (backend killed mid-flight), the
+    handler's own db.rollback() raises, and an un-claim that shared the
+    failed session never ran - the ride stranded exactly as before the fix.
+    The un-claim therefore runs on a fresh session from session_factory.
+    This test kills the caller session's real Postgres backend (via an
+    independent raw asyncpg connection, bypassing the pool so the killer
+    cannot be handed the victim's own connection) and asserts the fresh
+    session still un-claims."""
+    import asyncpg
+    from sqlalchemy import text
+
+    monkeypatch.setattr("app.services.way_matching.session_factory", db_factory)
+    user = await _user(db)
+    activity = await _activity(db, user)
+    act_id = activity.id
+    killed: list[int] = []
+
+    async def killing_match_ways(self: ValhallaClient, shape: object) -> dict[int, float]:
+        # Hold a live connection and open transaction on the caller's
+        # session, learn its backend pid, then kill that backend for real.
+        pid = await db.scalar(text("select pg_backend_pid()"))
+        url = db.get_bind().url
+        raw = await asyncpg.connect(
+            host=url.host,
+            port=url.port,
+            user=url.username,
+            password=url.password,
+            database=url.database,
+        )
+        try:
+            assert await raw.fetchval("select pg_terminate_backend($1)", pid)
+        finally:
+            await raw.close()
+        killed.append(pid)
+        raise ConnectionResetError("connection reset (backend killed for real)")
+
+    monkeypatch.setattr(ValhallaClient, "match_ways", killing_match_ways)
+    with pytest.raises(ConnectionResetError):
+        await match_activity(db, ValhallaClient(base_url=BASE), activity)
+
+    assert len(killed) == 1  # the backend really was terminated
+    async with db_factory() as fresh:
+        row = (await fresh.execute(select(Activity).where(Activity.id == act_id))).scalar_one()
+        assert row.ways_matched_at is None  # un-claimed despite the dead session
 
 
 @respx.mock
