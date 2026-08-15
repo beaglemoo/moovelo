@@ -712,7 +712,28 @@
 		if (map && mapReady) applyBasemapDimming(map, mapDark);
 	});
 
-	let longPressFired = false;
+	const DRAG_ACTIVATION_PX = 8;
+	const LONG_PRESS_CLICK_SLOP_PX = 12;
+	const LONG_PRESS_CLICK_WINDOW_MS = 1000;
+	let longPressSequence = 0;
+	let longPressClickOrigin: { x: number; y: number; expiresAt: number } | null = null;
+
+	function pointsWithin(
+		a: { x: number; y: number },
+		b: { x: number; y: number },
+		distance: number
+	): boolean {
+		return (a.x - b.x) ** 2 + (a.y - b.y) ** 2 <= distance ** 2;
+	}
+
+	function recordLongPress(point: { x: number; y: number }) {
+		longPressSequence++;
+		longPressClickOrigin = {
+			x: point.x,
+			y: point.y,
+			expiresAt: Date.now() + LONG_PRESS_CLICK_WINDOW_MS
+		};
+	}
 
 	// One definition of "did this press land on the route line", shared by
 	// every menu-opening path so right-click and long-press can never
@@ -723,9 +744,18 @@
 
 	function setupInteractions(m: maplibregl.Map) {
 		m.on('click', (e) => {
-			if (longPressFired) {
-				longPressFired = false;
-				return;
+			if (longPressClickOrigin) {
+				const origin = longPressClickOrigin;
+				longPressClickOrigin = null;
+				// Ignore only the synthetic click generated at the end of this
+				// long-press. If WebKit does not emit one, a later deliberate tap
+				// elsewhere must still reach the normal menu-close path below.
+				if (
+					Date.now() <= origin.expiresAt &&
+					pointsWithin(e.point, origin, LONG_PRESS_CLICK_SLOP_PX)
+				) {
+					return;
+				}
 			}
 			if (menu) {
 				menu = null;
@@ -761,19 +791,22 @@
 		// Touch devices get no contextmenu on the canvas; a long-press (600ms
 		// without moving or lifting) opens the same menu.
 		let pressTimer: ReturnType<typeof setTimeout> | null = null;
+		let pressOrigin: { x: number; y: number } | null = null;
 		const cancelPress = () => {
 			if (pressTimer) {
 				clearTimeout(pressTimer);
 				pressTimer = null;
 			}
+			pressOrigin = null;
 		};
 		m.on('touchstart', (e) => {
 			cancelPress();
 			if (e.points.length !== 1) return;
 			const { point, lngLat } = e;
+			pressOrigin = { x: point.x, y: point.y };
 			pressTimer = setTimeout(() => {
 				pressTimer = null;
-				longPressFired = true;
+				recordLongPress(point);
 				const onRoute = isOnRoute(m, point);
 				menu = {
 					x: point.x,
@@ -784,7 +817,14 @@
 				};
 			}, 600);
 		});
-		m.on('touchmove', cancelPress);
+		m.on('touchmove', (e) => {
+			if (
+				e.points.length !== 1 ||
+				(pressOrigin && !pointsWithin(e.point, pressOrigin, DRAG_ACTIVATION_PX))
+			) {
+				cancelPress();
+			}
+		});
 		m.on('touchend', cancelPress);
 		m.on('touchcancel', cancelPress);
 
@@ -835,19 +875,27 @@
 		// was not an edge case.
 		const startDrag = (grab: maplibregl.LngLat, kind: 'mouse' | 'touch') => {
 			const grabIndex = nearestVertexIndex(routeLine, [grab.lng, grab.lat]);
+			const grabPoint = m.project(grab);
+			const longPressAtStart = longPressSequence;
 			// Unprojecting needs canvas-relative coordinates, and the canvas
 			// moves as the panel below it grows, so the rect is re-read per move.
 			const canvas = m.getCanvas();
 			const moveEvent = kind === 'mouse' ? 'mousemove' : 'touchmove';
 			const endEvent = kind === 'mouse' ? 'mouseup' : 'touchend';
 			let last = grab;
+			let dragActivated = false;
 			const onMove = (ev: MouseEvent | TouchEvent) => {
 				// A touchend carries no touches; a second finger means the rider
 				// is pinching, not dragging. Either way, keep the last position.
 				const point = 'touches' in ev ? (ev.touches.length === 1 ? ev.touches[0] : null) : ev;
 				if (!point) return;
 				const rect = canvas.getBoundingClientRect();
-				last = m.unproject([point.clientX - rect.left, point.clientY - rect.top]);
+				const current = { x: point.clientX - rect.left, y: point.clientY - rect.top };
+				if (!dragActivated && !pointsWithin(current, grabPoint, DRAG_ACTIVATION_PX)) {
+					dragActivated = true;
+				}
+				last = m.unproject([current.x, current.y]);
+				if (!dragActivated) return;
 				setSourceData(m, 'drag-point', pointGeoJSON([last.lng, last.lat]));
 			};
 			const onEnd = () => {
@@ -858,7 +906,11 @@
 				// map's long-press menu timer together. Once the timer wins, lifting
 				// the finger belongs to the menu gesture and must not also insert a
 				// via at the grabbed point.
-				if (kind === 'touch' && longPressFired) return;
+				if (kind === 'touch' && longPressSequence !== longPressAtStart) return;
+				// A press is not a drag. Requiring real pointer movement also keeps
+				// normal route taps and inevitable one-pixel finger jitter from
+				// inserting a phantom via. The same threshold protects mouse clicks.
+				if (!dragActivated) return;
 				// The grabbed vertex sits inside some leg; the new via goes
 				// between that leg's endpoints.
 				let leg = 0;
@@ -945,15 +997,22 @@
 			el.addEventListener(
 				'touchstart',
 				(event) => {
+					// The marker owns this gesture. Letting it bubble starts the map's
+					// parallel long-press timer, which then overwrites the marker menu
+					// with a generic canvas menu at the same instant.
+					event.stopPropagation();
 					if (event.touches.length !== 1) return;
 					const touch = event.touches[0];
 					markerTimer = setTimeout(() => {
 						markerTimer = null;
-						longPressFired = true;
 						const rect = container.getBoundingClientRect();
-						menu = {
+						const point = {
 							x: touch.clientX - rect.left,
-							y: touch.clientY - rect.top,
+							y: touch.clientY - rect.top
+						};
+						recordLongPress(point);
+						menu = {
+							...point,
 							wp,
 							waypointIndex: i,
 							onRoute: false
@@ -1021,6 +1080,9 @@
 		// that read throw instead of running the action.
 		action();
 		menu = null;
+		// A menu-item click does not bubble to MapLibre, so it cannot consume
+		// the synthetic-click guard. The gesture is complete once its action ran.
+		longPressClickOrigin = null;
 	}
 
 	// MapLibre's own keyboard handler pans and zooms with arrows and +/-,
