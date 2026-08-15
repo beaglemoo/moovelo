@@ -15,6 +15,7 @@
 	let user: UserInfo | null = $state(null);
 	let dropping = $state(false);
 	let mobileMenuOpen = $state(false);
+	let mobileMenuToggle: HTMLButtonElement | undefined = $state(undefined);
 	// True while a log-out is tearing the session down. The confirm() has been
 	// answered by then but auth.logout() is still in flight, so without this an
 	// impatient re-click (likelier on a slow connection) re-enters logout() and
@@ -30,6 +31,11 @@
 		units.load();
 		theme.load();
 		panelSize.load();
+		// Capture outside clicks before MapLibre (or any page control) sees
+		// them. The first tap dismisses the menu; it must not also add a
+		// waypoint or activate the control underneath the overlay.
+		window.addEventListener('click', handleWindowClick, true);
+		return () => window.removeEventListener('click', handleWindowClick, true);
 	});
 
 	function themeLabel(mode: 'system' | 'light' | 'dark'): string {
@@ -42,15 +48,25 @@
 		mobileMenuOpen = false;
 	}
 
+	function closeMobileMenuAndRestoreFocus() {
+		mobileMenuOpen = false;
+		mobileMenuToggle?.focus();
+	}
+
 	function handleWindowClick(event: MouseEvent) {
 		if (!mobileMenuOpen) return;
 		const target = event.target;
 		if (target instanceof Element && target.closest('.mobile-menu, .mobile-menu-toggle')) return;
+		event.preventDefault();
+		event.stopPropagation();
 		closeMobileMenu();
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') closeMobileMenu();
+		if (event.key === 'Escape' && mobileMenuOpen) {
+			event.preventDefault();
+			closeMobileMenuAndRestoreFocus();
+		}
 	}
 
 	// SvelteKit reuses this layout between pages. A menu opened on one page
@@ -192,7 +208,6 @@
 	ondragleave={onDragLeave}
 	ondrop={onDrop}
 	onbeforeunload={warnOnUnsaved}
-	onclick={handleWindowClick}
 	onkeydown={handleWindowKeydown}
 />
 
@@ -235,6 +250,7 @@
 				class="mobile-menu-toggle"
 				aria-expanded={mobileMenuOpen}
 				aria-controls="mobile-navigation"
+				bind:this={mobileMenuToggle}
 				onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
 			>
 				Menu
@@ -548,6 +564,11 @@
 			border-radius: 0 0 10px 10px;
 			background: var(--nav-bg);
 			box-shadow: 0 8px 22px var(--shadow);
+			box-sizing: border-box;
+			max-height: calc(100vh - 42px - 0.5rem);
+			max-height: calc(100dvh - 42px - 0.5rem);
+			overflow-y: auto;
+			overscroll-behavior: contain;
 		}
 		.mobile-menu-account {
 			padding: 0.35rem 0.55rem 0.5rem;
