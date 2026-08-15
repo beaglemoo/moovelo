@@ -338,8 +338,18 @@ async def route_activities(
     # unlinked, and a rider's manually locked match is exactly what gets
     # silently dropped from the answer.
     #
-    # Same lesson as _detail in api/activities.py: a liveness fact does not
-    # survive the next await, so the check belongs at the last read.
+    # Narrows the window; does NOT close it, and the first version of this
+    # comment wrongly claimed otherwise. The widest gap is the settings read
+    # inside _ride_time_for above, and this catches a delete landing there.
+    # A delete landing between this line and the Activity SELECT below still
+    # yields a 200 with an empty list - measured, not assumed.
+    #
+    # Closing it properly is not "check one await later": there is always a
+    # later read, so that is a chase with no end. It needs a single atomic
+    # read, or a decision that this benign case does not need closing. That
+    # is part of the app-wide concurrent-delete class recorded in CLAUDE.md,
+    # which reaches 29 commit sites across nine modules and predates this
+    # phase - not something to keep patching one endpoint at a time.
     #
     # Via reload_or_404, not a bare db.get. A plain get is served from the
     # session's identity map and never reaches the database, so it happily
