@@ -1,6 +1,46 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
-async function mockAuthenticatedPlanner(page: import('@playwright/test').Page) {
+const GUIDE_STORAGE_KEY = 'moovelo:planner-guide-dismissed';
+const ROUTE_LINE = '__tucB~~s`B?_glW';
+
+function savedRoute(source: 'planned' | 'imported') {
+	return {
+		id: '11111111-1111-4111-8111-111111111111',
+		name: 'PWA layout route',
+		preset: 'road',
+		costing_options: null,
+		source,
+		tags: [],
+		notes: null,
+		is_favourite: false,
+		waypoints: [
+			{ lat: 52.8, lon: -1.6 },
+			{ lat: 52.8, lon: -1.2 }
+		],
+		legs: [{ geometry: ROUTE_LINE, maneuvers: [] }],
+		distance_m: 27_000,
+		duration_s: 3600,
+		ascent_m: 100,
+		descent_m: 100,
+		elevation: [],
+		surface: null,
+		climbs: [],
+		ride_time: [],
+		updated_at: '2026-08-15T12:00:00Z',
+		wahoo: { status: 'none', error: null, route_id: null, pushed_at: null },
+		share_token: null
+	};
+}
+
+async function mockAuthenticatedPlanner(
+	page: Page,
+	config: Partial<{
+		search_enabled: boolean;
+		search_index_version: string | null;
+		weather_enabled: boolean;
+		assistant_enabled: boolean;
+	}> = {}
+) {
 	await page.route('**/api/auth/me', (route) =>
 		route.fulfill({ json: { email: 'rider@example.com', is_admin: true } })
 	);
@@ -11,7 +51,8 @@ async function mockAuthenticatedPlanner(page: import('@playwright/test').Page) {
 				search_enabled: false,
 				search_index_version: null,
 				weather_enabled: false,
-				assistant_enabled: false
+				assistant_enabled: false,
+				...config
 			}
 		})
 	);
@@ -21,6 +62,29 @@ async function mockAuthenticatedPlanner(page: import('@playwright/test').Page) {
 	await page.route('**/api/activities/heatmap-available', (route) =>
 		route.fulfill({ json: { available: false } })
 	);
+}
+
+async function waitForMap(page: Page): Promise<Locator> {
+	const canvas = page.locator('.map canvas').first();
+	await expect(canvas).toBeVisible();
+	// The canvas exists before MapLibre fires load and installs interactions.
+	await page.waitForTimeout(1500);
+	return canvas;
+}
+
+async function expectNoOverlap(first: Locator, second: Locator, label: string) {
+	await expect(first, `${label}: first control should be visible`).toBeVisible();
+	await expect(second, `${label}: second control should be visible`).toBeVisible();
+	const a = await first.boundingBox();
+	const b = await second.boundingBox();
+	expect(a, `${label}: first control should have geometry`).not.toBeNull();
+	expect(b, `${label}: second control should have geometry`).not.toBeNull();
+	const overlaps =
+		a!.x < b!.x + b!.width &&
+		a!.x + a!.width > b!.x &&
+		a!.y < b!.y + b!.height &&
+		a!.y + a!.height > b!.y;
+	expect(overlaps, label).toBeFalsy();
 }
 
 // Runs against a production build served by `vite preview` (see
@@ -119,6 +183,248 @@ test('the cache never holds /api or cross-origin requests', async ({ page }) => 
 
 test.describe('mobile PWA', () => {
 	test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+	test('uses a crisp map-paper header in light and dark themes', async ({ page }) => {
+		await page.addInitScript(() => localStorage.setItem('moovelo:theme', 'dark'));
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+
+		const nav = page.locator('nav');
+		const menuButton = page.getByRole('button', { name: 'Menu' });
+		await expect(nav).toBeVisible();
+		await expect(menuButton).toBeVisible();
+		const closed = await page.evaluate(() => {
+			const navStyle = getComputedStyle(document.querySelector('nav')!);
+			const menuStyle = getComputedStyle(document.querySelector('.mobile-menu-toggle')!);
+			return {
+				navHeight: document.querySelector('nav')!.getBoundingClientRect().height,
+				navBackground: navStyle.backgroundColor,
+				navColor: navStyle.color,
+				navFilter: navStyle.filter,
+				navBackdropFilter: navStyle.backdropFilter,
+				navBoxShadow: navStyle.boxShadow,
+				menuHeight: document.querySelector('.mobile-menu-toggle')!.getBoundingClientRect().height,
+				menuBackground: menuStyle.backgroundColor,
+				menuColor: menuStyle.color,
+				menuBorder: menuStyle.borderColor
+			};
+		});
+		expect(closed).toEqual({
+			navHeight: 44,
+			navBackground: 'rgb(238, 232, 213)',
+			navColor: 'rgb(7, 54, 66)',
+			navFilter: 'none',
+			navBackdropFilter: 'none',
+			navBoxShadow: 'none',
+			menuHeight: 44,
+			menuBackground: 'rgba(0, 0, 0, 0)',
+			menuColor: 'rgb(7, 54, 66)',
+			menuBorder: 'rgb(38, 139, 210)'
+		});
+
+		await menuButton.focus();
+		const focus = await menuButton.evaluate((button) => {
+			const style = getComputedStyle(button);
+			return { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor };
+		});
+		expect(focus).toEqual({ style: 'solid', width: '3px', color: 'rgb(38, 139, 210)' });
+
+		await page.keyboard.press('Enter');
+		await expect(menuButton).toHaveAttribute('aria-expanded', 'true');
+		const expanded = await menuButton.evaluate((button) => {
+			const style = getComputedStyle(button);
+			return { background: style.backgroundColor, color: style.color };
+		});
+		expect(expanded).toEqual({ background: 'rgb(26, 111, 176)', color: 'rgb(255, 255, 255)' });
+		const menuBox = await page.locator('.mobile-menu').boundingBox();
+		expect(menuBox).not.toBeNull();
+		expect(menuBox!.y).toBe(44);
+	});
+
+	test('shows, dismisses and persists the planner guide without startup flash', async ({
+		page
+	}) => {
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+		const guide = page.getByRole('note', { name: 'Planner guide' });
+		await expect(guide).toContainText('Add a start and finish on the map.');
+		await guide.getByRole('button', { name: 'Dismiss planner guide' }).tap();
+		await expect(guide).toBeHidden();
+		expect(await page.evaluate((key) => localStorage.getItem(key), GUIDE_STORAGE_KEY)).toBe('1');
+		await page.reload();
+		await expect(guide).toHaveCount(0);
+
+		const existing = await page.context().newPage();
+		await existing.addInitScript((key) => {
+			localStorage.setItem(key, 'true');
+			const state = window as typeof window & { plannerGuideWasRendered?: boolean };
+			state.plannerGuideWasRendered = false;
+			new MutationObserver(() => {
+				if (document.querySelector('.planner-guide')) state.plannerGuideWasRendered = true;
+			}).observe(document, { childList: true, subtree: true });
+		}, GUIDE_STORAGE_KEY);
+		await mockAuthenticatedPlanner(existing);
+		await existing.goto('/');
+		await expect(existing.locator('.planner-guide')).toHaveCount(0);
+		expect(
+			await existing.evaluate(
+				() =>
+					(window as typeof window & { plannerGuideWasRendered?: boolean }).plannerGuideWasRendered
+			)
+		).toBe(false);
+		await existing.close();
+	});
+
+	test('keeps an in-memory guide dismissal when its storage key is unavailable', async ({
+		page
+	}) => {
+		await page.addInitScript((key) => {
+			const nativeGet = Storage.prototype.getItem;
+			const nativeSet = Storage.prototype.setItem;
+			Storage.prototype.getItem = function (candidate) {
+				if (candidate === key) throw new DOMException('Storage blocked', 'SecurityError');
+				return nativeGet.call(this, candidate);
+			};
+			Storage.prototype.setItem = function (candidate, value) {
+				if (candidate === key) throw new DOMException('Storage blocked', 'SecurityError');
+				return nativeSet.call(this, candidate, value);
+			};
+		}, GUIDE_STORAGE_KEY);
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+		await page.getByRole('button', { name: 'Dismiss planner guide' }).tap();
+		await expect(page.locator('.planner-guide')).toHaveCount(0);
+
+		await page.getByRole('button', { name: 'Menu' }).tap();
+		await page.locator('.mobile-menu').getByRole('link', { name: 'Library' }).tap();
+		await page.getByRole('button', { name: 'Menu' }).tap();
+		await page.locator('.mobile-menu').getByRole('link', { name: 'Planner' }).tap();
+		await expect(page.locator('.planner-guide')).toHaveCount(0);
+	});
+
+	test('dismisses the guide after the first map waypoint', async ({ page }) => {
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+		const guide = page.locator('.planner-guide');
+		await expect(guide).toBeVisible();
+		const canvas = await waitForMap(page);
+		const box = await canvas.boundingBox();
+		expect(box).not.toBeNull();
+		await page.touchscreen.tap(box!.x + box!.width * 0.5, box!.y + box!.height * 0.55);
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(1);
+		await expect(guide).toHaveCount(0);
+		expect(await page.evaluate((key) => localStorage.getItem(key), GUIDE_STORAGE_KEY)).toBe('1');
+	});
+
+	test('dismisses the guide after adding a searched place', async ({ page }) => {
+		await mockAuthenticatedPlanner(page, { search_enabled: true });
+		await page.route('**/api/places/search?**', (route) =>
+			route.fulfill({
+				json: [
+					{
+						id: 1,
+						name: 'Tring',
+						place_type: 'town',
+						lat: 51.794,
+						lon: -0.66,
+						distance_m: 1200
+					}
+				]
+			})
+		);
+		await page.goto('/');
+		await page.getByPlaceholder('Search for a place').fill('Tring');
+		await page.getByRole('option', { name: /Tring/ }).getByRole('button', { name: /Tring/ }).tap();
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(1);
+		await expect(page.locator('.planner-guide')).toHaveCount(0);
+		expect(await page.evaluate((key) => localStorage.getItem(key), GUIDE_STORAGE_KEY)).toBe('1');
+	});
+
+	for (const action of ['Route from here', 'Route to here']) {
+		test(`dismisses the guide after the ${action.toLowerCase()} action`, async ({ page }) => {
+			await mockAuthenticatedPlanner(page);
+			await page.goto('/');
+			const canvas = await waitForMap(page);
+			const box = await canvas.boundingBox();
+			expect(box).not.toBeNull();
+			await page.mouse.click(box!.x + box!.width * 0.5, box!.y + box!.height * 0.55, {
+				button: 'right'
+			});
+			await page.getByRole('menuitem', { name: action }).click();
+			await expect(page.locator('.maplibregl-marker')).toHaveCount(1);
+			await expect(page.locator('.planner-guide')).toHaveCount(0);
+			expect(await page.evaluate((key) => localStorage.getItem(key), GUIDE_STORAGE_KEY)).toBe('1');
+		});
+	}
+
+	test('keeps the guide after a failed search that adds no waypoint', async ({ page }) => {
+		await mockAuthenticatedPlanner(page, { search_enabled: true });
+		await page.route('**/api/places/search?**', (route) =>
+			route.fulfill({ status: 503, json: { detail: 'Index unavailable' } })
+		);
+		await page.goto('/');
+		await page.getByPlaceholder('Search for a place').fill('Tring');
+		await expect(page.getByText('Search failed. Try again.')).toBeVisible();
+		await expect(page.locator('.planner-guide')).toHaveCount(0);
+		await page.getByPlaceholder('Search for a place').press('Escape');
+		await expect(page.locator('.planner-guide')).toBeVisible();
+		expect(await page.evaluate((key) => localStorage.getItem(key), GUIDE_STORAGE_KEY)).toBeNull();
+	});
+
+	test('does not persist dismissal when an imported-route edit is refused', async ({ page }) => {
+		await mockAuthenticatedPlanner(page);
+		await page.route('**/api/routes/imported', (route) =>
+			route.fulfill({ json: savedRoute('imported') })
+		);
+		await page.goto('/?route=imported');
+		const canvas = await waitForMap(page);
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+		const box = await canvas.boundingBox();
+		expect(box).not.toBeNull();
+		await page.mouse.click(box!.x + box!.width * 0.5, box!.y + box!.height * 0.3, {
+			button: 'right'
+		});
+		page.once('dialog', (dialog) => void dialog.dismiss());
+		await page.getByRole('menuitem', { name: 'Route from here' }).click();
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+		expect(await page.evaluate((key) => localStorage.getItem(key), GUIDE_STORAGE_KEY)).toBeNull();
+	});
+
+	test('keeps the guide clear of every top and bottom overlay at phone sizes', async ({ page }) => {
+		await mockAuthenticatedPlanner(page, { search_enabled: true, assistant_enabled: true });
+		await page.route('**/api/routes/missing', (route) =>
+			route.fulfill({ status: 404, json: { detail: 'Not found' } })
+		);
+		await page.goto('/?route=missing');
+		await waitForMap(page);
+		await expect(page.locator('.banner.error')).toHaveText('Could not load that route.');
+
+		for (const viewport of [
+			{ width: 320, height: 568 },
+			{ width: 390, height: 844 },
+			{ width: 844, height: 390 }
+		]) {
+			await page.setViewportSize(viewport);
+			const guide = page.locator('.planner-guide');
+			await expectNoOverlap(guide, page.locator('.toolbar'), `${viewport.width}: toolbar`);
+			await expectNoOverlap(guide, page.locator('.search-bar'), `${viewport.width}: search`);
+			await expectNoOverlap(
+				guide,
+				page.locator('.maplibregl-ctrl-top-right'),
+				`${viewport.width}: zoom controls`
+			);
+			await expectNoOverlap(guide, page.locator('.basemap-switch'), `${viewport.width}: basemap`);
+			await expectNoOverlap(guide, page.locator('.assistant-pill'), `${viewport.width}: assistant`);
+			await expectNoOverlap(guide, page.locator('.banner.error'), `${viewport.width}: error`);
+			const dimensions = await page.evaluate(() => ({
+				clientWidth: document.documentElement.clientWidth,
+				scrollWidth: document.documentElement.scrollWidth,
+				bodyScrollWidth: document.body.scrollWidth
+			}));
+			expect(dimensions.scrollWidth).toBe(dimensions.clientWidth);
+			expect(dimensions.bodyScrollWidth).toBe(dimensions.clientWidth);
+		}
+	});
 
 	test('contains scrolling and keeps both control rows touchable', async ({ page }) => {
 		await mockAuthenticatedPlanner(page);
@@ -235,7 +541,7 @@ test.describe('mobile PWA', () => {
 		const box = await logout.boundingBox();
 		expect(box).not.toBeNull();
 		expect(box!.height).toBeGreaterThanOrEqual(44);
-		expect(box!.y).toBeGreaterThanOrEqual(42);
+		expect(box!.y).toBeGreaterThanOrEqual(44);
 		expect(box!.y + box!.height).toBeLessThanOrEqual(390);
 	});
 
@@ -281,5 +587,37 @@ test.describe('mobile PWA', () => {
 
 		await expect(page).toHaveURL(/\/login$/);
 		await expect(page.locator('nav')).toHaveCount(0);
+	});
+});
+
+test('desktop navigation and ordinary-page scrolling remain unchanged', async ({ page }) => {
+	await page.setViewportSize({ width: 1024, height: 720 });
+	await mockAuthenticatedPlanner(page);
+	await page.route('**/api/routes/tags', (route) => route.fulfill({ json: [] }));
+	await page.route('**/api/routes', (route) => route.fulfill({ json: [] }));
+	await page.goto('/');
+
+	const nav = page.locator('nav');
+	await expect(page.locator('.desktop-nav')).toBeVisible();
+	await expect(page.locator('.mobile-menu-toggle')).toBeHidden();
+	const desktopStyle = await nav.evaluate((element) => {
+		const style = getComputedStyle(element);
+		return { height: element.getBoundingClientRect().height, background: style.backgroundColor };
+	});
+	expect(desktopStyle).toEqual({ height: 42, background: 'rgb(7, 54, 66)' });
+
+	await page.locator('.desktop-nav').getByRole('link', { name: 'Library' }).click();
+	await expect(page).toHaveURL(/\/library$/);
+	const mainScroll = await page.locator('main').evaluate((main) => {
+		const spacer = document.createElement('div');
+		spacer.style.height = '2000px';
+		main.append(spacer);
+		main.scrollTop = 400;
+		return { top: main.scrollTop, overflowY: getComputedStyle(main).overflowY };
+	});
+	expect(mainScroll).toEqual({ top: 400, overflowY: 'auto' });
+	expect(await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }))).toEqual({
+		x: 0,
+		y: 0
 	});
 });
