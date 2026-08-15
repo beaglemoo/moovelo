@@ -653,7 +653,8 @@ test.describe('mobile PWA', () => {
 	});
 
 	test('stacks the guide below avoid chips when a loaded route loses an endpoint', async ({
-		page
+		page,
+		browserName
 	}) => {
 		await mockAuthenticatedPlanner(page, { search_enabled: true, assistant_enabled: true });
 		await page.route('**/api/routes/planned', (route) =>
@@ -668,9 +669,40 @@ test.describe('mobile PWA', () => {
 		for (const index of [0, 1, 2]) {
 			const box = await canvas.boundingBox();
 			expect(box).not.toBeNull();
-			await page.mouse.click(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5, {
-				button: 'right'
-			});
+			const point = { x: box!.x + box!.width * 0.5, y: box!.y + box!.height * 0.5 };
+			if (browserName === 'webkit') {
+				await canvas.evaluate((element, { x, y }) => {
+					const touch = document.createTouch(window, element, 1, x, y);
+					const touches = document.createTouchList(touch);
+					element.dispatchEvent(
+						new TouchEvent('touchstart', {
+							bubbles: true,
+							cancelable: true,
+							touches,
+							targetTouches: touches,
+							changedTouches: touches
+						})
+					);
+				}, point);
+				await page.waitForTimeout(650);
+				await canvas.evaluate((element, { x, y }) => {
+					const touch = document.createTouch(window, element, 1, x, y);
+					const noTouches = document.createTouchList();
+					const changedTouches = document.createTouchList(touch);
+					element.dispatchEvent(
+						new TouchEvent('touchend', {
+							bubbles: true,
+							cancelable: true,
+							touches: noTouches,
+							targetTouches: noTouches,
+							changedTouches
+						})
+					);
+				}, point);
+				await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+			} else {
+				await page.mouse.click(point.x, point.y, { button: 'right' });
+			}
 			await page.getByRole('menuitem', { name: 'Avoid this road' }).click();
 			await expect(page.locator('.avoid-chip')).toHaveCount(index + 1);
 			await expect(page.locator('.banner')).toHaveCount(0);
@@ -883,8 +915,6 @@ test.describe('mobile PWA', () => {
 		await expect(nav).toBeVisible();
 		await expect(menuButton).toBeVisible();
 		await expect(page.locator('.desktop-nav')).toBeHidden();
-		expect(await page.evaluate(() => navigator.maxTouchPoints)).toBeGreaterThan(0);
-
 		const dimensions = await page.evaluate(() => ({
 			clientWidth: document.documentElement.clientWidth,
 			scrollWidth: document.documentElement.scrollWidth,

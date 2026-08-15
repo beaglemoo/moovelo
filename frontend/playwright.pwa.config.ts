@@ -14,6 +14,18 @@ const PORT = 4319;
 export default defineConfig({
 	testDir: 'e2e-pwa',
 	timeout: 60_000,
+	projects: [
+		{ name: 'chromium', use: { browserName: 'chromium' } },
+		{
+			name: 'webkit-ios-layout',
+			// WebKit is the iPhone layout engine. Keep service-worker lifecycle
+			// coverage in Chromium, where Playwright supports the offline reload,
+			// and run the complete mocked UI/state surface here with workers
+			// unregistered so page.route() remains authoritative after reloads.
+			grep: /mobile PWA|desktop breakpoint|desktop navigation and ordinary-page scrolling/,
+			use: { browserName: 'webkit', serviceWorkers: 'block' }
+		}
+	],
 	use: {
 		baseURL: process.env.PWA_BASE_URL ?? `http://localhost:${PORT}`
 	},
