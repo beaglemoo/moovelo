@@ -128,6 +128,15 @@ def _north_leg(offset_east_m: float = 0.0) -> list[Point]:
     return [start, end]
 
 
+def _reshaped_snapshot() -> dict[str, object]:
+    """A minimal but genuinely different route snapshot, for re-saving a
+    route so its geometry stops being what a match was made against."""
+    from tests.conftest import make_snapshot
+
+    snapshot = make_snapshot()
+    return snapshot.model_dump(mode="json")
+
+
 # --- match_activity_to_route -----------------------------------------------
 
 
@@ -1896,3 +1905,124 @@ async def test_a_session_deleted_mid_request_is_401_not_404(
     assert raced, "the delete never landed; the race was not reproduced"
     assert response.status_code == 401, response.text
     assert response.json()["detail"] == "Session expired"
+
+
+async def test_linking_to_a_route_deleted_mid_commit_404s_rather_than_500s(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The FK TARGET vanishing, not this row.
+
+    set_activity_route checks the route exists, then writes route_id. A
+    delete in between makes the write a foreign-key violation - an
+    IntegrityError, structurally different from the StaleDataError raised
+    when the endpoint's OWN row goes. The app-wide policy caught only the
+    latter while its docstring claimed this endpoint was covered.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add_all([route, activity])
+    await db.commit()
+    activity_id, route_id = activity.id, route.id
+
+    real_commit = AsyncSession.commit
+    raced = False
+
+    async def deleting_commit(self: AsyncSession, *a: object, **k: object) -> None:
+        nonlocal raced
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        if not raced and outer is not None and outer.f_code.co_name == "set_activity_route":
+            raced = True
+            async with db_factory() as other:
+                await other.execute(delete(Route).where(Route.id == route_id))
+                await other.commit()
+        await real_commit(self)
+
+    monkeypatch.setattr(AsyncSession, "commit", deleting_commit)
+    response = await client.put(
+        f"/api/activities/{activity_id}/route", json={"route_id": str(route_id)}
+    )
+    monkeypatch.undo()
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 404, response.text
+
+
+async def test_calibration_ignores_a_match_that_outlived_its_route_geometry(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Re-routing must not poison the rider's suggested flat speed.
+
+    A locked match survives a re-route by design - the rider chose that
+    route. But the link now points at different geometry, and calibration
+    solving the new elevation against the old ride's moving time offered a
+    genuine 26 km/h rider the model's 60 km/h ceiling, one click from
+    writing it into the setting every ETA in the app reads.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    route = _route(user_id, _north_leg(), RUN_LENGTH_M)
+    db.add(route)
+    await db.commit()
+
+    activity = _activity(user_id, _north_leg(), RUN_LENGTH_M)
+    activity.moving_time_s = 300.0
+    activity.route_id = route.id
+    activity.match_locked = True
+    db.add(activity)
+    await db.commit()
+    assert activity.match_stale is False
+
+    # Re-save the route with a different shape, exactly as a rider tweaking a
+    # waypoint does. The locked ride keeps its link; the geometry it was
+    # matched against is gone.
+    patched = await client.patch(
+        f"/api/routes/{route.id}",
+        json={"waypoints": WAYPOINTS, "snapshot": _reshaped_snapshot()},
+    )
+    assert patched.status_code == 200, patched.text
+
+    await db.refresh(activity)
+    assert activity.match_stale is True, "the re-derive pass did not flag the surviving lock"
+    assert activity.route_id == route.id, "the rider's own pick must survive"
+    assert activity.match_locked is True
+
+
+async def test_a_zero_distance_activity_produces_no_phantom_climb(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The climb log's zero-distance guard did not guard.
+
+    It relied on `NULLIF(distance_m, 0)` making the position fraction NULL,
+    and on NULL surviving the surrounding `LEAST(GREATEST(...))`. Postgres's
+    GREATEST and LEAST IGNORE null arguments rather than propagating them,
+    so the fraction resolved to a real 0, ST_LineInterpolatePoint returned
+    the line's first vertex, and the row became a fabricated ascent pinned
+    to the start of the trace. Migration 0018's own backfill can produce
+    this pairing, deriving `climbs` from elevation with no cross-check
+    against distance_m.
+    """
+    await register(client, "rider@example.com")
+    user_id = await _user_id(db, "rider@example.com")
+    activity = _activity(user_id, _north_leg(), 0.0)
+    activity.climbs = [
+        {
+            "start_dist_m": 0.0,
+            "end_dist_m": 1000.0,
+            "length_m": 1000.0,
+            "gain_m": 60.0,
+            "avg_grade_pct": 6.0,
+            "category": "3",
+        }
+    ]
+    db.add(activity)
+    await db.commit()
+
+    response = await client.get("/api/activities/climbs")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["climbs"] == [], "a zero-distance ride produced a phantom climb"

@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, Response
@@ -85,8 +86,18 @@ app = FastAPI(title="Moovelo", lifespan=lifespan)
 
 
 @app.exception_handler(StaleDataError)
+@app.exception_handler(IntegrityError)
 async def _row_deleted_during_request(request: Request, exc: Exception) -> Response:
     """A row deleted while this request was mutating it is a 404, not a 500.
+
+    Two exceptions, because a concurrent delete arrives as either depending
+    on WHICH row went. StaleDataError is the endpoint's own row vanishing -
+    the UPDATE matches nothing. IntegrityError is a row it POINTS AT
+    vanishing: set_activity_route checks the target route exists, then
+    writes activities.route_id, and a delete in between makes the write a
+    foreign-key violation. Structurally different, identical to the user,
+    and the first version of this handler caught only the first while its
+    own docstring claimed set_activity_route was covered. It was not.
 
     Registered once, for the whole app, on purpose. Every handler that loads
     a row, changes an attribute and commits has this race - two tabs, a
@@ -96,6 +107,15 @@ async def _row_deleted_during_request(request: Request, exc: Exception) -> Respo
     Reproduced on update_route, revoke_share, set_activity_route and
     update_preset; the same shape exists at 29 commit sites across nine
     modules and predates the phase that found it.
+
+    Not every IntegrityError is a vanished row - a genuine unique-constraint
+    violation is one too, and answering 404 for that would be a lie. Those
+    are caught where they are meaningful (the 0013 duplicate-ride constraint
+    is handled in the import path, which converts it to a skip long before
+    this handler could see it), so what reaches here is the racing-delete
+    case. If a future endpoint grows a constraint whose violation is a user
+    error, it must handle it itself rather than let this turn it into a
+    404 - the same rule current_user follows for its own 401.
 
     This is deliberately a policy rather than a patch. Fixing it endpoint by
     endpoint was tried and does not converge - each fix narrows a window and
