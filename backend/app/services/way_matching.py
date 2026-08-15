@@ -163,7 +163,7 @@ async def match_activity(
             await _record_ways(db, owner_id, way_ids)
         await db.commit()
         return len(way_ids)
-    except BaseException:  # noqa: BLE001 - CancelledError must un-claim too
+    except BaseException as exc:  # noqa: BLE001 - CancelledError must un-claim too
         # The un-claim runs FIRST, on its OWN session, with nothing of the
         # failed session's ahead of it. Round 2 proved the un-claim must not
         # share the failed session (a dead connection poisons every later
@@ -177,20 +177,26 @@ async def match_activity(
         # committed (still NULL there) the row simply does not match and no
         # lock is waited on - measured with the claim's lock held open, 2ms,
         # not assumed.
+        #
+        # asyncio.shield, from round 4: a cancellation (worker shutdown)
+        # landing DURING the un-claim's own awaits skipped its `except
+        # Exception`, stranded the ride with no log line at all, and
+        # replaced the original error with a bare CancelledError. The
+        # shield makes the un-claim a critical section: the CancelledError
+        # still propagates to the caller immediately (cancellation
+        # semantics intact - deliberately NOT a broader except, which
+        # would swallow a delivered cancellation), while the un-claim task
+        # keeps running to completion on its own.
         try:
-            async with session_factory() as recovery:
-                await recovery.execute(
-                    update(Activity)
-                    .where(Activity.id == act_id, Activity.ways_matched_at == claimed_at)
-                    .values(ways_matched_at=None)
-                )
-                await recovery.commit()
-        except Exception:
-            logger.exception(
-                "Could not un-claim activity %s after a failed match - it will read "
-                "as attempted with no coverage until a re-derive resets it",
+            await asyncio.shield(_unclaim(act_id, claimed_at))
+        except asyncio.CancelledError:
+            logger.warning(
+                "Cancelled while un-claiming activity %s - the un-claim continues "
+                "in the background. Original failure: %r",
                 act_id,
+                exc,
             )
+            raise
         # Best-effort tidy-up of the caller's session, in its own try
         # because its connection may be the very thing that failed. If this
         # hangs, the worker stalls - but that exposure is app-wide (no
@@ -202,6 +208,28 @@ async def match_activity(
         except Exception:
             logger.exception("Rollback failed after a match failure for activity %s", act_id)
         raise
+
+
+async def _unclaim(act_id: uuid.UUID, claimed_at: datetime) -> None:
+    """Reset a claim that should not stand, on a session of its own.
+
+    Never raises: a failure here is logged and the ride stays stranded as
+    attempted-forever (the documented residual), which must not mask the
+    original error the caller is already propagating."""
+    try:
+        async with session_factory() as recovery:
+            await recovery.execute(
+                update(Activity)
+                .where(Activity.id == act_id, Activity.ways_matched_at == claimed_at)
+                .values(ways_matched_at=None)
+            )
+            await recovery.commit()
+    except Exception:
+        logger.exception(
+            "Could not un-claim activity %s after a failed match - it will read "
+            "as attempted with no coverage until a re-derive resets it",
+            act_id,
+        )
 
 
 async def rederive_user_coverage(db: AsyncSession, user_id: uuid.UUID) -> None:
