@@ -30,6 +30,7 @@ import".
 import inspect
 import math
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
@@ -40,7 +41,7 @@ import app.api.activities as activities_module
 import app.api.routes as routes_module
 import app.services.route_match as match_route_module
 import app.services.route_match as route_match
-from app.models import Activity, Route, User
+from app.models import Activity, Route, Session, User
 from app.schemas import RouteResponse
 from app.services.geo import Point, destination_point
 from app.services.route_match import (
@@ -1848,3 +1849,50 @@ async def test_editing_a_route_deleted_mid_commit_404s_rather_than_500s(
 
     assert raced, "the delete never landed; the race was not reproduced"
     assert response.status_code == 404, response.text
+
+
+async def test_a_session_deleted_mid_request_is_401_not_404(
+    client: AsyncClient,
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The app-wide "deleted row means 404" policy must not swallow auth.
+
+    current_user slides the session expiry and commits on nearly every
+    authenticated request, so the same session logging out in another tab
+    raises StaleDataError from a commit that has nothing to do with the
+    endpoint's own resource. Under the blanket rule that answered 404, and
+    GET /api/routes - a list endpoint with no "not found" case at all -
+    reported that it did not exist.
+
+    A blanket policy is only safe while every layer under it means the same
+    thing by the error. This layer does not, so it answers for itself.
+    """
+    await register(client, "racer@example.com")
+    session_row = (await db.execute(select(Session))).scalars().first()
+    assert session_row is not None
+    session_row.expires_at = datetime.now(UTC) + timedelta(days=1)
+    await db.commit()
+    token_hash = session_row.token_hash
+
+    real_commit = AsyncSession.commit
+    raced = False
+
+    async def deleting_commit(self: AsyncSession, *a: object, **k: object) -> None:
+        nonlocal raced
+        outer = frame.f_back if (frame := inspect.currentframe()) else None
+        if not raced and outer is not None and outer.f_code.co_name == "current_user":
+            raced = True
+            async with db_factory() as other:
+                await other.execute(delete(Session).where(Session.token_hash == token_hash))
+                await other.commit()
+        await real_commit(self)
+
+    monkeypatch.setattr(AsyncSession, "commit", deleting_commit)
+    response = await client.get("/api/routes")
+    monkeypatch.undo()
+
+    assert raced, "the delete never landed; the race was not reproduced"
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"] == "Session expired"

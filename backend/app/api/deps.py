@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import Cookie, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.db import get_db
 from app.models import User
@@ -19,7 +20,27 @@ async def current_user(
     user = await get_session_user(db, bikegps_session)
     if user is None:
         raise HTTPException(status_code=401, detail="Session expired")
-    await db.commit()
+    try:
+        # get_session_user slides the expiry on most requests, so this commit
+        # writes the Session row on nearly every authenticated call. If that
+        # row is deleted while the request is in flight - the same session
+        # logging out in another tab - the unit of work raises StaleDataError.
+        #
+        # Caught HERE rather than left to main.py's app-wide handler, which
+        # would answer 404 "Not found". That handler is right about an
+        # endpoint's own target row and wrong about this one: nothing the
+        # caller asked for is missing, their session is, and the honest answer
+        # is 401. Left to the global rule, an ordinary GET /api/routes - a
+        # list endpoint with no "not found" case at all - reported that it did
+        # not exist, and the handler's log line named the routes collection as
+        # the row that vanished.
+        #
+        # The general form: a blanket policy is only safe while every layer
+        # under it means the same thing by the error. This layer does not, so
+        # it says so itself.
+        await db.commit()
+    except StaleDataError as exc:
+        raise HTTPException(status_code=401, detail="Session expired") from exc
     return user
 
 

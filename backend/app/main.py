@@ -108,7 +108,15 @@ async def _row_deleted_during_request(request: Request, exc: Exception) -> Respo
     exists, and their own next read would say the same. A 409 would suggest
     retrying, and retrying will not bring the row back.
     """
-    logger.info("row deleted during request: %s %s", request.method, request.url.path)
+    # Deliberately does not claim WHICH row went. The first version said
+    # "row deleted during request: GET /api/routes", which named the routes
+    # collection when the row that actually vanished was the caller's own
+    # session - a log line that sent a reader to the wrong table.
+    logger.info(
+        "a row this request was writing was deleted concurrently: %s %s",
+        request.method,
+        request.url.path,
+    )
     return JSONResponse(status_code=404, content={"detail": "Not found"})
 
 
