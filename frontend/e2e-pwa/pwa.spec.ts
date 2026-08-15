@@ -555,6 +555,43 @@ test.describe('mobile PWA', () => {
 		}
 	});
 
+	test('keeps the collapsed assistant compact and edge-anchored on mobile', async ({ page }) => {
+		await mockAuthenticatedPlanner(page, { assistant_enabled: true });
+		await page.route('**/api/routes/planned', (route) =>
+			route.fulfill({ json: savedRoute('planned') })
+		);
+		await page.goto('/?route=planned');
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+
+		for (const viewport of [
+			{ width: 320, height: 568 },
+			{ width: 390, height: 844 },
+			{ width: 844, height: 390 }
+		]) {
+			await page.setViewportSize(viewport);
+			const mapArea = page.locator('.map-area');
+			const assistant = page.locator('.assistant.collapsed');
+			const button = assistant.getByRole('button', { name: 'Ask for a route' });
+			await expect(button.locator('.assistant-pill-short')).toBeVisible();
+			await expect(button.locator('.assistant-pill-long')).toBeHidden();
+			expect(await button.evaluate((element) => (element as HTMLElement).innerText.trim())).toBe(
+				'Ask'
+			);
+			const mapBox = await mapArea.boundingBox();
+			const assistantBox = await assistant.boundingBox();
+			expect(mapBox).not.toBeNull();
+			expect(assistantBox).not.toBeNull();
+			expect(assistantBox!.width).toBeLessThanOrEqual(72);
+			expect(assistantBox!.height).toBeGreaterThanOrEqual(44);
+			expect(mapBox!.x + mapBox!.width - (assistantBox!.x + assistantBox!.width)).toBe(10);
+			await expectNoOverlap(
+				assistant,
+				page.locator('.basemap-switch'),
+				`${viewport.width}: basemap`
+			);
+		}
+	});
+
 	test('contains scrolling and keeps both control rows touchable', async ({ page }) => {
 		await mockAuthenticatedPlanner(page);
 		await page.goto('/');

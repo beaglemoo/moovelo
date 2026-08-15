@@ -358,8 +358,14 @@
 
 <div bind:this={root} class="assistant" class:collapsed style={boxStyle}>
 	{#if collapsed}
-		<button type="button" class="assistant-pill" onclick={toggleCollapsed}>
-			Ask for a route
+		<button
+			type="button"
+			class="assistant-pill"
+			onclick={toggleCollapsed}
+			aria-label="Ask for a route"
+		>
+			<span class="assistant-pill-long" aria-hidden="true">Ask for a route</span>
+			<span class="assistant-pill-short" aria-hidden="true">Ask</span>
 		</button>
 	{:else}
 		<!-- Drag by the header only: the body holds selectable text (the log,
@@ -471,6 +477,9 @@
 		color: var(--text);
 		cursor: pointer;
 	}
+	.assistant-pill-short {
+		display: none;
+	}
 	@supports not (backdrop-filter: blur(1px)) {
 		.assistant-pill {
 			background: var(--surface);
@@ -493,31 +502,38 @@
 			background: var(--surface);
 		}
 	}
-	/* No responsive breakpoint exists on any other map overlay in this
-	   codebase - they are all fixed pixel offsets - so this is the first.
-	   !important overrides the inline left/top a drag may have set: a
-	   position dragged into place on a desktop must not leak onto a phone. */
-	/* Full width on a phone, because a 22rem card floating in a 380px
-	   viewport is neither floating nor a card. Dragging is meaningless at
-	   this size, so the saved position is overridden rather than honoured.
-
-	   The bottom offset clears two things stacked below it, not one. The
-	   basemap switch and the cycle and heatmap toggles sit at bottom: 28px
-	   and stand about 30px tall - at bottom: 10px the pill lay straight
-	   across all three, which only became visible once the heatmap overlay
-	   and this card were in one tree: each was built against a map the other
-	   had not touched yet.
-
-	   The planner guide moved into the measured top stack in v0.9.3. Keep the
-	   established 120px assistant position rather than moving another control
-	   during that polish pass; it remains well clear of the map control row's
-	   58px ceiling and avoids changing an installed rider's learned target. */
+	/* The collapsed assistant is a small edge control on every mobile layout,
+	   not a full-width band across the route. The 72px bottom anchor clears the
+	   basemap/overlay row while keeping the centre of the map readable. Desktop
+	   retains the full label and the rider's saved drag position. */
+	@media (max-width: 900px) {
+		.assistant.collapsed {
+			left: auto !important;
+			right: 10px !important;
+			top: auto !important;
+			bottom: 72px !important;
+			width: auto !important;
+		}
+		.assistant-pill {
+			min-width: 44px;
+			min-height: 44px;
+			padding: 0.5rem 0.75rem;
+		}
+		.assistant-pill-long {
+			display: none;
+		}
+		.assistant-pill-short {
+			display: inline;
+		}
+	}
+	/* An expanded conversation needs the phone width. !important overrides a
+	   position dragged on desktop so that saved coordinates cannot strand it. */
 	@media (max-width: 760px) {
-		.assistant {
+		.assistant:not(.collapsed) {
 			left: 10px !important;
 			right: 10px !important;
 			top: auto !important;
-			bottom: 120px !important;
+			bottom: 72px !important;
 			width: auto !important;
 		}
 	}
