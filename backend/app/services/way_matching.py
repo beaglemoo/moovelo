@@ -187,12 +187,23 @@ async def match_activity(
         # semantics intact - deliberately NOT a broader except, which
         # would swallow a delivered cancellation), while the un-claim task
         # keeps running to completion on its own.
+        #
+        # The task is TRACKED, from round 5: a shielded task nobody awaits
+        # is an orphan, and uvicorn's shutdown (asyncio.run's Runner.close
+        # cancels every still-pending task directly) killed it mid-commit
+        # with no log at all - worse than the round-4 bug the shield fixed.
+        # WayMatchQueue.stop() awaits the tracked set so an orderly
+        # shutdown lets in-flight un-claims land; _unclaim logs its own
+        # abort so even a forced kill is never silent.
+        unclaim_task = asyncio.ensure_future(_unclaim(act_id, claimed_at))
+        _pending_unclaims.add(unclaim_task)
+        unclaim_task.add_done_callback(_pending_unclaims.discard)
         try:
-            await asyncio.shield(_unclaim(act_id, claimed_at))
+            await asyncio.shield(unclaim_task)
         except asyncio.CancelledError:
             logger.warning(
                 "Cancelled while un-claiming activity %s - the un-claim continues "
-                "in the background. Original failure: %r",
+                "in the background and is awaited at shutdown. Original failure: %r",
                 act_id,
                 exc,
             )
@@ -210,12 +221,29 @@ async def match_activity(
         raise
 
 
+# In-flight un-claim recovery tasks. They run under asyncio.shield, so the
+# awaiting coroutine's cancellation does not stop them - but a task nobody
+# awaits is killed a second time by asyncio.run's own Runner.close at
+# process exit (round 5, reproduced against uvicorn's real shutdown path).
+# WayMatchQueue.stop() awaits this set, bounded, so an orderly shutdown
+# lets them land.
+_pending_unclaims: set[asyncio.Task[None]] = set()
+
+# How long an orderly shutdown waits for in-flight un-claims (and for the
+# cancelled worker itself). Ordinarily an un-claim is a single UPDATE and
+# lands in milliseconds; the bound exists so a hung recovery statement
+# (the app-wide no-timeout residual) cannot wedge shutdown.
+SHUTDOWN_WAIT_S = 5.0
+
+
 async def _unclaim(act_id: uuid.UUID, claimed_at: datetime) -> None:
     """Reset a claim that should not stand, on a session of its own.
 
-    Never raises: a failure here is logged and the ride stays stranded as
-    attempted-forever (the documented residual), which must not mask the
-    original error the caller is already propagating."""
+    Raises only CancelledError - a forced kill at process exit, logged
+    here so it is never silent. Every ordinary failure is logged and
+    swallowed: the ride stays stranded as attempted-forever (the
+    documented residual), which must not mask the original error the
+    caller is already propagating."""
     try:
         async with session_factory() as recovery:
             await recovery.execute(
@@ -224,6 +252,13 @@ async def _unclaim(act_id: uuid.UUID, claimed_at: datetime) -> None:
                 .values(ways_matched_at=None)
             )
             await recovery.commit()
+    except asyncio.CancelledError:
+        logger.warning(
+            "Un-claim for activity %s was killed before its commit landed - the "
+            "ride may read as attempted with no coverage until a re-derive resets it",
+            act_id,
+        )
+        raise
     except Exception:
         logger.exception(
             "Could not un-claim activity %s after a failed match - it will read "
@@ -309,8 +344,20 @@ class WayMatchQueue:
         self._worker = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
+        # Await what was cancelled (bounded). A cancelled-but-never-awaited
+        # task is an orphan that asyncio.run's Runner.close cancels a SECOND
+        # time at process exit - round 5 reproduced that killing a shielded
+        # un-claim mid-commit with no log line. Awaiting the worker lets its
+        # handler finish (including starting an un-claim); awaiting the
+        # tracked un-claims lets those single UPDATEs land before the loop
+        # goes away. asyncio.wait never raises the tasks' own exceptions,
+        # and anything still pending at the bound is left for the runner -
+        # logged by _unclaim's own abort handler, so never silent.
         if self._worker is not None:
             self._worker.cancel()
+            await asyncio.wait({self._worker}, timeout=SHUTDOWN_WAIT_S)
+        if _pending_unclaims:
+            await asyncio.wait(set(_pending_unclaims), timeout=SHUTDOWN_WAIT_S)
         for job in self._jobs.values():
             if job.status in ("queued", "running"):
                 job.status = "error"
