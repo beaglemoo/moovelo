@@ -229,8 +229,14 @@ async def match_activity(
 # lets them land.
 _pending_unclaims: set[asyncio.Task[None]] = set()
 
-# How long an orderly shutdown waits for in-flight un-claims (and for the
-# cancelled worker itself). Ordinarily an un-claim is a single UPDATE and
+# The TOTAL bound on how long an orderly stop() waits - for the cancelled
+# worker and for in-flight un-claims COMBINED, one shared deadline, not one
+# bound per wait. Round 6 measured the per-wait version at ~2x when the
+# worker's cancellation lands before the shield (the worker then only
+# finishes when the un-claim does, so a hung recovery commit burned both
+# windows back to back) - and a SIGTERM grace period sized off this
+# constant would have SIGKILLed the process mid-second-wait, which is the
+# one kill nothing can log. Ordinarily an un-claim is a single UPDATE and
 # lands in milliseconds; the bound exists so a hung recovery statement
 # (the app-wide no-timeout residual) cannot wedge shutdown.
 SHUTDOWN_WAIT_S = 5.0
@@ -353,11 +359,17 @@ class WayMatchQueue:
         # goes away. asyncio.wait never raises the tasks' own exceptions,
         # and anything still pending at the bound is left for the runner -
         # logged by _unclaim's own abort handler, so never silent.
+        # One deadline shared by both waits: the worker and the un-claims
+        # can be the same wait in disguise (a worker whose cancellation
+        # landed before the shield only finishes when its un-claim does),
+        # so separate per-wait bounds double the real ceiling.
+        deadline = asyncio.get_running_loop().time() + SHUTDOWN_WAIT_S
         if self._worker is not None:
             self._worker.cancel()
             await asyncio.wait({self._worker}, timeout=SHUTDOWN_WAIT_S)
         if _pending_unclaims:
-            await asyncio.wait(set(_pending_unclaims), timeout=SHUTDOWN_WAIT_S)
+            remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+            await asyncio.wait(set(_pending_unclaims), timeout=remaining)
         for job in self._jobs.values():
             if job.status in ("queued", "running"):
                 job.status = "error"
