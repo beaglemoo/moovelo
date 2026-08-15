@@ -70,8 +70,9 @@ async def match_activity(
     db: AsyncSession, valhalla: ValhallaClient, activity: Activity
 ) -> int | None:
     """Match one activity's recorded trace, record what it touched, and mark
-    the attempt. Returns how many ways were credited, or None if another job
-    had already claimed this activity and we skipped it.
+    the attempt. Commits its own work. Returns how many ways were credited,
+    or None if another job had already claimed this activity and we skipped
+    it.
 
     Claims the activity atomically before crediting anything. Two jobs can
     target the same activity - a fresh import's own explicit match job and a
@@ -81,9 +82,24 @@ async def match_activity(
     activities, ride_count 43). The conditional UPDATE makes matching
     exactly-once: whoever's `WHERE ways_matched_at IS NULL` lands first sets
     the timestamp and proceeds; the loser's WHERE no longer matches, returns
-    no row, and skips. Both run inside `_process`'s per-activity transaction,
-    so the row lock serialises the two and the claim is committed before the
-    other re-evaluates.
+    no row, and skips.
+
+    The claim is COMMITTED before any Valhalla work. The claim UPDATE takes
+    the activity's row lock, and the earlier shape - claim, then match, then
+    one commit at the end - held that lock across the whole Valhalla round
+    trip (up to 30s per chunk), blocking a concurrent DELETE, manual route
+    link or rematch on that ride for the duration. Committing first releases
+    the lock in milliseconds; the price is that the claim is now durable
+    before the outcome is known, so an UNEXPECTED failure (a bug, a dropped
+    connection - not Valhalla merely failing to place the track, which
+    match_ways degrades to None) must explicitly un-claim, or the ride is
+    stranded as attempted-forever and invisible to every future backfill.
+    The un-claim is keyed on the exact claim timestamp this call wrote, so
+    if anything else has since touched `ways_matched_at` (a re-derive on
+    this same worker) it is inert rather than clobbering that write. A hard
+    process crash between claim and un-claim still strands the ride - the
+    same residue an interrupted job has always left, recoverable by a
+    delete-triggered re-derive - but no software failure path does.
 
     A matching failure - the track sits outside the loaded map extract,
     Valhalla is still building tiles, or it is simply unreachable - must
@@ -92,26 +108,60 @@ async def match_activity(
     so coverage for this ride reads as honestly unknown rather than wrongly
     zero.
     """
+    # Captured into locals BEFORE any commit or rollback: the un-claim path
+    # rolls the session back, which expires every loaded instance, and an
+    # attribute access on an expired instance inside the very handler that
+    # exists to recover is the round-7 import_activity bug over again.
+    act_id = activity.id
+    owner_id = activity.user_id
+
+    claimed_at = datetime.now(UTC)
     claimed = await db.scalar(
         update(Activity)
-        .where(Activity.id == activity.id, Activity.ways_matched_at.is_(None))
-        .values(ways_matched_at=datetime.now(UTC))
+        .where(Activity.id == act_id, Activity.ways_matched_at.is_(None))
+        .values(ways_matched_at=claimed_at)
         .returning(Activity.id)
     )
     if claimed is None:
+        # Nothing was written (the WHERE matched no row), but the statement
+        # still opened a transaction - close it rather than leave the caller
+        # holding a stale snapshot into its next iteration. Commit, not
+        # rollback: rolling back expires every instance the caller's session
+        # holds, and this function has no business trashing them over a no-op.
+        await db.commit()
         return None
 
-    wkt = await db.scalar(select(ST_AsText(Activity.geom)).where(Activity.id == activity.id))
-    shape: list[Point] = coords_from_wkt(wkt)
-    lengths = await valhalla.match_ways(shape) if len(shape) >= 2 else None
-    way_ids = {
-        way_id
-        for way_id, length_m in (lengths or {}).items()
-        if length_m >= MIN_MATCHED_WAY_LENGTH_M
-    }
-    if way_ids:
-        await _record_ways(db, activity.user_id, way_ids)
-    return len(way_ids)
+    wkt = await db.scalar(select(ST_AsText(Activity.geom)).where(Activity.id == act_id))
+    await db.commit()  # claim durable, row lock released - BEFORE any network work
+
+    try:
+        shape: list[Point] = coords_from_wkt(wkt)
+        lengths = await valhalla.match_ways(shape) if len(shape) >= 2 else None
+        way_ids = {
+            way_id
+            for way_id, length_m in (lengths or {}).items()
+            if length_m >= MIN_MATCHED_WAY_LENGTH_M
+        }
+        if way_ids:
+            await _record_ways(db, owner_id, way_ids)
+        await db.commit()
+        return len(way_ids)
+    except BaseException:  # noqa: BLE001 - CancelledError must un-claim too
+        try:
+            await db.rollback()
+            await db.execute(
+                update(Activity)
+                .where(Activity.id == act_id, Activity.ways_matched_at == claimed_at)
+                .values(ways_matched_at=None)
+            )
+            await db.commit()
+        except Exception:
+            logger.exception(
+                "Could not un-claim activity %s after a failed match - it will read "
+                "as attempted with no coverage until a re-derive resets it",
+                act_id,
+            )
+        raise
 
 
 async def rederive_user_coverage(db: AsyncSession, user_id: uuid.UUID) -> None:
@@ -309,9 +359,10 @@ class WayMatchQueue:
             activities = (await db.execute(query.order_by(Activity.created_at))).scalars().all()
             job.total = len(activities)
 
-            # One commit per activity: an unreachable engine partway through
-            # a large backfill still leaves everything matched so far in
-            # place, rather than losing the whole batch to a rollback.
+            # match_activity commits per activity (claim first, credit after),
+            # so an unreachable engine partway through a large backfill still
+            # leaves everything matched so far in place, rather than losing
+            # the whole batch to a rollback.
             for activity in activities:
                 credited = await match_activity(db, self._valhalla, activity)
                 # None means another job claimed it in the gap between this
@@ -322,7 +373,6 @@ class WayMatchQueue:
                     job.matched += 1
                 else:
                     job.unmatched += 1
-                await db.commit()
 
         job.status = "done"
 
