@@ -1079,6 +1079,16 @@ engine, tiles still building - to "no ways credited", exactly like
 `ways_matched_at` regardless of outcome so the same track is not retried
 forever. The activity itself is never touched.
 
+The claim (`ways_matched_at` set via a conditional UPDATE, which is also
+what makes matching exactly-once across concurrent jobs) is committed
+before any Valhalla work, so the activity's row lock is held for
+milliseconds rather than across the trace round trips - a concurrent
+delete, manual route link or rematch on the same ride never waits on the
+matcher. An unexpected exception mid-match (not a placement failure, which
+degrades to "no ways credited" as above) un-claims the ride so a later
+backfill can retry it; the un-claim is keyed on the exact claim timestamp
+so it can never clobber a re-derive's own reset.
+
 Matching also never runs inline in a request: both the single-file and the
 archive import endpoints hand off to `services/way_matching.py`'s
 `WayMatchQueue`, the same one-worker-draining-a-queue shape as
