@@ -769,3 +769,69 @@ async def test_a_forcibly_killed_unclaim_is_never_silent(
             await unclaim_task
     assert any("killed before its commit landed" in r.message for r in caplog.records)
     assert way_matching._pending_unclaims == set()  # noqa: SLF001
+
+
+async def test_stop_is_bounded_by_one_shutdown_window_total(
+    db: AsyncSession,
+    db_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round 6's finding: stop()'s two sequential waits each carried their
+    own SHUTDOWN_WAIT_S, so the worst case was ~2x the documented bound -
+    a worker whose cancellation landed inside the Valhalla call finishes
+    only when its un-claim does, and a hung recovery commit burned both
+    windows back to back (measured 0.404s against a 0.2s bound). A SIGTERM
+    grace period sized off the constant would SIGKILL mid-second-wait. The
+    two waits now share one deadline: with the worker hung in Valhalla and
+    the recovery commit hung too, stop() must return in ~one window."""
+    import asyncio
+
+    from app.services import way_matching
+
+    monkeypatch.setattr("app.services.way_matching.session_factory", db_factory)
+    monkeypatch.setattr(way_matching, "SHUTDOWN_WAIT_S", 0.5)
+    user = await _user(db)
+    activity = await _activity(db, user)
+    act_id = activity.id
+
+    match_entered = asyncio.Event()
+    never = asyncio.Event()
+    release_commit = asyncio.Event()
+    in_handler = False
+    real_commit = AsyncSession.commit
+
+    async def hanging_match_ways(self: ValhallaClient, shape: object) -> dict[int, float]:
+        nonlocal in_handler
+        in_handler = True  # every commit AFTER this point is the recovery's
+        match_entered.set()
+        await never.wait()  # the worker's cancellation is consumed HERE
+        return {}
+
+    async def maybe_hanging_commit(self: AsyncSession) -> None:
+        if in_handler:
+            await release_commit.wait()
+        await real_commit(self)
+
+    monkeypatch.setattr(ValhallaClient, "match_ways", hanging_match_ways)
+    monkeypatch.setattr(AsyncSession, "commit", maybe_hanging_commit)
+
+    queue = WayMatchQueue()
+    await queue.start(ValhallaClient(base_url=BASE))
+    try:
+        queue.submit(user.id, [act_id])
+        await asyncio.wait_for(match_entered.wait(), timeout=5)
+
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await queue.stop()
+        elapsed = loop.time() - t0
+        # One shared window (0.5s), not two (1.0s). Generous slack both ways.
+        assert 0.4 <= elapsed <= 0.8, elapsed
+    finally:
+        release_commit.set()
+        never.set()
+        pending = set(way_matching._pending_unclaims)  # noqa: SLF001
+        if queue._worker is not None:  # noqa: SLF001
+            pending.add(queue._worker)  # noqa: SLF001
+        if pending:
+            await asyncio.wait(pending, timeout=5)
