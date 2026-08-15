@@ -61,6 +61,7 @@
 	import { onDestroy, onMount } from 'svelte';
 
 	let waypoints: Waypoint[] = $state([]);
+	const routeParam = page.url.searchParams.get('route');
 	const PLANNER_GUIDE_STORAGE_KEY = 'moovelo:planner-guide-dismissed';
 	// The guide is client-only: waiting for onMount prevents a dismissed guide
 	// flashing during hydration. Dismiss state is updated before the storage
@@ -68,6 +69,10 @@
 	// while the session fallback is attempted.
 	let plannerGuideReady = $state(false);
 	let plannerGuideDismissed = $state(false);
+	// A saved/shared route starts with an empty local waypoint array while its
+	// request is in flight. Do not mistake that transient state for a first-run
+	// planner and flash the guide over a route that already has endpoints.
+	let plannerGuideRoutePending = $state(Boolean(routeParam));
 	let searchResultsOpen = $state(false);
 	onMount(() => {
 		plannerGuideDismissed = sessionPlannerGuideDismissed;
@@ -467,7 +472,6 @@
 	}
 
 	// Open a saved route when arriving via /?route=<id>.
-	const routeParam = page.url.searchParams.get('route');
 	if (routeParam) {
 		routes
 			.get(routeParam)
@@ -493,6 +497,9 @@
 			})
 			.catch(() => {
 				error = 'Could not load that route.';
+			})
+			.finally(() => {
+				plannerGuideRoutePending = false;
 			});
 	}
 
@@ -1781,7 +1788,7 @@
 				</form>
 			</div>
 		{/if}
-		{#if plannerGuideReady && !plannerGuideDismissed && !searchResultsOpen && waypoints.length < 2}
+		{#if plannerGuideReady && !plannerGuideDismissed && !plannerGuideRoutePending && !searchResultsOpen && waypoints.length < 2}
 			<div
 				class="planner-guide"
 				role="note"

@@ -307,6 +307,31 @@ test.describe('mobile PWA', () => {
 		await expect(page.locator('.planner-guide')).toHaveCount(0);
 	});
 
+	test('keeps the guide dismissed across navigation when both storage areas are unavailable', async ({
+		page
+	}) => {
+		await page.addInitScript((key) => {
+			const nativeGet = Storage.prototype.getItem;
+			const nativeSet = Storage.prototype.setItem;
+			Storage.prototype.getItem = function (candidate) {
+				if (candidate === key) throw new DOMException('Storage blocked', 'SecurityError');
+				return nativeGet.call(this, candidate);
+			};
+			Storage.prototype.setItem = function (candidate, value) {
+				if (candidate === key) throw new DOMException('Storage blocked', 'SecurityError');
+				return nativeSet.call(this, candidate, value);
+			};
+		}, GUIDE_STORAGE_KEY);
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+		await page.getByRole('button', { name: 'Dismiss planner guide' }).tap();
+		await page.getByRole('button', { name: 'Menu' }).tap();
+		await page.locator('.mobile-menu').getByRole('link', { name: 'Library' }).tap();
+		await page.getByRole('button', { name: 'Menu' }).tap();
+		await page.locator('.mobile-menu').getByRole('link', { name: 'Planner' }).tap();
+		await expect(page.locator('.planner-guide')).toHaveCount(0);
+	});
+
 	test('dismisses the guide after the first map waypoint', async ({ page }) => {
 		await mockAuthenticatedPlanner(page);
 		await page.goto('/');
@@ -374,6 +399,65 @@ test.describe('mobile PWA', () => {
 		await page.getByPlaceholder('Search for a place').press('Escape');
 		await expect(page.locator('.planner-guide')).toBeVisible();
 		expect(await page.evaluate((key) => localStorage.getItem(key), GUIDE_STORAGE_KEY)).toBeNull();
+	});
+
+	test('does not reopen an abandoned search after its debounce fires', async ({ page }) => {
+		await mockAuthenticatedPlanner(page, { search_enabled: true });
+		await page.route('**/api/places/search?**', (route) =>
+			route.fulfill({
+				json: [
+					{
+						id: 1,
+						name: 'Tring',
+						place_type: 'town',
+						lat: 51.794,
+						lon: -0.66,
+						distance_m: 1200
+					}
+				]
+			})
+		);
+		await page.goto('/');
+		await page.getByPlaceholder('Search for a place').fill('Tr');
+		await page.waitForTimeout(60);
+		await page.locator('.brand').tap();
+		await expect(page.locator('.planner-guide')).toBeVisible();
+		await page.waitForTimeout(350);
+		await expect(page.locator('.results')).toHaveCount(0);
+		await expect(page.locator('.planner-guide')).toBeVisible();
+	});
+
+	test('never flashes the first-run guide while a saved route is loading', async ({ page }) => {
+		await page.addInitScript(() => {
+			const state = window as typeof window & { plannerGuideWasRendered?: boolean };
+			state.plannerGuideWasRendered = false;
+			new MutationObserver(() => {
+				if (document.querySelector('.planner-guide')) state.plannerGuideWasRendered = true;
+			}).observe(document, { childList: true, subtree: true });
+		});
+		await mockAuthenticatedPlanner(page);
+		let releaseRoute!: () => void;
+		const routeReleased = new Promise<void>((resolve) => (releaseRoute = resolve));
+		let routeRequested!: () => void;
+		const requestSeen = new Promise<void>((resolve) => (routeRequested = resolve));
+		await page.route('**/api/routes/planned', async (route) => {
+			routeRequested();
+			await routeReleased;
+			await route.fulfill({ json: savedRoute('planned') });
+		});
+		await page.goto('/?route=planned');
+		await requestSeen;
+		await page.waitForTimeout(150);
+		await expect(page.locator('.planner-guide')).toHaveCount(0);
+		releaseRoute();
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+		await expect(page.locator('.planner-guide')).toHaveCount(0);
+		expect(
+			await page.evaluate(
+				() =>
+					(window as typeof window & { plannerGuideWasRendered?: boolean }).plannerGuideWasRendered
+			)
+		).toBe(false);
 	});
 
 	test('does not persist dismissal when an imported-route edit is refused', async ({ page }) => {
