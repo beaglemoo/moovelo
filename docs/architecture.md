@@ -729,6 +729,22 @@ A rider can re-run matching from the **Re-run matching** control on the ride
 detail page (`POST /api/activities/{id}/rematch`), which re-derives anything
 not locked.
 
+One lock-ordering asymmetry in this area is known and deliberately
+accepted: a route DELETE takes locks routes-then-activities (the 0019
+trigger and the FK's own `SET NULL` fire while the route row is locked),
+while a manual link (`PUT /api/activities/{id}/route`) takes them
+activities-then-routes - inverted orders. The Phase 11 review measured it
+twice: round 13 flagged the inversion, and round 14's deadlock lens,
+asked for honest severity, downgraded its own finding after attempting a
+reproduction - that specific pair could not be made to deadlock each
+other, and a loser in the race gets a clean error or the racing-delete
+404 policy rather than a stuck pair. The inversion also predates the
+0019 trigger (Postgres's own `ON DELETE SET NULL` takes the same order),
+so dropping the trigger would not remove it. The accepted decision is:
+no code change, but the measured conclusion covers only this pair - any
+FUTURE code path that takes locks on both tables must take routes first,
+matching the delete, or re-do the measurement.
+
 ## Planned vs actual
 
 `GET /api/routes/{id}/activities` is the read side of the match above: the
@@ -1078,6 +1094,16 @@ engine, tiles still building - to "no ways credited", exactly like
 `trace_attributes`' own edge_walk failure policy, and always sets
 `ways_matched_at` regardless of outcome so the same track is not retried
 forever. The activity itself is never touched.
+
+The claim (`ways_matched_at` set via a conditional UPDATE, which is also
+what makes matching exactly-once across concurrent jobs) is committed
+before any Valhalla work, so the activity's row lock is held for
+milliseconds rather than across the trace round trips - a concurrent
+delete, manual route link or rematch on the same ride never waits on the
+matcher. An unexpected exception mid-match (not a placement failure, which
+degrades to "no ways credited" as above) un-claims the ride so a later
+backfill can retry it; the un-claim is keyed on the exact claim timestamp
+so it can never clobber a re-derive's own reset.
 
 Matching also never runs inline in a request: both the single-file and the
 archive import endpoints hand off to `services/way_matching.py`'s

@@ -11,7 +11,13 @@ from app.models import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: fileConfig's default is True, which
+    # marks every already-created logger disabled. Harmless for the CLI,
+    # but tests that run migrations in-process (test_climb_log) silently
+    # killed every app logger for the rest of the pytest run - caplog
+    # captured nothing and a "the log line fires" assertion failed only
+    # in the full suite. Alembic's own logging still configures normally.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", settings.database_url)
 target_metadata = Base.metadata

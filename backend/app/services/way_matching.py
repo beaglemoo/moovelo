@@ -70,8 +70,9 @@ async def match_activity(
     db: AsyncSession, valhalla: ValhallaClient, activity: Activity
 ) -> int | None:
     """Match one activity's recorded trace, record what it touched, and mark
-    the attempt. Returns how many ways were credited, or None if another job
-    had already claimed this activity and we skipped it.
+    the attempt. Commits its own work. Returns how many ways were credited,
+    or None if another job had already claimed this activity and we skipped
+    it.
 
     Claims the activity atomically before crediting anything. Two jobs can
     target the same activity - a fresh import's own explicit match job and a
@@ -81,9 +82,34 @@ async def match_activity(
     activities, ride_count 43). The conditional UPDATE makes matching
     exactly-once: whoever's `WHERE ways_matched_at IS NULL` lands first sets
     the timestamp and proceeds; the loser's WHERE no longer matches, returns
-    no row, and skips. Both run inside `_process`'s per-activity transaction,
-    so the row lock serialises the two and the claim is committed before the
-    other re-evaluates.
+    no row, and skips.
+
+    The claim is COMMITTED before any Valhalla work. The claim UPDATE takes
+    the activity's row lock, and the earlier shape - claim, then match, then
+    one commit at the end - held that lock across the whole Valhalla round
+    trip (up to 30s per chunk), blocking a concurrent DELETE, manual route
+    link or rematch on that ride for the duration. Committing first releases
+    the lock in milliseconds; the price is that the claim is now durable
+    before the outcome is known, so an UNEXPECTED failure (a bug, a dropped
+    connection - not Valhalla merely failing to place the track, which
+    match_ways degrades to None) must explicitly un-claim, or the ride is
+    stranded as attempted-forever and invisible to every future backfill.
+    The un-claim is keyed on the exact claim timestamp this call wrote, so
+    if anything else has since touched `ways_matched_at` (a re-derive on
+    this same worker) it is inert rather than clobbering that write - and
+    it runs on a FRESH session from session_factory, BEFORE anything
+    touches the failed session. Both halves were earned by review: round 2
+    proved a genuinely dead connection made the handler's own rollback
+    raise (a recovery riding on the failed session never ran), and round 3
+    proved sequencing the recovery after that rollback was the same bug one
+    layer out - a rollback that hangs rather than raises would have kept
+    the ride stranded for the duration. Residual ways a ride can still
+    strand as attempted-forever: a hard process crash between claim and
+    un-claim, or the recovery session's own statements failing or hanging
+    too (nothing in the stack sets statement timeouts - a pre-existing,
+    app-wide property). Both are the same residue an interrupted job has
+    always left, recoverable by a delete-triggered re-derive; every
+    ordinary exception path un-claims.
 
     A matching failure - the track sits outside the loaded map extract,
     Valhalla is still building tiles, or it is simply unreachable - must
@@ -92,26 +118,166 @@ async def match_activity(
     so coverage for this ride reads as honestly unknown rather than wrongly
     zero.
     """
+    # Captured into locals BEFORE any commit or rollback: the un-claim path
+    # rolls the session back, which expires every loaded instance, and an
+    # attribute access on an expired instance inside the very handler that
+    # exists to recover is the round-7 import_activity bug over again.
+    act_id = activity.id
+    owner_id = activity.user_id
+
+    claimed_at = datetime.now(UTC)
     claimed = await db.scalar(
         update(Activity)
-        .where(Activity.id == activity.id, Activity.ways_matched_at.is_(None))
-        .values(ways_matched_at=datetime.now(UTC))
+        .where(Activity.id == act_id, Activity.ways_matched_at.is_(None))
+        .values(ways_matched_at=claimed_at)
         .returning(Activity.id)
     )
     if claimed is None:
+        # Nothing was written (the WHERE matched no row), but the statement
+        # still opened a transaction - close it rather than leave the caller
+        # holding a stale snapshot into its next iteration. Commit, not
+        # rollback: rolling back expires every instance the caller's session
+        # holds, and this function has no business trashing them over a no-op.
+        await db.commit()
         return None
 
-    wkt = await db.scalar(select(ST_AsText(Activity.geom)).where(Activity.id == activity.id))
-    shape: list[Point] = coords_from_wkt(wkt)
-    lengths = await valhalla.match_ways(shape) if len(shape) >= 2 else None
-    way_ids = {
-        way_id
-        for way_id, length_m in (lengths or {}).items()
-        if length_m >= MIN_MATCHED_WAY_LENGTH_M
-    }
-    if way_ids:
-        await _record_ways(db, activity.user_id, way_ids)
-    return len(way_ids)
+    try:
+        # The try block starts HERE, directly after the claim UPDATE - review
+        # of this fix proved that starting it after the commit below leaves a
+        # commit-ack-lost failure (the server applied the COMMIT, the
+        # connection died before the ack) stranding the ride claimed-forever
+        # with no un-claim ever attempted. Inside the handler the un-claim's
+        # timestamp predicate sorts the cases out: a claim that never landed
+        # matches nothing (inert), a claim that landed gets reset.
+        wkt = await db.scalar(select(ST_AsText(Activity.geom)).where(Activity.id == act_id))
+        await db.commit()  # claim durable, row lock released - BEFORE any network work
+
+        shape: list[Point] = coords_from_wkt(wkt)
+        lengths = await valhalla.match_ways(shape) if len(shape) >= 2 else None
+        way_ids = {
+            way_id
+            for way_id, length_m in (lengths or {}).items()
+            if length_m >= MIN_MATCHED_WAY_LENGTH_M
+        }
+        if way_ids:
+            await _record_ways(db, owner_id, way_ids)
+        await db.commit()
+        return len(way_ids)
+    except BaseException as exc:  # noqa: BLE001 - CancelledError must un-claim too
+        # The un-claim runs FIRST, on its OWN session, with nothing of the
+        # failed session's ahead of it. Round 2 proved the un-claim must not
+        # share the failed session (a dead connection poisons every later
+        # statement on it); round 3 proved it must not even be SEQUENCED
+        # after that session's rollback, because a rollback that HANGS
+        # rather than raises (a one-sided partition - no RST ever reaches
+        # the client, and nothing in the stack sets a timeout) would keep
+        # the ride stranded for as long as the hang lasts. And running it
+        # first is safe: under READ COMMITTED the predicate is evaluated
+        # against the COMMITTED version of the row, so when the claim never
+        # committed (still NULL there) the row simply does not match and no
+        # lock is waited on - measured with the claim's lock held open, 2ms,
+        # not assumed.
+        #
+        # asyncio.shield, from round 4: a cancellation (worker shutdown)
+        # landing DURING the un-claim's own awaits skipped its `except
+        # Exception`, stranded the ride with no log line at all, and
+        # replaced the original error with a bare CancelledError. The
+        # shield makes the un-claim a critical section: the CancelledError
+        # still propagates to the caller immediately (cancellation
+        # semantics intact - deliberately NOT a broader except, which
+        # would swallow a delivered cancellation), while the un-claim task
+        # keeps running to completion on its own.
+        #
+        # The task is TRACKED, from round 5: a shielded task nobody awaits
+        # is an orphan, and uvicorn's shutdown (asyncio.run's Runner.close
+        # cancels every still-pending task directly) killed it mid-commit
+        # with no log at all - worse than the round-4 bug the shield fixed.
+        # WayMatchQueue.stop() awaits the tracked set so an orderly
+        # shutdown lets in-flight un-claims land; _unclaim logs its own
+        # abort so the runner's forced cancellation is never silent. (An
+        # OS-level SIGKILL runs no Python at all and cannot be logged by
+        # anything - see the SHUTDOWN_WAIT_S comment.)
+        unclaim_task = asyncio.ensure_future(_unclaim(act_id, claimed_at))
+        _pending_unclaims.add(unclaim_task)
+        unclaim_task.add_done_callback(_pending_unclaims.discard)
+        try:
+            await asyncio.shield(unclaim_task)
+        except asyncio.CancelledError:
+            logger.warning(
+                "Cancelled while un-claiming activity %s - the un-claim continues "
+                "in the background and is awaited at shutdown. Original failure: %r",
+                act_id,
+                exc,
+            )
+            raise
+        # Best-effort tidy-up of the caller's session, in its own try
+        # because its connection may be the very thing that failed. If this
+        # hangs, the worker stalls - but that exposure is app-wide (no
+        # statement or connection timeouts are configured anywhere, and
+        # _process's own session close would hang the same way); the ride
+        # itself is already un-claimed above.
+        try:
+            await db.rollback()
+        except Exception:
+            logger.exception("Rollback failed after a match failure for activity %s", act_id)
+        raise
+
+
+# In-flight un-claim recovery tasks. They run under asyncio.shield, so the
+# awaiting coroutine's cancellation does not stop them - but a task nobody
+# awaits is killed a second time by asyncio.run's own Runner.close at
+# process exit (round 5, reproduced against uvicorn's real shutdown path).
+# WayMatchQueue.stop() awaits this set, bounded, so an orderly shutdown
+# lets them land.
+_pending_unclaims: set[asyncio.Task[None]] = set()
+
+# The TOTAL bound on how long an orderly stop() waits - for the cancelled
+# worker and for in-flight un-claims COMBINED, one shared deadline, not one
+# bound per wait. Round 6 measured the per-wait version at ~2x when the
+# worker's cancellation lands before the shield (the worker then only
+# finishes when the un-claim does, so a hung recovery commit burned both
+# windows back to back) - and a SIGTERM grace period sized off this
+# constant would have SIGKILLed the process mid-second-wait, which is the
+# one kill nothing can log. Ordinarily an un-claim is a single UPDATE and
+# lands in milliseconds; the bound exists so a hung recovery statement
+# (the app-wide no-timeout residual) cannot wedge shutdown.
+SHUTDOWN_WAIT_S = 5.0
+
+
+async def _unclaim(act_id: uuid.UUID, claimed_at: datetime) -> None:
+    """Reset a claim that should not stand, on a session of its own.
+
+    Raises only CancelledError - the runner's forced cancellation of a
+    still-pending task at process exit, logged here so it is never
+    silent. (That covers every kill Python gets to see; an OS-level
+    SIGKILL runs no code and nothing anywhere can log it - the
+    SHUTDOWN_WAIT_S bound exists to keep an orderly shutdown short
+    enough that a sized SIGTERM grace period is not overrun.) Every
+    ordinary failure is logged and
+    swallowed: the ride stays stranded as attempted-forever (the
+    documented residual), which must not mask the original error the
+    caller is already propagating."""
+    try:
+        async with session_factory() as recovery:
+            await recovery.execute(
+                update(Activity)
+                .where(Activity.id == act_id, Activity.ways_matched_at == claimed_at)
+                .values(ways_matched_at=None)
+            )
+            await recovery.commit()
+    except asyncio.CancelledError:
+        logger.warning(
+            "Un-claim for activity %s was killed before its commit landed - the "
+            "ride may read as attempted with no coverage until a re-derive resets it",
+            act_id,
+        )
+        raise
+    except Exception:
+        logger.exception(
+            "Could not un-claim activity %s after a failed match - it will read "
+            "as attempted with no coverage until a re-derive resets it",
+            act_id,
+        )
 
 
 async def rederive_user_coverage(db: AsyncSession, user_id: uuid.UUID) -> None:
@@ -191,8 +357,28 @@ class WayMatchQueue:
         self._worker = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
+        # Await what was cancelled (bounded). A cancelled-but-never-awaited
+        # task is an orphan that asyncio.run's Runner.close cancels a SECOND
+        # time at process exit - round 5 reproduced that killing a shielded
+        # un-claim mid-commit with no log line. Awaiting the worker lets its
+        # handler finish (including starting an un-claim); awaiting the
+        # tracked un-claims lets those single UPDATEs land before the loop
+        # goes away. asyncio.wait never raises the tasks' own exceptions,
+        # and anything still pending at the bound is left for the runner's
+        # cancellation - logged by _unclaim's own abort handler, so that
+        # path is never silent (a SIGKILL after the grace period is the
+        # one exit nothing can log).
+        # One deadline shared by both waits: the worker and the un-claims
+        # can be the same wait in disguise (a worker whose cancellation
+        # landed before the shield only finishes when its un-claim does),
+        # so separate per-wait bounds double the real ceiling.
+        deadline = asyncio.get_running_loop().time() + SHUTDOWN_WAIT_S
         if self._worker is not None:
             self._worker.cancel()
+            await asyncio.wait({self._worker}, timeout=SHUTDOWN_WAIT_S)
+        if _pending_unclaims:
+            remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+            await asyncio.wait(set(_pending_unclaims), timeout=remaining)
         for job in self._jobs.values():
             if job.status in ("queued", "running"):
                 job.status = "error"
@@ -309,9 +495,10 @@ class WayMatchQueue:
             activities = (await db.execute(query.order_by(Activity.created_at))).scalars().all()
             job.total = len(activities)
 
-            # One commit per activity: an unreachable engine partway through
-            # a large backfill still leaves everything matched so far in
-            # place, rather than losing the whole batch to a rollback.
+            # match_activity commits per activity (claim first, credit after),
+            # so an unreachable engine partway through a large backfill still
+            # leaves everything matched so far in place, rather than losing
+            # the whole batch to a rollback.
             for activity in activities:
                 credited = await match_activity(db, self._valhalla, activity)
                 # None means another job claimed it in the gap between this
@@ -322,7 +509,6 @@ class WayMatchQueue:
                     job.matched += 1
                 else:
                     job.unmatched += 1
-                await db.commit()
 
         job.status = "done"
 
