@@ -89,6 +89,7 @@
 	// How much of the header must stay reachable after a clamp - enough to
 	// grab it again, not the whole card.
 	const HEADER_MARGIN = 48;
+	const MAP_CONTROL_GAP = 10;
 
 	let root = $state<HTMLDivElement | undefined>();
 	let collapsed = $state(true);
@@ -117,11 +118,20 @@
 	// partly-offscreen drag position is preserved without stranding it. Run on
 	// drop and on window resize - not continuously during a drag.
 	function clampPosition(): boolean {
-		if (!root || left === null || top === null) return false;
+		if (!root) return false;
 		const area = root.parentElement;
 		if (!area) return false;
 		const areaRect = area.getBoundingClientRect();
 		const boxRect = root.getBoundingClientRect();
+		const desktop = window.matchMedia('(min-width: 901px)').matches;
+		// Mobile positioning is owned by the responsive CSS. On desktop, turn a
+		// default right/bottom anchor into coordinates when the card expands so
+		// the same collision clamp can protect MapLibre's right-hand controls.
+		if (left === null || top === null) {
+			if (collapsed || !desktop) return false;
+			left = boxRect.left - areaRect.left;
+			top = boxRect.top - areaRect.top;
+		}
 		// A collapsed pill may remain partly beyond an edge as long as its
 		// draggable header-sized portion is reachable. Once expanded, every
 		// edge of the conversation card (especially its input and controls) must
@@ -133,8 +143,63 @@
 		const maxTop = collapsed
 			? Math.max(0, areaRect.height - HEADER_MARGIN)
 			: Math.max(0, areaRect.height - boxRect.height);
-		const nextLeft = Math.min(Math.max(left, minLeft), maxLeft);
-		const nextTop = Math.min(Math.max(top, 0), maxTop);
+		let nextLeft = Math.min(Math.max(left, minLeft), maxLeft);
+		let nextTop = Math.min(Math.max(top, 0), maxTop);
+
+		if (!collapsed && desktop) {
+			const controls = area.querySelector<HTMLElement>('.maplibregl-ctrl-top-right');
+			const controlsRect = controls?.getBoundingClientRect();
+			if (controlsRect) {
+				const overlaps = (candidateLeft: number, candidateTop: number) => {
+					const candidateRight = areaRect.left + candidateLeft + boxRect.width;
+					const candidateBottom = areaRect.top + candidateTop + boxRect.height;
+					return !(
+						candidateRight <= controlsRect.left ||
+						areaRect.left + candidateLeft >= controlsRect.right ||
+						candidateBottom <= controlsRect.top ||
+						areaRect.top + candidateTop >= controlsRect.bottom
+					);
+				};
+
+				if (overlaps(nextLeft, nextTop)) {
+					const candidates = [
+						{
+							left: controlsRect.left - areaRect.left - boxRect.width - MAP_CONTROL_GAP,
+							top: nextTop
+						},
+						{
+							left: controlsRect.right - areaRect.left + MAP_CONTROL_GAP,
+							top: nextTop
+						},
+						{
+							left: nextLeft,
+							top: controlsRect.top - areaRect.top - boxRect.height - MAP_CONTROL_GAP
+						},
+						{
+							left: nextLeft,
+							top: controlsRect.bottom - areaRect.top + MAP_CONTROL_GAP
+						}
+					].filter(
+						(candidate) =>
+							candidate.left >= 0 &&
+							candidate.left <= maxLeft &&
+							candidate.top >= 0 &&
+							candidate.top <= maxTop &&
+							!overlaps(candidate.left, candidate.top)
+					);
+					candidates.sort(
+						(a, b) =>
+							Math.abs(a.left - nextLeft) +
+							Math.abs(a.top - nextTop) -
+							(Math.abs(b.left - nextLeft) + Math.abs(b.top - nextTop))
+					);
+					if (candidates[0]) {
+						nextLeft = candidates[0].left;
+						nextTop = candidates[0].top;
+					}
+				}
+			}
+		}
 		const changed = nextLeft !== left || nextTop !== top;
 		left = nextLeft;
 		top = nextTop;
@@ -534,6 +599,7 @@
 			top: auto !important;
 			bottom: 72px !important;
 			width: auto !important;
+			z-index: 9;
 		}
 		.assistant-pill {
 			min-width: 44px;
