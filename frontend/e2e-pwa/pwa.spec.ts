@@ -751,7 +751,7 @@ test.describe('mobile PWA', () => {
 				JSON.stringify({ collapsed: true, left: 1400, top: 100 })
 			)
 		);
-		await mockAuthenticatedPlanner(page, { assistant_enabled: true });
+		await mockAuthenticatedPlanner(page, { search_enabled: true, assistant_enabled: true });
 		await page.route('**/api/routes/planned', (route) =>
 			route.fulfill({ json: savedRoute('planned') })
 		);
@@ -784,8 +784,20 @@ test.describe('mobile PWA', () => {
 				page.locator('.basemap-switch'),
 				`${viewport.width}: basemap`
 			);
+			const pillOwnsCentre = await button.evaluate((element) => {
+				const rect = element.getBoundingClientRect();
+				return (
+					document
+						.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+						?.closest('button') === element
+				);
+			});
+			expect(pillOwnsCentre, `${viewport.width}: Ask target should own its centre`).toBe(true);
 
-			await button.tap();
+			await page.touchscreen.tap(
+				assistantBox!.x + assistantBox!.width / 2,
+				assistantBox!.y + assistantBox!.height / 2
+			);
 			const expanded = page.locator('.assistant:not(.collapsed)');
 			const close = expanded.getByRole('button', { name: 'Collapse the assistant' });
 			await expect(expanded).toBeVisible();
@@ -1056,6 +1068,17 @@ test('reclamps the expanded assistant at the desktop breakpoint', async ({ page 
 		})
 		.toBeLessThanOrEqual(0);
 	await expect(close).toBeVisible();
+	const geolocate = page.locator('.maplibregl-ctrl-geolocate');
+	await expectNoOverlap(expanded, geolocate, '901: expanded assistant vs geolocate');
+	const geolocateOwnsCentre = await geolocate.evaluate((element) => {
+		const rect = element.getBoundingClientRect();
+		return (
+			document
+				.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+				?.closest('button') === element
+		);
+	});
+	expect(geolocateOwnsCentre).toBe(true);
 	const closeOwnsCentre = await close.evaluate((element) => {
 		const rect = element.getBoundingClientRect();
 		return (
