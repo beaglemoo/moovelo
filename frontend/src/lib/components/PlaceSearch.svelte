@@ -57,6 +57,12 @@
 			reset();
 			return;
 		}
+		// Supersede the active request as soon as the query changes. Waiting
+		// for the next debounce to fire would leave the old response free to
+		// render under the new input for up to DEBOUNCE_MS.
+		inflight?.abort();
+		inflight = null;
+		searching = false;
 		timer = setTimeout(() => {
 			timer = null;
 			void run(term);
