@@ -854,6 +854,11 @@
 				window.removeEventListener(moveEvent, onMove);
 				window.removeEventListener(endEvent, onEnd);
 				setSourceData(m, 'drag-point', pointGeoJSON(null));
+				// A stationary touch on the route starts this drag handler and the
+				// map's long-press menu timer together. Once the timer wins, lifting
+				// the finger belongs to the menu gesture and must not also insert a
+				// via at the grabbed point.
+				if (kind === 'touch' && longPressFired) return;
 				// The grabbed vertex sits inside some leg; the new via goes
 				// between that leg's endpoints.
 				let leg = 0;
