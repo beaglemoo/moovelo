@@ -114,6 +114,29 @@
 			: null
 	);
 
+	async function rematch() {
+		if (!activity) return;
+		// Same load token as load() and pickRoute, for the same reason: this
+		// assigns the activity/route pair too, so a slow rematch landing after
+		// the rider has navigated away would otherwise overwrite the page they
+		// are now on with this one's data.
+		const token = ++loadToken;
+		pickerBusy = true;
+		pickerError = null;
+		try {
+			const updated = await activities.rematch(activity.id);
+			const route = updated.route_id ? await routes.get(updated.route_id) : null;
+			if (token !== loadToken) return;
+			activity = updated;
+			matchedRoute = route;
+		} catch (err) {
+			if (token !== loadToken) return;
+			pickerError = err instanceof Error ? err.message : 'Failed to re-run matching';
+		} finally {
+			if (token === loadToken) pickerBusy = false;
+		}
+	}
+
 	async function pickRoute(event: Event) {
 		if (!activity) return;
 		const select = event.currentTarget as HTMLSelectElement;
@@ -225,6 +248,14 @@
 					{/each}
 				</select>
 			</label>
+			<div class="rematch">
+				<button type="button" onclick={rematch} disabled={pickerBusy}>
+					{pickerBusy ? 'Matching…' : 'Re-run matching'}
+				</button>
+				<span class="hint">
+					Finds the saved route this ride followed. Leaves a route you picked yourself alone.
+				</span>
+			</div>
 			{#if pickerError}
 				<p class="error">{pickerError}</p>
 			{/if}
@@ -333,6 +364,19 @@
 		color: var(--text);
 		margin: 0 0 0.6rem;
 	}
+	.rematch {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		flex-wrap: wrap;
+		margin-top: 0.6rem;
+	}
+
+	.rematch .hint {
+		color: var(--text-muted);
+		font-size: 0.85rem;
+	}
+
 	.picker {
 		display: flex;
 		flex-direction: column;
