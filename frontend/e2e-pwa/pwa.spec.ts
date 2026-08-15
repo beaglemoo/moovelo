@@ -856,9 +856,57 @@ test.describe('mobile PWA', () => {
 		await expect(page.getByRole('menuitem', { name: 'Route from here' })).toHaveCount(0);
 	});
 
-	test('keeps waypoint touch menus inside the map at edge sizes', async ({ page, browserName }) => {
+	test('allows marker jitter but cancels a deliberate move before long press', async ({
+		page,
+		browserName
+	}) => {
 		test.skip(browserName !== 'webkit', 'WebKit exercises the iPhone touch gesture');
 		await mockAuthenticatedPlanner(page);
+		await page.route('**/api/routes/planned', (route) =>
+			route.fulfill({ json: savedRoute('planned') })
+		);
+		await page.goto('/?route=planned');
+		await waitForMap(page);
+		const marker = page.locator('.maplibregl-marker').first();
+		const markerBox = await marker.boundingBox();
+		expect(markerBox).not.toBeNull();
+		const start = {
+			x: markerBox!.x + markerBox!.width * 0.5,
+			y: markerBox!.y + markerBox!.height * 0.5
+		};
+
+		await dispatchWebKitTouch(marker, 'touchstart', start);
+		await dispatchWebKitTouch(marker, 'touchmove', { x: start.x + 1, y: start.y + 1 });
+		await page.waitForTimeout(650);
+		await dispatchWebKitTouch(marker, 'touchend', { x: start.x + 1, y: start.y + 1 });
+		await expect(page.getByRole('menuitem', { name: 'Remove waypoint' })).toBeVisible();
+		await page.keyboard.press('Escape');
+
+		await dispatchWebKitTouch(marker, 'touchstart', start);
+		await dispatchWebKitTouch(marker, 'touchmove', { x: start.x + 12, y: start.y });
+		await page.waitForTimeout(650);
+		await dispatchWebKitTouch(marker, 'touchend', { x: start.x + 12, y: start.y });
+		await expect(page.locator('.context-menu')).toHaveCount(0);
+	});
+
+	test('keeps waypoint touch menus inside the map at edge sizes', async ({ page, browserName }) => {
+		test.skip(browserName !== 'webkit', 'WebKit exercises the iPhone touch gesture');
+		await mockAuthenticatedPlanner(page, { search_enabled: true });
+		const longPlaceName =
+			'Barrow upon Soar Railway Station and Riverside Cycle Route Meeting Point';
+		await page.route('**/api/places/reverse?**', async (route) => {
+			await new Promise((resolve) => setTimeout(resolve, 150));
+			await route.fulfill({
+				json: {
+					id: 42,
+					name: longPlaceName,
+					place_type: 'station',
+					lat: 52.8,
+					lon: -1.6,
+					distance_m: 10
+				}
+			});
+		});
 		await page.route('**/api/routes/planned', (route) =>
 			route.fulfill({ json: savedRoute('planned') })
 		);
@@ -883,6 +931,7 @@ test.describe('mobile PWA', () => {
 				},
 				{ holdMs: 650 }
 			);
+			await expect(page.locator('.context-menu .menu-place')).toHaveText(longPlaceName);
 			const mapBox = await page.locator('.map-area').boundingBox();
 			const menu = page.locator('.context-menu');
 			const menuBox = await menu.boundingBox();
@@ -907,6 +956,75 @@ test.describe('mobile PWA', () => {
 			expect(removeOwnsCentre, `${viewport.width}: edge menu target`).toBe(true);
 			await page.keyboard.press('Escape');
 			await expect(menu).toHaveCount(0);
+		}
+	});
+
+	test('keeps every full route-menu action reachable in landscape', async ({
+		page,
+		browserName
+	}) => {
+		test.skip(browserName !== 'webkit', 'WebKit exercises the iPhone touch gesture');
+		await page.setViewportSize({ width: 844, height: 390 });
+		await mockAuthenticatedPlanner(page);
+		await page.route('**/api/routes/planned', (route) =>
+			route.fulfill({ json: savedRoute('planned') })
+		);
+		await page.goto('/?route=planned');
+		const canvas = await waitForMap(page);
+		const canvasBox = await canvas.boundingBox();
+		expect(canvasBox).not.toBeNull();
+		await webKitTouchGesture(
+			page,
+			canvas,
+			{
+				x: canvasBox!.x + canvasBox!.width * 0.5,
+				y: canvasBox!.y + canvasBox!.height * 0.5
+			},
+			{ holdMs: 650 }
+		);
+
+		const menu = page.locator('.context-menu');
+		await expect(menu).toBeVisible();
+		const mapBox = await page.locator('.map-area').boundingBox();
+		const menuBox = await menu.boundingBox();
+		expect(mapBox).not.toBeNull();
+		expect(menuBox).not.toBeNull();
+		expect(menuBox!.x).toBeGreaterThanOrEqual(mapBox!.x);
+		expect(menuBox!.y).toBeGreaterThanOrEqual(mapBox!.y);
+		expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(mapBox!.x + mapBox!.width);
+		expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(mapBox!.y + mapBox!.height);
+		const scrolling = await menu.evaluate((element) => ({
+			overflowY: getComputedStyle(element).overflowY,
+			clientHeight: element.clientHeight,
+			scrollHeight: element.scrollHeight
+		}));
+		expect(scrolling.overflowY).toBe('auto');
+		expect(scrolling.scrollHeight).toBeGreaterThan(scrolling.clientHeight);
+
+		for (const name of [
+			'Route from here',
+			'Add waypoint',
+			'Route to here',
+			'Isochrone from here',
+			'Loop from here',
+			'Avoid this road',
+			'Clear route'
+		]) {
+			const action = menu.getByRole('menuitem', { name });
+			await action.scrollIntoViewIfNeeded();
+			await expect(action, `${name} should be reachable through the menu scroll`).toBeVisible();
+			const actionBox = await action.boundingBox();
+			expect(actionBox).not.toBeNull();
+			expect(actionBox!.height, `${name} touch target`).toBeGreaterThanOrEqual(44);
+			const actionOwnsCentre = await action.evaluate((element) => {
+				const rect = element.getBoundingClientRect();
+				return (
+					document
+						.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+						?.closest('button') === element
+				);
+			});
+			expect(actionOwnsCentre, `${name} should own its visible centre`).toBe(true);
 		}
 	});
 
@@ -982,6 +1100,40 @@ test.describe('mobile PWA', () => {
 		await dispatchWebKitMultiTouch(canvas, 'touchstart', [moved, second]);
 		await dispatchWebKitPartialTouchEnd(canvas, moved, second);
 		await dispatchWebKitTouch(canvas, 'touchend', moved);
+		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
+	});
+
+	test('cancels a route long press when a second finger rests on an overlay', async ({
+		page,
+		browserName
+	}) => {
+		test.skip(browserName !== 'webkit', 'WebKit exercises the iPhone touch gesture');
+		await mockAuthenticatedPlanner(page);
+		await page.route('**/api/routes/planned', (route) =>
+			route.fulfill({ json: savedRoute('planned') })
+		);
+		await page.goto('/?route=planned');
+		const canvas = await waitForMap(page);
+		const canvasBox = await canvas.boundingBox();
+		const zoomIn = page.locator('.maplibregl-ctrl-zoom-in');
+		const zoomBox = await zoomIn.boundingBox();
+		expect(canvasBox).not.toBeNull();
+		expect(zoomBox).not.toBeNull();
+		const first = {
+			x: canvasBox!.x + canvasBox!.width * 0.5,
+			y: canvasBox!.y + canvasBox!.height * 0.5
+		};
+		const second = {
+			x: zoomBox!.x + zoomBox!.width * 0.5,
+			y: zoomBox!.y + zoomBox!.height * 0.5
+		};
+
+		await dispatchWebKitTouch(canvas, 'touchstart', first);
+		await dispatchWebKitMultiTouch(zoomIn, 'touchstart', [first, second]);
+		await page.waitForTimeout(650);
+		await dispatchWebKitPartialTouchEnd(zoomIn, first, second);
+		await dispatchWebKitTouch(canvas, 'touchend', first);
+		await expect(page.locator('.context-menu')).toHaveCount(0);
 		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
 	});
 
