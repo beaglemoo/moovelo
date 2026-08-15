@@ -1,6 +1,6 @@
 <script module lang="ts">
-	// Survives client-side navigation when localStorage is blocked. A full page
-	// load is a new app session, so this intentionally resets then.
+	// Last-resort fallback when both web-storage areas are blocked. It survives
+	// client-side navigation; sessionStorage below covers full reloads.
 	let sessionPlannerGuideDismissed = false;
 </script>
 
@@ -65,7 +65,7 @@
 	// The guide is client-only: waiting for onMount prevents a dismissed guide
 	// flashing during hydration. Dismiss state is updated before the storage
 	// write, so a blocked/private storage implementation still keeps it hidden
-	// for this mounted app session.
+	// while the session fallback is attempted.
 	let plannerGuideReady = $state(false);
 	let plannerGuideDismissed = $state(false);
 	let searchResultsOpen = $state(false);
