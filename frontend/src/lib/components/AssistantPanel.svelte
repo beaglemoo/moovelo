@@ -449,8 +449,9 @@
 	   the toolbar, search bar, avoid chips and planner guide top to bottom;
 	   top-right is the loop/alternates cards and MapLibre's own zoom stack;
 	   bottom-left is the basemap switch and cycle-route toggle; bottom-centre
-	   is the error banner. z-index 8 sits above the toolbar tier (5-6) and below the
-	   context menu and preset popover (10) and the save dialog (20). */
+	   is the error banner. The collapsed control shares the toolbar's tier at 8;
+	   an expanded mobile card moves to 9 so its own controls win hit-testing.
+	   Both remain below the context menu and preset popover (10) and save dialog (20). */
 	.assistant {
 		position: absolute;
 		z-index: 8;
@@ -525,9 +526,28 @@
 		.assistant-pill-short {
 			display: inline;
 		}
+		/* A desktop drag position is meaningless once the map narrows. Pin the
+		   expanded card to a viewport-safe mobile anchor at every mobile width,
+		   including short landscape layouts, and put it one tier above the
+		   routing toolbar so that toolbar buttons cannot intercept its controls. */
+		.assistant:not(.collapsed) {
+			left: auto !important;
+			right: 10px !important;
+			top: auto !important;
+			bottom: 72px !important;
+			width: min(22rem, calc(100% - 20px)) !important;
+			z-index: 9;
+		}
+		.assistant-close {
+			flex: 0 0 44px;
+			width: 44px;
+			height: 44px;
+			min-width: 44px;
+			min-height: 44px;
+			padding: 0;
+		}
 	}
-	/* An expanded conversation needs the phone width. !important overrides a
-	   position dragged on desktop so that saved coordinates cannot strand it. */
+	/* An expanded conversation needs the phone width. */
 	@media (max-width: 760px) {
 		.assistant:not(.collapsed) {
 			left: 10px !important;
