@@ -96,12 +96,16 @@ async def match_activity(
     stranded as attempted-forever and invisible to every future backfill.
     The un-claim is keyed on the exact claim timestamp this call wrote, so
     if anything else has since touched `ways_matched_at` (a re-derive on
-    this same worker) it is inert rather than clobbering that write. Two
-    residual ways a ride can still strand as attempted-forever: a hard
-    process crash between claim and un-claim, and the un-claim itself
-    failing against a dead connection (logged loudly). Both are the same
-    residue an interrupted job has always left, recoverable by a
-    delete-triggered re-derive; every ordinary exception path un-claims.
+    this same worker) it is inert rather than clobbering that write - and
+    it runs on a FRESH session from session_factory, because the session
+    that just failed may be exactly what is broken (review round 2 proved a
+    genuinely dead connection made the handler's own rollback raise, and a
+    recovery riding on the failed session never ran). Residual ways a ride
+    can still strand as attempted-forever: a hard process crash between
+    claim and un-claim, or the database being unreachable for the recovery
+    session too (logged loudly). Both are the same residue an interrupted
+    job has always left, recoverable by a delete-triggered re-derive; every
+    ordinary exception path un-claims.
 
     A matching failure - the track sits outside the loaded map extract,
     Valhalla is still building tiles, or it is simply unreachable - must
@@ -156,14 +160,34 @@ async def match_activity(
         await db.commit()
         return len(way_ids)
     except BaseException:  # noqa: BLE001 - CancelledError must un-claim too
+        # Roll the caller's session back first: on the one path where the
+        # claim is still uncommitted (the wkt SELECT failed), this releases
+        # the row lock the fresh-session un-claim below would otherwise
+        # block on. It gets its own try because the session's connection may
+        # be the very thing that failed - review round 2 killed the backend
+        # for real and this rollback raised InternalClientError, and when it
+        # shared a try with the un-claim, that swallowed exception was the
+        # un-claim never running.
         try:
             await db.rollback()
-            await db.execute(
-                update(Activity)
-                .where(Activity.id == act_id, Activity.ways_matched_at == claimed_at)
-                .values(ways_matched_at=None)
+        except Exception:
+            logger.exception(
+                "Rollback failed while recovering activity %s - continuing to the "
+                "un-claim on a fresh session",
+                act_id,
             )
-            await db.commit()
+        # The un-claim runs on its OWN session, never the one that just
+        # failed - the route_match lesson: a genuinely dead connection
+        # poisons every later statement on the same session, and a recovery
+        # that depends on the thing being recovered from is not a recovery.
+        try:
+            async with session_factory() as recovery:
+                await recovery.execute(
+                    update(Activity)
+                    .where(Activity.id == act_id, Activity.ways_matched_at == claimed_at)
+                    .values(ways_matched_at=None)
+                )
+                await recovery.commit()
         except Exception:
             logger.exception(
                 "Could not un-claim activity %s after a failed match - it will read "
