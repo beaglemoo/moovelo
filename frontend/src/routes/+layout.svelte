@@ -334,6 +334,20 @@
 		--nav-text: #eee8d5;
 		--nav-text-muted: #93a1a1;
 		--nav-text-active: #fdf6e3;
+		/* The compact header under 900px. Solarized map-paper in light, the
+		   Solarized dark surface in dark - the bright strip above a dark app was
+		   the reported complaint. Accents differ per theme because each is
+		   picked for contrast against its OWN background: #1a6fb0 clears 3:1 on
+		   the cream (2.94 for #268bd2 - it does not), and #268bd2 clears it on
+		   the dark (2.44 for #1a6fb0 - it does not). The filled state keeps the
+		   accent as its border, because that edge is the 3:1 boundary and not
+		   decoration. */
+		--mobile-nav-bg: #eee8d5;
+		--mobile-nav-text: #073642;
+		--mobile-nav-divider: #93a1a1;
+		--mobile-nav-accent: #1a6fb0;
+		--mobile-nav-accent-fill: #1a6fb0;
+		--mobile-nav-accent-on-fill: #ffffff;
 		--text: #073642;
 		--text-muted: #586e75;
 		--border: #ddd;
@@ -366,6 +380,10 @@
 			--text-muted: #93a1a1;
 			--border: #4f8698;
 			--border-strong: #5590a5;
+			--mobile-nav-bg: #073642;
+			--mobile-nav-text: #eee8d5;
+			--mobile-nav-divider: #586e75;
+			--mobile-nav-accent: #268bd2;
 			--input-bg: #00212b;
 			--input-border: #5590a5;
 			--shadow: rgba(0, 0, 0, 0.45);
@@ -378,6 +396,10 @@
 	}
 	:global(:root[data-theme='dark']) {
 		color-scheme: dark;
+		--mobile-nav-bg: #073642;
+		--mobile-nav-text: #eee8d5;
+		--mobile-nav-divider: #586e75;
+		--mobile-nav-accent: #268bd2;
 		--bg: #002b36;
 		--surface: #073642;
 		--surface-sunken: #00212b;
@@ -396,6 +418,10 @@
 	}
 	:global(:root[data-theme='light']) {
 		color-scheme: light;
+		--mobile-nav-bg: #eee8d5;
+		--mobile-nav-text: #073642;
+		--mobile-nav-divider: #93a1a1;
+		--mobile-nav-accent: #1a6fb0;
 		--bg: #fdf6e3;
 		--surface: #ffffff;
 		--surface-sunken: #f2ede0;
@@ -455,6 +481,15 @@
 		color: var(--nav-text);
 		flex-shrink: 0;
 		box-sizing: border-box;
+		/* Every text box in this bar must land on a whole pixel. `align-items:
+		   center` puts a child at (contentHeight - childHeight) / 2, so an odd
+		   difference leaves it on a half pixel - which a 3x phone renders as
+		   1.5 device pixels of smear, and reads as a blurry header while the
+		   whole-pixel controls a few pixels below stay sharp. A fixed even
+		   line-height (rather than `normal`, whose box is a fractional
+		   font metric) is what makes the difference even, and integer font
+		   sizes keep the baseline inside that box whole too. */
+		line-height: 20px;
 	}
 	.desktop-nav {
 		display: flex;
@@ -474,7 +509,7 @@
 	nav a {
 		color: var(--nav-text-muted);
 		text-decoration: none;
-		font-size: 0.95rem;
+		font-size: 15px;
 	}
 	nav a.active,
 	nav a:hover {
@@ -484,7 +519,7 @@
 		flex: 1;
 	}
 	.email {
-		font-size: 0.85rem;
+		font-size: 14px;
 		color: var(--nav-text-muted);
 	}
 	nav button {
@@ -494,7 +529,8 @@
 		border-radius: 6px;
 		padding: 0.25rem 0.7rem;
 		font: inherit;
-		font-size: 0.85rem;
+		font-size: 14px;
+		line-height: 20px;
 		cursor: pointer;
 	}
 	.theme-toggle {
@@ -538,17 +574,23 @@
 		nav {
 			height: 44px;
 			padding: 0 0.75rem;
-			background: #eee8d5;
-			color: #073642;
-			border-bottom: 1px solid #93a1a1;
-			box-shadow: none;
+			background: var(--mobile-nav-bg);
+			color: var(--mobile-nav-text);
+			/* The divider is an inset shadow, not a border. A 1px border would
+			   take the content box to 43px, and `align-items: center` would then
+			   put the 44px Menu button at top: -0.5 and the brand at top: 12.5 -
+			   half-pixel text, which is 1.5 device pixels of smear on a 3x
+			   phone and is exactly what made this bar read as hazy. A shadow
+			   draws the same line without touching the box. */
+			border-bottom: none;
+			box-shadow: inset 0 -1px 0 var(--mobile-nav-divider);
 			filter: none;
 			backdrop-filter: none;
 			-webkit-backdrop-filter: none;
 		}
 		.brand {
 			margin-right: 0;
-			color: #073642;
+			color: var(--mobile-nav-text);
 		}
 		.mobile-menu-toggle {
 			display: block;
@@ -557,18 +599,21 @@
 			min-width: 64px;
 			padding-block: 0;
 			background: transparent;
-			border-color: #268bd2;
-			color: #073642;
-			font-weight: 650;
+			border-color: var(--mobile-nav-accent);
+			color: var(--mobile-nav-text);
+			/* 600, not 650: an off-ramp weight has no matching face in most
+			   stacks, and where it is synthesised the smearing is the very
+			   artefact this block exists to remove. */
+			font-weight: 600;
 		}
 		.mobile-menu-toggle:focus-visible {
-			outline: 3px solid #268bd2;
+			outline: 3px solid var(--mobile-nav-accent);
 			outline-offset: -3px;
 		}
 		.mobile-menu-toggle[aria-expanded='true'] {
-			background: #1a6fb0;
-			border-color: #1a6fb0;
-			color: #fff;
+			background: var(--mobile-nav-accent-fill);
+			border-color: var(--mobile-nav-accent);
+			color: var(--mobile-nav-accent-on-fill);
 		}
 		.mobile-menu {
 			position: absolute;
