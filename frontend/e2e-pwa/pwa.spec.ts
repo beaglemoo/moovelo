@@ -475,6 +475,32 @@ test.describe('mobile PWA', () => {
 		}, mode);
 	}
 
+	test('never lets the web view rescale its own text', async ({ page }) => {
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+		// An installed home-screen app runs in WKWebView, which autosizes text
+		// per block by a non-integer factor while Safari on the same phone does
+		// not - which is why the header read as blurry only once installed.
+		// Playwright cannot emulate standalone WKWebView, so this pins the one
+		// declaration that turns it off rather than the rendering it prevents.
+		// Read the served stylesheet, not getComputedStyle: desktop WebKit
+		// reports "" for -webkit-text-size-adjust because the property only
+		// exists on iOS builds, so a computed-value assertion can only ever pass
+		// in Chromium - and Chromium is not the engine this is aimed at.
+		const hrefs = await page.evaluate(() =>
+			[...document.querySelectorAll<HTMLLinkElement>('link[rel=stylesheet]')].map(
+				(link) => link.href
+			)
+		);
+		expect(hrefs.length, 'the built app serves a stylesheet').toBeGreaterThan(0);
+		let declared = 0;
+		for (const href of hrefs) {
+			const css = await (await page.request.get(href)).text();
+			if (/-webkit-text-size-adjust:\s*100%/.test(css)) declared += 1;
+		}
+		expect(declared, 'the built CSS turns text autosizing off').toBeGreaterThan(0);
+	});
+
 	test('offers the waiting build and reloads onto it', async ({ page }) => {
 		await stubWaitingWorker(page, 'waiting');
 		await mockAuthenticatedPlanner(page);
