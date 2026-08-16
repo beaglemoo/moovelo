@@ -7,6 +7,27 @@
 	// clearable state for the optional FTP field.
 	let ftpWatts: number | undefined = $state(undefined);
 	let appVersion: string = $state('');
+	// How this browser is actually presenting the page. Only ever read on the
+	// client, and only shown on demand - it exists because "the text looks
+	// blurry, but only in the installed app" cannot be diagnosed from a
+	// screenshot, and an installed home-screen app has no console to ask.
+	let display: string | null = $state(null);
+
+	function measureDisplay(): string {
+		const view = window.visualViewport;
+		const standalone =
+			(window.navigator as Navigator & { standalone?: boolean }).standalone === true ||
+			window.matchMedia('(display-mode: standalone)').matches;
+		return [
+			`standalone=${standalone}`,
+			`dpr=${window.devicePixelRatio}`,
+			`scale=${view ? view.scale : 'n/a'}`,
+			`viewport=${window.innerWidth}x${window.innerHeight}`,
+			`visual=${view ? `${Math.round(view.width)}x${Math.round(view.height)}` : 'n/a'}`,
+			`document=${document.documentElement.scrollWidth}`,
+			`screen=${window.screen.width}x${window.screen.height}`
+		].join('  ');
+	}
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -139,11 +160,33 @@
 			</div>
 		</form>
 
-		<p class="hint">Moovelo {appVersion}</p>
+		<p class="hint">
+			Moovelo {appVersion}
+			<button type="button" class="link-button" onclick={() => (display = measureDisplay())}>
+				Display info
+			</button>
+		</p>
+		{#if display}
+			<p class="hint diagnostics">{display}</p>
+		{/if}
 	{/if}
 </div>
 
 <style>
+	.link-button {
+		margin-left: 0.5rem;
+		padding: 0;
+		border: none;
+		background: none;
+		color: var(--link);
+		font: inherit;
+		text-decoration: underline;
+		cursor: pointer;
+	}
+	.diagnostics {
+		font-family: ui-monospace, monospace;
+		overflow-wrap: anywhere;
+	}
 	.page {
 		max-width: 900px;
 		margin: 0 auto;
