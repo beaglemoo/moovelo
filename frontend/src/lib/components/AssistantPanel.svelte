@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import {
 		streamAssistantChat,
 		type AssistantHandle,
@@ -89,6 +89,7 @@
 	// How much of the header must stay reachable after a clamp - enough to
 	// grab it again, not the whole card.
 	const HEADER_MARGIN = 48;
+	const MAP_CONTROL_GAP = 10;
 
 	let root = $state<HTMLDivElement | undefined>();
 	let collapsed = $state(true);
@@ -102,26 +103,107 @@
 		localStorage.setItem(STORAGE_KEY, JSON.stringify({ collapsed, left, top }));
 	}
 
-	function toggleCollapsed() {
+	async function toggleCollapsed() {
 		collapsed = !collapsed;
+		// Expansion replaces the pill with a much larger card. Wait for that
+		// card to exist before measuring it, otherwise a saved position that was
+		// reachable as a pill can leave the conversation and input off-screen.
+		await tick();
+		clampPosition();
 		persistBox();
 	}
 
-	// Keeps the card fully inside .map-area (its positioning parent) with at
-	// least HEADER_MARGIN px reachable, so a window dragged off-screen and
-	// then resized narrower cannot strand itself out of reach. Run on drop
-	// and on window resize - not continuously during a drag.
-	function clampPosition() {
-		if (!root || left === null || top === null) return;
+	// Keeps an expanded card fully inside .map-area (its positioning parent).
+	// A collapsed pill only needs HEADER_MARGIN px reachable, so an existing
+	// partly-offscreen drag position is preserved without stranding it. Run on
+	// drop and on window resize - not continuously during a drag.
+	function clampPosition(): boolean {
+		if (!root) return false;
 		const area = root.parentElement;
-		if (!area) return;
+		if (!area) return false;
 		const areaRect = area.getBoundingClientRect();
 		const boxRect = root.getBoundingClientRect();
-		const minLeft = HEADER_MARGIN - boxRect.width;
-		const maxLeft = Math.max(minLeft, areaRect.width - HEADER_MARGIN);
-		const maxTop = Math.max(0, areaRect.height - HEADER_MARGIN);
-		left = Math.min(Math.max(left, minLeft), maxLeft);
-		top = Math.min(Math.max(top, 0), maxTop);
+		const desktop = window.matchMedia('(min-width: 901px)').matches;
+		// Mobile positioning is owned by the responsive CSS. On desktop, turn a
+		// default right/bottom anchor into coordinates when the card expands so
+		// the same collision clamp can protect MapLibre's right-hand controls.
+		if (left === null || top === null) {
+			if (collapsed || !desktop) return false;
+			left = boxRect.left - areaRect.left;
+			top = boxRect.top - areaRect.top;
+		}
+		// A collapsed pill may remain partly beyond an edge as long as its
+		// draggable header-sized portion is reachable. Once expanded, every
+		// edge of the conversation card (especially its input and controls) must
+		// be inside the map area.
+		const minLeft = collapsed ? HEADER_MARGIN - boxRect.width : 0;
+		const maxLeft = collapsed
+			? Math.max(minLeft, areaRect.width - HEADER_MARGIN)
+			: Math.max(0, areaRect.width - boxRect.width);
+		const maxTop = collapsed
+			? Math.max(0, areaRect.height - HEADER_MARGIN)
+			: Math.max(0, areaRect.height - boxRect.height);
+		let nextLeft = Math.min(Math.max(left, minLeft), maxLeft);
+		let nextTop = Math.min(Math.max(top, 0), maxTop);
+
+		if (!collapsed && desktop) {
+			const controls = area.querySelector<HTMLElement>('.maplibregl-ctrl-top-right');
+			const controlsRect = controls?.getBoundingClientRect();
+			if (controlsRect) {
+				const overlaps = (candidateLeft: number, candidateTop: number) => {
+					const candidateRight = areaRect.left + candidateLeft + boxRect.width;
+					const candidateBottom = areaRect.top + candidateTop + boxRect.height;
+					return !(
+						candidateRight <= controlsRect.left ||
+						areaRect.left + candidateLeft >= controlsRect.right ||
+						candidateBottom <= controlsRect.top ||
+						areaRect.top + candidateTop >= controlsRect.bottom
+					);
+				};
+
+				if (overlaps(nextLeft, nextTop)) {
+					const candidates = [
+						{
+							left: controlsRect.left - areaRect.left - boxRect.width - MAP_CONTROL_GAP,
+							top: nextTop
+						},
+						{
+							left: controlsRect.right - areaRect.left + MAP_CONTROL_GAP,
+							top: nextTop
+						},
+						{
+							left: nextLeft,
+							top: controlsRect.top - areaRect.top - boxRect.height - MAP_CONTROL_GAP
+						},
+						{
+							left: nextLeft,
+							top: controlsRect.bottom - areaRect.top + MAP_CONTROL_GAP
+						}
+					].filter(
+						(candidate) =>
+							candidate.left >= 0 &&
+							candidate.left <= maxLeft &&
+							candidate.top >= 0 &&
+							candidate.top <= maxTop &&
+							!overlaps(candidate.left, candidate.top)
+					);
+					candidates.sort(
+						(a, b) =>
+							Math.abs(a.left - nextLeft) +
+							Math.abs(a.top - nextTop) -
+							(Math.abs(b.left - nextLeft) + Math.abs(b.top - nextTop))
+					);
+					if (candidates[0]) {
+						nextLeft = candidates[0].left;
+						nextTop = candidates[0].top;
+					}
+				}
+			}
+		}
+		const changed = nextLeft !== left || nextTop !== top;
+		left = nextLeft;
+		top = nextTop;
+		return changed;
 	}
 
 	const boxStyle = $derived(
@@ -186,7 +268,7 @@
 		header.addEventListener('pointercancel', onUp);
 	}
 
-	onMount(() => {
+	onMount(async () => {
 		try {
 			const raw = localStorage.getItem(STORAGE_KEY);
 			if (raw) {
@@ -203,7 +285,10 @@
 		}
 		// A position saved on a wider window must not strand the card off
 		// this one.
-		clampPosition();
+		// Reading collapsed state can replace the pill with the larger card, so
+		// measure only after Svelte has committed the restored DOM shape.
+		await tick();
+		if (clampPosition()) persistBox();
 	});
 
 	const TOOL_LABELS: Record<string, string> = {
@@ -358,8 +443,14 @@
 
 <div bind:this={root} class="assistant" class:collapsed style={boxStyle}>
 	{#if collapsed}
-		<button type="button" class="assistant-pill" onclick={toggleCollapsed}>
-			Ask for a route
+		<button
+			type="button"
+			class="assistant-pill"
+			onclick={toggleCollapsed}
+			aria-label="Ask for a route"
+		>
+			<span class="assistant-pill-long" aria-hidden="true">Ask for a route</span>
+			<span class="assistant-pill-short" aria-hidden="true">Ask</span>
 		</button>
 	{:else}
 		<!-- Drag by the header only: the body holds selectable text (the log,
@@ -440,11 +531,12 @@
 
 <style>
 	/* Bottom-right is the only corner nothing else claims: the left column is
-	   the toolbar, search bar and avoid chips top to bottom; top-right is the
-	   loop/alternates cards and MapLibre's own zoom stack; bottom-left is the
-	   basemap switch and cycle-route toggle; bottom-centre is the hint/error
-	   banner. z-index 8 sits above the toolbar tier (5-6) and below the
-	   context menu and preset popover (10) and the save dialog (20). */
+	   the toolbar, search bar, avoid chips and planner guide top to bottom;
+	   top-right is the loop/alternates cards and MapLibre's own zoom stack;
+	   bottom-left is the basemap switch and cycle-route toggle; bottom-centre
+	   is the error banner. The collapsed control shares the toolbar's tier at 8;
+	   an expanded mobile card moves to 9 so its own controls win hit-testing.
+	   Both remain below the context menu and preset popover (10) and save dialog (20). */
 	.assistant {
 		position: absolute;
 		z-index: 8;
@@ -471,6 +563,9 @@
 		color: var(--text);
 		cursor: pointer;
 	}
+	.assistant-pill-short {
+		display: none;
+	}
 	@supports not (backdrop-filter: blur(1px)) {
 		.assistant-pill {
 			background: var(--surface);
@@ -493,38 +588,58 @@
 			background: var(--surface);
 		}
 	}
-	/* No responsive breakpoint exists on any other map overlay in this
-	   codebase - they are all fixed pixel offsets - so this is the first.
-	   !important overrides the inline left/top a drag may have set: a
-	   position dragged into place on a desktop must not leak onto a phone. */
-	/* Full width on a phone, because a 22rem card floating in a 380px
-	   viewport is neither floating nor a card. Dragging is meaningless at
-	   this size, so the saved position is overridden rather than honoured.
-
-	   The bottom offset clears two things stacked below it, not one. The
-	   basemap switch and the cycle and heatmap toggles sit at bottom: 28px
-	   and stand about 30px tall - at bottom: 10px the pill lay straight
-	   across all three, which only became visible once the heatmap overlay
-	   and this card were in one tree: each was built against a map the other
-	   had not touched yet.
-
-	   Below THAT, +page.svelte's own .hint ("Click the map to add
-	   waypoints...") sits centred at bottom: 18px and, with no route planned
-	   yet, is on screen at the exact same moment as this pill's default
-	   collapsed state - the two are the very first thing a new rider sees.
-	   .hint has no max-width, so on a narrow phone its text wraps to two or
-	   three lines and grows to 65-85px tall; bottom: 68px left only a sliver
-	   of that covered before the pill's own box started, and measuring both
-	   boxes at real phone widths (360-428px) confirmed they overlapped at
-	   every one of them. 120px clears a three-line .hint (bottom 18 to
-	   ~102px) with room to spare, and still sits well clear of the map
-	   control row's own 58px ceiling. */
+	/* The collapsed assistant is a small edge control on every mobile layout,
+	   not a full-width band across the route. The 72px bottom anchor clears the
+	   basemap/overlay row while keeping the centre of the map readable. Desktop
+	   retains the full label and the rider's saved drag position. */
+	@media (max-width: 900px) {
+		.assistant.collapsed {
+			left: auto !important;
+			right: 10px !important;
+			top: auto !important;
+			bottom: 72px !important;
+			width: auto !important;
+			z-index: 9;
+		}
+		.assistant-pill {
+			min-width: 44px;
+			min-height: 44px;
+			padding: 0.5rem 0.75rem;
+		}
+		.assistant-pill-long {
+			display: none;
+		}
+		.assistant-pill-short {
+			display: inline;
+		}
+		/* A desktop drag position is meaningless once the map narrows. Pin the
+		   expanded card to a viewport-safe mobile anchor at every mobile width,
+		   including short landscape layouts, and put it one tier above the
+		   routing toolbar so that toolbar buttons cannot intercept its controls. */
+		.assistant:not(.collapsed) {
+			left: 10px !important;
+			right: auto !important;
+			top: auto !important;
+			bottom: 72px !important;
+			width: min(22rem, calc(100% - 20px)) !important;
+			z-index: 9;
+		}
+		.assistant-close {
+			flex: 0 0 44px;
+			width: 44px;
+			height: 44px;
+			min-width: 44px;
+			min-height: 44px;
+			padding: 0;
+		}
+	}
+	/* An expanded conversation needs the phone width. */
 	@media (max-width: 760px) {
-		.assistant {
+		.assistant:not(.collapsed) {
 			left: 10px !important;
 			right: 10px !important;
 			top: auto !important;
-			bottom: 120px !important;
+			bottom: 72px !important;
 			width: auto !important;
 		}
 	}

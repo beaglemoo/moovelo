@@ -2,7 +2,7 @@
 	import maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import type { Feature, FeatureCollection, LineString } from 'geojson';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import type { Climb, PoiResult, Waypoint } from '$lib/api';
 	import { cumulativeDistances, nearestVertexIndex } from '$lib/geo';
 	import { coordsBetween, GRADIENT_BANDS, type GradientSegment } from '$lib/gradient';
@@ -157,6 +157,43 @@
 
 	let menu: ContextMenu | null = $state(null);
 	let menuPlace: string | null = $state(null);
+	let menuElement: HTMLDivElement | undefined = $state();
+	let menuPosition = $state({ x: 0, y: 0 });
+	const MENU_MARGIN_PX = 8;
+
+	function openMenu(next: ContextMenu) {
+		// Render at the press position first. Once Svelte has produced the real
+		// menu (whose height depends on its actions and resolved place name), the
+		// effect below measures and clamps it inside the clipped map area.
+		menuPosition = { x: next.x, y: next.y };
+		menu = next;
+	}
+
+	async function clampContextMenu(current: ContextMenu, expectedPlace: string | null) {
+		// An absolutely-positioned auto-width menu can grow after moving away
+		// from the right edge because more containing-block width becomes
+		// available. Re-measure after each move until that shrink-to-fit layout
+		// settles; the small fixed bound prevents a pathological reflow loop.
+		for (let pass = 0; pass < 4; pass++) {
+			await tick();
+			if (menu !== current || menuPlace !== expectedPlace || !menuElement || !container) return;
+
+			const maxX = Math.max(
+				MENU_MARGIN_PX,
+				container.clientWidth - menuElement.offsetWidth - MENU_MARGIN_PX
+			);
+			const maxY = Math.max(
+				MENU_MARGIN_PX,
+				container.clientHeight - menuElement.offsetHeight - MENU_MARGIN_PX
+			);
+			const next = {
+				x: Math.min(Math.max(current.x, MENU_MARGIN_PX), maxX),
+				y: Math.min(Math.max(current.y, MENU_MARGIN_PX), maxY)
+			};
+			if (next.x === menuPosition.x && next.y === menuPosition.y) return;
+			menuPosition = next;
+		}
+	}
 
 	type Basemap = 'cyclosm' | 'osm';
 	const BASEMAP_STORAGE_KEY = 'moovelo:basemap';
@@ -712,7 +749,28 @@
 		if (map && mapReady) applyBasemapDimming(map, mapDark);
 	});
 
-	let longPressFired = false;
+	const DRAG_ACTIVATION_PX = 8;
+	const LONG_PRESS_CLICK_SLOP_PX = 12;
+	const LONG_PRESS_CLICK_WINDOW_MS = 1000;
+	let longPressSequence = 0;
+	let longPressClickOrigin: { x: number; y: number; expiresAt: number } | null = null;
+
+	function pointsWithin(
+		a: { x: number; y: number },
+		b: { x: number; y: number },
+		distance: number
+	): boolean {
+		return (a.x - b.x) ** 2 + (a.y - b.y) ** 2 <= distance ** 2;
+	}
+
+	function recordLongPress(point: { x: number; y: number }) {
+		longPressSequence++;
+		longPressClickOrigin = {
+			x: point.x,
+			y: point.y,
+			expiresAt: Date.now() + LONG_PRESS_CLICK_WINDOW_MS
+		};
+	}
 
 	// One definition of "did this press land on the route line", shared by
 	// every menu-opening path so right-click and long-press can never
@@ -723,9 +781,18 @@
 
 	function setupInteractions(m: maplibregl.Map) {
 		m.on('click', (e) => {
-			if (longPressFired) {
-				longPressFired = false;
-				return;
+			if (longPressClickOrigin) {
+				const origin = longPressClickOrigin;
+				longPressClickOrigin = null;
+				// Ignore only the synthetic click generated at the end of this
+				// long-press. If WebKit does not emit one, a later deliberate tap
+				// elsewhere must still reach the normal menu-close path below.
+				if (
+					Date.now() <= origin.expiresAt &&
+					pointsWithin(e.point, origin, LONG_PRESS_CLICK_SLOP_PX)
+				) {
+					return;
+				}
 			}
 			if (menu) {
 				menu = null;
@@ -749,42 +816,70 @@
 		m.on('contextmenu', (e) => {
 			e.preventDefault();
 			const onRoute = isOnRoute(m, e.point);
-			menu = {
+			openMenu({
 				x: e.point.x,
 				y: e.point.y,
 				wp: { lat: e.lngLat.lat, lon: e.lngLat.lng },
 				waypointIndex: null,
 				onRoute
-			};
+			});
 		});
 
 		// Touch devices get no contextmenu on the canvas; a long-press (600ms
 		// without moving or lifting) opens the same menu.
 		let pressTimer: ReturnType<typeof setTimeout> | null = null;
+		let pressOrigin: { x: number; y: number } | null = null;
+		const cancelCanvasMultiTouch = (event: TouchEvent) => {
+			if (event.touches.length !== 1) cancelPress();
+		};
 		const cancelPress = () => {
 			if (pressTimer) {
 				clearTimeout(pressTimer);
 				pressTimer = null;
 			}
+			pressOrigin = null;
+			window.removeEventListener('touchstart', cancelCanvasMultiTouch);
 		};
 		m.on('touchstart', (e) => {
 			cancelPress();
+			// Markers own their long-press menu, but their touch must still bubble
+			// through MapLibre so its draggable Marker can start tracking it.
+			if (
+				e.originalEvent.target instanceof Element &&
+				e.originalEvent.target.closest('.maplibregl-marker') !== null
+			) {
+				return;
+			}
 			if (e.points.length !== 1) return;
 			const { point, lngLat } = e;
+			pressOrigin = { x: point.x, y: point.y };
 			pressTimer = setTimeout(() => {
 				pressTimer = null;
-				longPressFired = true;
+				pressOrigin = null;
+				window.removeEventListener('touchstart', cancelCanvasMultiTouch);
+				recordLongPress(point);
 				const onRoute = isOnRoute(m, point);
-				menu = {
+				openMenu({
 					x: point.x,
 					y: point.y,
 					wp: { lat: lngLat.lat, lon: lngLat.lng },
 					waypointIndex: null,
 					onRoute
-				};
+				});
 			}, 600);
+			// A second finger can land on a floating control, outside MapLibre's
+			// event surface. Observe the whole window for the lifetime of this
+			// press so an overlay touch cancels the canvas/route long-press too.
+			window.addEventListener('touchstart', cancelCanvasMultiTouch);
 		});
-		m.on('touchmove', cancelPress);
+		m.on('touchmove', (e) => {
+			if (
+				e.points.length !== 1 ||
+				(pressOrigin && !pointsWithin(e.point, pressOrigin, DRAG_ACTIVATION_PX))
+			) {
+				cancelPress();
+			}
+		});
 		m.on('touchend', cancelPress);
 		m.on('touchcancel', cancelPress);
 
@@ -835,25 +930,69 @@
 		// was not an edge case.
 		const startDrag = (grab: maplibregl.LngLat, kind: 'mouse' | 'touch') => {
 			const grabIndex = nearestVertexIndex(routeLine, [grab.lng, grab.lat]);
+			const grabPoint = m.project(grab);
+			const longPressAtStart = longPressSequence;
 			// Unprojecting needs canvas-relative coordinates, and the canvas
 			// moves as the panel below it grows, so the rect is re-read per move.
 			const canvas = m.getCanvas();
 			const moveEvent = kind === 'mouse' ? 'mousemove' : 'touchmove';
 			const endEvent = kind === 'mouse' ? 'mouseup' : 'touchend';
 			let last = grab;
-			const onMove = (ev: MouseEvent | TouchEvent) => {
-				// A touchend carries no touches; a second finger means the rider
-				// is pinching, not dragging. Either way, keep the last position.
-				const point = 'touches' in ev ? (ev.touches.length === 1 ? ev.touches[0] : null) : ev;
-				if (!point) return;
-				const rect = canvas.getBoundingClientRect();
-				last = m.unproject([point.clientX - rect.left, point.clientY - rect.top]);
-				setSourceData(m, 'drag-point', pointGeoJSON([last.lng, last.lat]));
-			};
-			const onEnd = () => {
+			let dragActivated = false;
+			let touchCancelled = false;
+			const cleanup = () => {
 				window.removeEventListener(moveEvent, onMove);
 				window.removeEventListener(endEvent, onEnd);
+				if (kind === 'touch') {
+					window.removeEventListener('touchstart', cancelMultiTouch);
+					window.removeEventListener('touchcancel', cancelTouch);
+				}
 				setSourceData(m, 'drag-point', pointGeoJSON(null));
+			};
+			const cancelTouch = () => {
+				touchCancelled = true;
+				cleanup();
+			};
+			const cancelMultiTouch = (event: TouchEvent) => {
+				if (event.touches.length !== 1) cancelTouch();
+			};
+			const onMove = (ev: MouseEvent | TouchEvent) => {
+				// Once a second finger joins, this is a pinch rather than a route
+				// drag. Cancel the whole gesture: a later touchend must not commit
+				// the last one-finger position as a phantom via.
+				if ('touches' in ev && ev.touches.length !== 1) {
+					cancelTouch();
+					return;
+				}
+				const point = 'touches' in ev ? ev.touches[0] : ev;
+				const rect = canvas.getBoundingClientRect();
+				const current = { x: point.clientX - rect.left, y: point.clientY - rect.top };
+				if (!dragActivated && !pointsWithin(current, grabPoint, DRAG_ACTIVATION_PX)) {
+					dragActivated = true;
+				}
+				last = m.unproject([current.x, current.y]);
+				if (!dragActivated) return;
+				setSourceData(m, 'drag-point', pointGeoJSON([last.lng, last.lat]));
+			};
+			const onEnd = (event: MouseEvent | TouchEvent) => {
+				// A touchend fires when either finger lifts. If another finger is
+				// still down, this gesture became multi-touch even if neither finger
+				// moved after the second touchstart, so it must never commit a via.
+				if ('touches' in event && event.touches.length > 0) {
+					cancelTouch();
+					return;
+				}
+				cleanup();
+				if (touchCancelled) return;
+				// A stationary touch on the route starts this drag handler and the
+				// map's long-press menu timer together. Once the timer wins, lifting
+				// the finger belongs to the menu gesture and must not also insert a
+				// via at the grabbed point.
+				if (kind === 'touch' && longPressSequence !== longPressAtStart) return;
+				// A press is not a drag. Requiring real pointer movement also keeps
+				// normal route taps and inevitable one-pixel finger jitter from
+				// inserting a phantom via. The same threshold protects mouse clicks.
+				if (!dragActivated) return;
 				// The grabbed vertex sits inside some leg; the new via goes
 				// between that leg's endpoints.
 				let leg = 0;
@@ -862,6 +1001,12 @@
 			};
 			window.addEventListener(moveEvent, onMove);
 			window.addEventListener(endEvent, onEnd);
+			if (kind === 'touch') {
+				// `touchmove` is not guaranteed between a second finger landing and
+				// lifting. Observe touchstart as well so the pinch cancels immediately.
+				window.addEventListener('touchstart', cancelMultiTouch);
+				window.addEventListener('touchcancel', cancelTouch);
+			}
 		};
 
 		// Waypoint markers sit on the route line and their DOM events bubble to
@@ -921,44 +1066,77 @@
 				event.preventDefault();
 				event.stopPropagation();
 				const rect = container.getBoundingClientRect();
-				menu = {
+				openMenu({
 					x: event.clientX - rect.left,
 					y: event.clientY - rect.top,
 					wp,
 					waypointIndex: i,
 					onRoute: false
-				};
+				});
 			});
 			// Long-press on a marker opens its menu on touch devices.
 			let markerTimer: ReturnType<typeof setTimeout> | null = null;
+			let markerPressOrigin: { x: number; y: number } | null = null;
+			const cancelMarkerMultiTouch = (event: TouchEvent) => {
+				if (event.touches.length !== 1) cancelMarkerPress();
+			};
 			const cancelMarkerPress = () => {
 				if (markerTimer) {
 					clearTimeout(markerTimer);
 					markerTimer = null;
 				}
+				markerPressOrigin = null;
+				window.removeEventListener('touchstart', cancelMarkerMultiTouch);
 			};
 			el.addEventListener(
 				'touchstart',
 				(event) => {
+					// Cancel any pending press first. In particular, a second finger on
+					// this marker must cancel the original one rather than merely return.
+					cancelMarkerPress();
 					if (event.touches.length !== 1) return;
 					const touch = event.touches[0];
+					markerPressOrigin = { x: touch.clientX, y: touch.clientY };
 					markerTimer = setTimeout(() => {
 						markerTimer = null;
-						longPressFired = true;
+						markerPressOrigin = null;
+						window.removeEventListener('touchstart', cancelMarkerMultiTouch);
 						const rect = container.getBoundingClientRect();
-						menu = {
+						const point = {
 							x: touch.clientX - rect.left,
-							y: touch.clientY - rect.top,
+							y: touch.clientY - rect.top
+						};
+						recordLongPress(point);
+						openMenu({
+							...point,
 							wp,
 							waypointIndex: i,
 							onRoute: false
-						};
+						});
 					}, 600);
+					// The next finger may land on the canvas or another control, where
+					// this marker receives no event. Window observes either case.
+					window.addEventListener('touchstart', cancelMarkerMultiTouch);
 				},
 				{ passive: true }
 			);
 			el.addEventListener('touchend', cancelMarkerPress);
-			el.addEventListener('touchmove', cancelMarkerPress);
+			el.addEventListener('touchmove', (event) => {
+				if (event.touches.length !== 1 || !markerPressOrigin) {
+					cancelMarkerPress();
+					return;
+				}
+				const touch = event.touches[0];
+				if (
+					!pointsWithin(
+						{ x: touch.clientX, y: touch.clientY },
+						markerPressOrigin,
+						DRAG_ACTIVATION_PX
+					)
+				) {
+					cancelMarkerPress();
+				}
+			});
 			el.addEventListener('touchcancel', cancelMarkerPress);
 			return marker;
 		});
@@ -1010,12 +1188,24 @@
 		};
 	});
 
+	// Opening at an edge and resolving the optional place name both change the
+	// rendered menu geometry. Re-measure for either event so an async label
+	// cannot push an already-clamped menu back through the map boundary.
+	$effect(() => {
+		const current = menu;
+		const place = menuPlace;
+		if (current) void clampContextMenu(current, place);
+	});
+
 	function menuAction(action: () => void) {
 		// Run the action before clearing the menu: the menu items capture
 		// template constants derived from `menu`, and nulling it first makes
 		// that read throw instead of running the action.
 		action();
 		menu = null;
+		// A menu-item click does not bubble to MapLibre, so it cannot consume
+		// the synthetic-click guard. The gesture is complete once its action ran.
+		longPressClickOrigin = null;
 	}
 
 	// MapLibre's own keyboard handler pans and zooms with arrows and +/-,
@@ -1215,7 +1405,12 @@
 
 <div class="map" bind:this={container}></div>
 {#if menu}
-	<div class="context-menu" style="left: {menu.x}px; top: {menu.y}px" role="menu">
+	<div
+		bind:this={menuElement}
+		class="context-menu"
+		style="left: {menuPosition.x}px; top: {menuPosition.y}px"
+		role="menu"
+	>
 		{#if menuPlace}
 			<div class="menu-place">{menuPlace}</div>
 		{/if}
@@ -1381,7 +1576,10 @@
 	}
 	.context-menu {
 		position: absolute;
-		min-width: 160px;
+		width: max-content;
+		min-width: min(160px, calc(100% - 16px));
+		max-width: min(22rem, calc(100% - 16px));
+		max-height: calc(100% - 16px);
 		background: var(--surface);
 		border: 1px solid var(--input-border);
 		border-radius: 8px;
@@ -1390,6 +1588,9 @@
 		z-index: 10;
 		display: flex;
 		flex-direction: column;
+		box-sizing: border-box;
+		overflow-y: auto;
+		overscroll-behavior: contain;
 	}
 	.context-menu button {
 		border: none;
@@ -1404,6 +1605,12 @@
 	}
 	.context-menu button:hover {
 		background: var(--surface-sunken);
+	}
+	@media (max-width: 900px) {
+		.context-menu button {
+			min-height: 44px;
+			box-sizing: border-box;
+		}
 	}
 	.menu-place {
 		padding: 0.35rem 0.7rem 0.4rem;

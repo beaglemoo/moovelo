@@ -536,23 +536,43 @@
 			display: none;
 		}
 		nav {
+			height: 44px;
 			padding: 0 0.75rem;
+			background: #eee8d5;
+			color: #073642;
+			border-bottom: 1px solid #93a1a1;
+			box-shadow: none;
+			filter: none;
+			backdrop-filter: none;
+			-webkit-backdrop-filter: none;
 		}
 		.brand {
 			margin-right: 0;
+			color: #073642;
 		}
 		.mobile-menu-toggle {
 			display: block;
 			margin-left: auto;
-			min-height: 34px;
+			min-height: 44px;
 			min-width: 64px;
-			background: var(--accent-fill);
-			border-color: var(--accent);
+			padding-block: 0;
+			background: transparent;
+			border-color: #268bd2;
+			color: #073642;
 			font-weight: 650;
+		}
+		.mobile-menu-toggle:focus-visible {
+			outline: 3px solid #268bd2;
+			outline-offset: -3px;
+		}
+		.mobile-menu-toggle[aria-expanded='true'] {
+			background: #1a6fb0;
+			border-color: #1a6fb0;
+			color: #fff;
 		}
 		.mobile-menu {
 			position: absolute;
-			top: 100%;
+			top: 44px;
 			left: 0.5rem;
 			right: 0.5rem;
 			display: flex;
@@ -565,8 +585,8 @@
 			background: var(--nav-bg);
 			box-shadow: 0 8px 22px var(--shadow);
 			box-sizing: border-box;
-			max-height: calc(100vh - 42px - 0.5rem);
-			max-height: calc(100dvh - 42px - 0.5rem);
+			max-height: calc(100vh - 44px - 0.5rem);
+			max-height: calc(100dvh - 44px - 0.5rem);
 			overflow-y: auto;
 			overscroll-behavior: contain;
 		}

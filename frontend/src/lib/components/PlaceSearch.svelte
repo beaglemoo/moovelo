@@ -8,9 +8,12 @@
 		 * looking at. Many English places share a name. */
 		near: { lat: number; lon: number } | null;
 		onPick: (place: PlaceResult, action: 'from' | 'add' | 'to') => void;
+		/** Lets the planner yield its guide while this absolute dropdown is
+		 * open, rather than placing another card over the result actions. */
+		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { near, onPick }: Props = $props();
+	let { near, onPick, onOpenChange }: Props = $props();
 
 	// Two characters is the server's minimum too; sending one would only
 	// earn a 422.
@@ -24,15 +27,20 @@
 	let searching = $state(false);
 	let failed = $state(false);
 
+	$effect(() => onOpenChange?.(open));
+
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let inflight: AbortController | null = null;
 	let input: HTMLInputElement | undefined = $state();
 
 	function reset() {
-		// Abort as well as clear: without this, dismissing the list with
-		// Escape or a click outside leaves the request running, and when it
-		// lands `open = true` reopens the dropdown the rider just closed.
+		// Cancel both stages. A click outside can arrive before the debounce
+		// has fired, when there is no open list or request to abort yet; leaving
+		// that timer alive would open an abandoned search a moment later.
+		if (timer) clearTimeout(timer);
+		timer = null;
 		inflight?.abort();
+		inflight = null;
 		searching = false;
 		results = [];
 		active = -1;
@@ -49,7 +57,23 @@
 			reset();
 			return;
 		}
-		timer = setTimeout(() => void run(term), DEBOUNCE_MS);
+		// Supersede the active request as soon as the query changes. Waiting
+		// for the next debounce to fire would leave the old response free to
+		// render under the new input for up to DEBOUNCE_MS.
+		inflight?.abort();
+		inflight = null;
+		searching = false;
+		// A completed result belongs to the text that produced it. Clear it
+		// immediately while the replacement debounce is pending so Enter (or a
+		// fast tap) cannot choose stale coordinates under the new query.
+		results = [];
+		active = -1;
+		open = false;
+		failed = false;
+		timer = setTimeout(() => {
+			timer = null;
+			void run(term);
+		}, DEBOUNCE_MS);
 	}
 
 	async function run(term: string) {
@@ -74,7 +98,10 @@
 			open = true;
 			failed = true;
 		} finally {
-			if (!controller.signal.aborted) searching = false;
+			if (inflight === controller) {
+				searching = false;
+				inflight = null;
+			}
 		}
 	}
 
@@ -172,7 +199,7 @@
 
 <svelte:window
 	onclick={(event) => {
-		if (open && !(event.target as HTMLElement)?.closest('.search')) reset();
+		if (!(event.target as HTMLElement)?.closest('.search')) reset();
 	}}
 />
 

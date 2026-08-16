@@ -1,3 +1,9 @@
+<script module lang="ts">
+	// Last-resort fallback when both web-storage areas are blocked. It survives
+	// client-side navigation; sessionStorage below covers full reloads.
+	let sessionPlannerGuideDismissed = false;
+</script>
+
 <script lang="ts">
 	import { page } from '$app/state';
 	import type { FeatureCollection } from 'geojson';
@@ -52,9 +58,58 @@
 	import { units } from '$lib/units.svelte';
 	import { unsaved } from '$lib/unsaved.svelte';
 	import { panelSize, MIN_PANEL_HEIGHT } from '$lib/panel.svelte';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 
 	let waypoints: Waypoint[] = $state([]);
+	const routeParam = page.url.searchParams.get('route');
+	const PLANNER_GUIDE_STORAGE_KEY = 'moovelo:planner-guide-dismissed';
+	// The guide is client-only: waiting for onMount prevents a dismissed guide
+	// flashing during hydration. Dismiss state is updated before the storage
+	// write, so a blocked/private storage implementation still keeps it hidden
+	// while the session fallback is attempted.
+	let plannerGuideReady = $state(false);
+	let plannerGuideDismissed = $state(false);
+	// A saved/shared route starts with an empty local waypoint array while its
+	// request is in flight. Do not mistake that transient state for a first-run
+	// planner and flash the guide over a route that already has endpoints.
+	let plannerGuideRoutePending = $state(Boolean(routeParam));
+	let searchResultsOpen = $state(false);
+	onMount(() => {
+		plannerGuideDismissed = sessionPlannerGuideDismissed;
+		try {
+			plannerGuideDismissed =
+				plannerGuideDismissed || localStorage.getItem(PLANNER_GUIDE_STORAGE_KEY) !== null;
+		} catch {
+			// Fall through to the session-scoped fallback below.
+		}
+		if (!plannerGuideDismissed) {
+			try {
+				plannerGuideDismissed = sessionStorage.getItem(PLANNER_GUIDE_STORAGE_KEY) !== null;
+			} catch {
+				// Storage is optional; the in-memory state remains authoritative.
+			}
+		}
+		plannerGuideReady = true;
+	});
+
+	function dismissPlannerGuide() {
+		sessionPlannerGuideDismissed = true;
+		plannerGuideDismissed = true;
+		let persisted = false;
+		try {
+			localStorage.setItem(PLANNER_GUIDE_STORAGE_KEY, '1');
+			persisted = true;
+		} catch {
+			// Use sessionStorage below when durable storage is unavailable.
+		}
+		if (!persisted) {
+			try {
+				sessionStorage.setItem(PLANNER_GUIDE_STORAGE_KEY, '1');
+			} catch {
+				// Keep the guide dismissed in memory when all storage is unavailable.
+			}
+		}
+	}
 	let preset: Preset = $state('road');
 	// Set when the "Custom" pill is active - overrides `preset` entirely for
 	// routing, and is what makes a saved route's stored preset "custom".
@@ -417,7 +472,6 @@
 	}
 
 	// Open a saved route when arriving via /?route=<id>.
-	const routeParam = page.url.searchParams.get('route');
 	if (routeParam) {
 		routes
 			.get(routeParam)
@@ -443,6 +497,9 @@
 			})
 			.catch(() => {
 				error = 'Could not load that route.';
+			})
+			.finally(() => {
+				plannerGuideRoutePending = false;
 			});
 	}
 
@@ -791,15 +848,16 @@
 	// wrapper so a future mutator cannot forget a step - forgetting
 	// history.push in particular would silently break undo for that single
 	// action while every sibling kept working.
-	function planEdit(mutation: () => void) {
-		if (!mayEdit()) return;
+	function planEdit(mutation: () => void): boolean {
+		if (!mayEdit()) return false;
 		history.push(currentSnapshot());
 		mutation();
 		reroute();
+		return true;
 	}
 
 	function addWaypoint(wp: Waypoint) {
-		planEdit(() => waypoints.push(wp));
+		if (planEdit(() => waypoints.push(wp))) dismissPlannerGuide();
 	}
 
 	function moveWaypoint(index: number, wp: Waypoint) {
@@ -839,17 +897,25 @@
 	}
 
 	function setStart(wp: Waypoint) {
-		planEdit(() => {
-			if (waypoints.length === 0) waypoints.push(wp);
-			else waypoints[0] = wp;
-		});
+		if (
+			planEdit(() => {
+				if (waypoints.length === 0) waypoints.push(wp);
+				else waypoints[0] = wp;
+			})
+		) {
+			dismissPlannerGuide();
+		}
 	}
 
 	function setEnd(wp: Waypoint) {
-		planEdit(() => {
-			if (waypoints.length < 2) waypoints.push(wp);
-			else waypoints[waypoints.length - 1] = wp;
-		});
+		if (
+			planEdit(() => {
+				if (waypoints.length < 2) waypoints.push(wp);
+				else waypoints[waypoints.length - 1] = wp;
+			})
+		) {
+			dismissPlannerGuide();
+		}
 	}
 
 	function pickPlace(place: PlaceResult, action: 'from' | 'add' | 'to') {
@@ -1400,8 +1466,10 @@
 	// old fixed offsets, so the first paint looks the same until measured.
 	let toolbarEl = $state<HTMLDivElement | undefined>();
 	let searchBarEl = $state<HTMLDivElement | undefined>();
+	let avoidsEl = $state<HTMLDivElement | undefined>();
 	let toolbarHeight = $state(32);
 	let searchBarHeight = $state(34);
+	let avoidsHeight = $state(0);
 	const STACK_TOP = 10;
 	const STACK_GAP = 10;
 	// Wrapped in its own function rather than inlined into the $derived
@@ -1416,6 +1484,9 @@
 	const searchEnabled = $derived(isSearchEnabled());
 	const avoidsTop = $derived(
 		searchEnabled ? searchBarTop + searchBarHeight + STACK_GAP : searchBarTop
+	);
+	const plannerGuideTop = $derived(
+		avoids.length > 0 ? avoidsTop + avoidsHeight + STACK_GAP : avoidsTop
 	);
 
 	// $effect, not onMount: the search bar is conditional on config (loaded
@@ -1440,6 +1511,17 @@
 				if (height) searchBarHeight = height;
 			});
 			observer.observe(searchBarEl);
+			return () => observer.disconnect();
+		}
+	});
+
+	$effect(() => {
+		if (avoidsEl) {
+			const observer = new ResizeObserver((entries) => {
+				const height = entries[0]?.contentRect.height;
+				if (height) avoidsHeight = height;
+			});
+			observer.observe(avoidsEl);
 			return () => observer.disconnect();
 		}
 	});
@@ -1494,7 +1576,11 @@
 		{/if}
 		{#if config?.search_enabled}
 			<div class="search-bar" bind:this={searchBarEl} style="top: {searchBarTop}px">
-				<PlaceSearch near={mapCentre} onPick={pickPlace} />
+				<PlaceSearch
+					near={mapCentre}
+					onPick={pickPlace}
+					onOpenChange={(open) => (searchResultsOpen = open)}
+				/>
 			</div>
 		{/if}
 		{#if loopOrigin}
@@ -1626,7 +1712,13 @@
 			{/if}
 		</div>
 		{#if avoids.length > 0}
-			<div class="avoids" role="group" aria-label="Avoided roads" style="top: {avoidsTop}px">
+			<div
+				class="avoids"
+				bind:this={avoidsEl}
+				role="group"
+				aria-label="Avoided roads"
+				style="top: {avoidsTop}px"
+			>
 				{#each avoids as avoid, i (i)}
 					<span class="avoid-chip" title={`Near ${avoid.lat.toFixed(4)}, ${avoid.lon.toFixed(4)}`}>
 						Avoid {i + 1}
@@ -1696,8 +1788,18 @@
 				</form>
 			</div>
 		{/if}
-		{#if waypoints.length < 2}
-			<div class="hint">Click the map to add waypoints. Drag the route to fine-tune it.</div>
+		{#if plannerGuideReady && !plannerGuideDismissed && !plannerGuideRoutePending && !searchResultsOpen && waypoints.length < 2}
+			<div
+				class="planner-guide"
+				role="note"
+				aria-label="Planner guide"
+				style="top: {plannerGuideTop}px"
+			>
+				<span>Add a start and finish on the map.</span>
+				<button type="button" onclick={dismissPlannerGuide} aria-label="Dismiss planner guide"
+					>×</button
+				>
+			</div>
 		{/if}
 		{#if error}
 			<div class="banner error">{error}</div>
@@ -2088,7 +2190,47 @@
 		color: var(--danger-text);
 		font-size: 0.8rem;
 	}
-	.hint,
+	.planner-guide {
+		position: absolute;
+		left: 10px;
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		max-width: min(260px, calc(100% - 70px));
+		box-sizing: border-box;
+		background: #eee8d5;
+		color: #073642;
+		border: 1px solid #93a1a1;
+		border-radius: 7px;
+		padding: 0.3rem 0.35rem 0.3rem 0.65rem;
+		font-size: 0.82rem;
+		line-height: 1.25;
+		box-shadow: 0 1px 4px var(--shadow);
+		z-index: 7;
+	}
+	.planner-guide span {
+		flex: 1;
+	}
+	.planner-guide button {
+		flex: 0 0 auto;
+		width: 32px;
+		height: 32px;
+		border: 0;
+		border-radius: 5px;
+		background: transparent;
+		color: #073642;
+		font: inherit;
+		font-size: 1.1rem;
+		line-height: 1;
+		cursor: pointer;
+	}
+	.planner-guide button:hover {
+		background: rgba(7, 54, 66, 0.08);
+	}
+	.planner-guide button:focus-visible {
+		outline: 2px solid #268bd2;
+		outline-offset: -2px;
+	}
 	.banner {
 		position: absolute;
 		left: 50%;
