@@ -1206,7 +1206,22 @@ test.describe('mobile PWA', () => {
 		// belongs to the same gesture and must not immediately close its menu.
 		await page.mouse.click(routePoint.x, routePoint.y);
 		await expect(page.getByRole('menuitem', { name: 'Avoid this road' })).toBeVisible();
-		await page.touchscreen.tap(box!.x + box!.width * 0.2, box!.y + box!.height * 0.2);
+		// Stay on the origin's own horizontal line and move sideways. A point
+		// picked as a fraction of the box HEIGHT lands wherever the toolbar
+		// happens to end, and the toolbar wraps to more rows on a runner whose
+		// font metrics widen its buttons - which is how this closed cleanly on
+		// macOS and left the menu open in CI. Assert what owns the pixel rather
+		// than trusting the arithmetic.
+		const offOrigin = { x: box!.x + box!.width * 0.2, y: routePoint.y };
+		const owner = await page.evaluate(
+			({ x, y }) => {
+				const element = document.elementFromPoint(x, y);
+				return element?.className?.toString() ?? 'nothing';
+			},
+			{ x: offOrigin.x, y: offOrigin.y }
+		);
+		expect(owner, 'the off-origin tap must land on the map canvas').toContain('maplibregl-canvas');
+		await page.touchscreen.tap(offOrigin.x, offOrigin.y);
 		await expect(page.locator('.context-menu')).toHaveCount(0);
 		await expect(page.locator('.maplibregl-marker')).toHaveCount(2);
 	});
