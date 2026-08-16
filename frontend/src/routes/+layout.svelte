@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, auth, type UserInfo } from '$lib/api';
+	import { appUpdate } from '$lib/appUpdate.svelte';
 	import { activityImportQueue, importQueue, pendingArchives } from '$lib/import.svelte';
 	import { panelSize } from '$lib/panel.svelte';
 	import { resetSession } from '$lib/session';
@@ -31,6 +32,7 @@
 		units.load();
 		theme.load();
 		panelSize.load();
+		void appUpdate.watch();
 		// Capture outside clicks before MapLibre (or any page control) sees
 		// them. The first tap dismisses the menu; it must not also add a
 		// waypoint or activate the control underneath the overlay.
@@ -245,16 +247,28 @@
 				<span class="email">{user.email}</span>
 				<button type="button" onclick={logout} disabled={loggingOut}>Log out</button>
 			</div>
-			<button
-				type="button"
-				class="mobile-menu-toggle"
-				aria-expanded={mobileMenuOpen}
-				aria-controls="mobile-navigation"
-				bind:this={mobileMenuToggle}
-				onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
-			>
-				Menu
-			</button>
+			<div class="nav-actions">
+				{#if appUpdate.ready}
+					<button
+						type="button"
+						class="app-update"
+						onclick={() => appUpdate.apply()}
+						disabled={appUpdate.applying}
+					>
+						{appUpdate.applying ? 'Updating' : 'Update'}
+					</button>
+				{/if}
+				<button
+					type="button"
+					class="mobile-menu-toggle"
+					aria-expanded={mobileMenuOpen}
+					aria-controls="mobile-navigation"
+					bind:this={mobileMenuToggle}
+					onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
+				>
+					Menu
+				</button>
+			</div>
 			{#if mobileMenuOpen}
 				<div class="mobile-menu" id="mobile-navigation">
 					<div class="mobile-menu-account">{user.email}</div>
@@ -502,6 +516,15 @@
 	.mobile-menu {
 		display: none;
 	}
+	.nav-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-left: auto;
+	}
+	.app-update {
+		white-space: nowrap;
+	}
 	.brand {
 		font-weight: 700;
 		margin-right: 0.5rem;
@@ -592,9 +615,16 @@
 			margin-right: 0;
 			color: var(--mobile-nav-text);
 		}
+		.app-update {
+			min-height: 44px;
+			padding-block: 0;
+			background: var(--mobile-nav-accent-fill);
+			border-color: var(--mobile-nav-accent);
+			color: var(--mobile-nav-accent-on-fill);
+			font-weight: 600;
+		}
 		.mobile-menu-toggle {
 			display: block;
-			margin-left: auto;
 			min-height: 44px;
 			min-width: 64px;
 			padding-block: 0;

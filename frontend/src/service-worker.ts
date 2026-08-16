@@ -7,7 +7,8 @@
 // version string. The cache is keyed on that version, so every deploy installs
 // a fresh cache and the old one is purged on activate.
 //
-// Update behaviour is deliberately conservative: no skipWaiting/clients.claim.
+// Update behaviour is deliberately conservative: a new worker NEVER activates
+// itself. It installs, then waits.
 // A tab that is already open keeps its active worker (and its cache) until it
 // is closed, and only then does the new version take over. Forcing the new
 // worker to activate mid-session would purge the running tab's cache and then
@@ -17,6 +18,12 @@
 // the latest (navigations are network-first). The only cost is that a browser
 // left open across many deploys accumulates one small per-version cache until
 // it is closed; it self-heals on the next restart.
+//
+// The one exception is a deliberate rider tap: the client (lib/appUpdate) sends
+// SKIP_WAITING and reloads the moment this worker takes control, so the page
+// whose cache was just purged is replaced rather than left running on it. An
+// installed home-screen app is resumed rather than reloaded, so without that
+// path it can run a weeks-old shell forever and never say so.
 import { build, files, version } from '$service-worker';
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
@@ -44,8 +51,22 @@ sw.addEventListener('activate', (event) => {
 			for (const key of await caches.keys()) {
 				if (key !== CACHE) await caches.delete(key);
 			}
+			// Only reached after an explicit SKIP_WAITING, or when no page was
+			// controlled anyway. Claiming is what makes `controllerchange` fire
+			// in the client, which is what triggers its reload - without it the
+			// rider taps Update and nothing happens until they close the app.
+			await sw.clients.claim();
 		})()
 	);
+});
+
+// The one way a new build ever takes over a running page, and it is only ever
+// reached from a deliberate tap (see lib/appUpdate.svelte.ts). The client
+// reloads as soon as this worker takes control, so the cache purge in
+// `activate` above cannot strand the page it just replaced - which is the
+// hazard that made skipWaiting-on-install the wrong default here.
+sw.addEventListener('message', (event) => {
+	if (event.data?.type === 'SKIP_WAITING') void sw.skipWaiting();
 });
 
 sw.addEventListener('fetch', (event) => {
