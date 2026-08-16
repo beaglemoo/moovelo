@@ -275,11 +275,30 @@ test('the cache never holds /api or cross-origin requests', async ({ page }) => 
 test.describe('mobile PWA', () => {
 	test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
-	test('uses a crisp map-paper header in light and dark themes', async ({ page }) => {
+	test('uses a crisp, theme-appropriate header in light and dark', async ({ page }) => {
 		await mockAuthenticatedPlanner(page);
 		await page.goto('/');
 
-		for (const theme of ['light', 'dark']) {
+		// Per theme: the header's own surface, and the accent picked for
+		// contrast against THAT surface. A cream strip above a dark app was the
+		// reported complaint, so the header follows the theme rather than
+		// staying light in both.
+		const expected = {
+			light: {
+				navBackground: 'rgb(238, 232, 213)',
+				navColor: 'rgb(7, 54, 66)',
+				divider: 'rgb(147, 161, 161)',
+				accent: 'rgb(26, 111, 176)'
+			},
+			dark: {
+				navBackground: 'rgb(7, 54, 66)',
+				navColor: 'rgb(238, 232, 213)',
+				divider: 'rgb(88, 110, 117)',
+				accent: 'rgb(38, 139, 210)'
+			}
+		} as const;
+
+		for (const theme of ['light', 'dark'] as const) {
 			await page.evaluate((value) => localStorage.setItem('moovelo:theme', value), theme);
 			await page.reload();
 
@@ -297,8 +316,11 @@ test.describe('mobile PWA', () => {
 					navFilter: navStyle.filter,
 					navBackdropFilter: navStyle.backdropFilter,
 					navWebkitBackdropFilter: navStyle.getPropertyValue('-webkit-backdrop-filter') || 'none',
+					// The divider is drawn as an inset shadow so it cannot shrink
+					// the content box; a border here would put the header's text
+					// back on a half pixel.
 					navBoxShadow: navStyle.boxShadow,
-					navDivider: `${navStyle.borderBottomWidth} ${navStyle.borderBottomStyle} ${navStyle.borderBottomColor}`,
+					navBorderBottomWidth: navStyle.borderBottomWidth,
 					menuHeight: document.querySelector('.mobile-menu-toggle')!.getBoundingClientRect().height,
 					menuBackground: menuStyle.backgroundColor,
 					menuColor: menuStyle.color,
@@ -307,17 +329,17 @@ test.describe('mobile PWA', () => {
 			});
 			expect(closed, theme).toEqual({
 				navHeight: 44,
-				navBackground: 'rgb(238, 232, 213)',
-				navColor: 'rgb(7, 54, 66)',
+				navBackground: expected[theme].navBackground,
+				navColor: expected[theme].navColor,
 				navFilter: 'none',
 				navBackdropFilter: 'none',
 				navWebkitBackdropFilter: 'none',
-				navBoxShadow: 'none',
-				navDivider: '1px solid rgb(147, 161, 161)',
+				navBoxShadow: `${expected[theme].divider} 0px -1px 0px 0px inset`,
+				navBorderBottomWidth: '0px',
 				menuHeight: 44,
 				menuBackground: 'rgba(0, 0, 0, 0)',
-				menuColor: 'rgb(7, 54, 66)',
-				menuBorder: 'rgb(38, 139, 210)'
+				menuColor: expected[theme].navColor,
+				menuBorder: expected[theme].accent
 			});
 
 			await menuButton.focus();
@@ -328,22 +350,62 @@ test.describe('mobile PWA', () => {
 			expect(focus, theme).toEqual({
 				style: 'solid',
 				width: '3px',
-				color: 'rgb(38, 139, 210)'
+				color: expected[theme].accent
 			});
 
 			await page.keyboard.press('Enter');
 			await expect(menuButton).toHaveAttribute('aria-expanded', 'true');
 			const expanded = await menuButton.evaluate((button) => {
 				const style = getComputedStyle(button);
-				return { background: style.backgroundColor, color: style.color };
+				return {
+					background: style.backgroundColor,
+					color: style.color,
+					// The edge carries the 3:1 boundary against the header, and the
+					// fill does not clear it on the dark surface - so the border
+					// stays the accent rather than matching the fill.
+					border: style.borderColor
+				};
 			});
 			expect(expanded, theme).toEqual({
 				background: 'rgb(26, 111, 176)',
-				color: 'rgb(255, 255, 255)'
+				color: 'rgb(255, 255, 255)',
+				border: expected[theme].accent
 			});
 			const menuBox = await page.locator('.mobile-menu').boundingBox();
 			expect(menuBox).not.toBeNull();
 			expect(menuBox!.y).toBe(44);
+		}
+	});
+
+	test('lays every header text box on a whole pixel', async ({ page }) => {
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+
+		// `align-items: center` positions a child at (contentHeight - childHeight)
+		// / 2. An odd difference leaves it on a half pixel, which a 3x phone
+		// renders as 1.5 device pixels of smear - the header reads as hazy while
+		// the whole-pixel map controls a few pixels below stay sharp. Measured
+		// before this was fixed: the brand at top 12.5, the 44px Menu button at
+		// top -0.5 inside a 43px content box (44px minus its 1px border).
+		for (const theme of ['light', 'dark'] as const) {
+			await page.evaluate((value) => localStorage.setItem('moovelo:theme', value), theme);
+			await page.reload();
+			await expect(page.getByRole('button', { name: 'Menu' })).toBeVisible();
+
+			const boxes = await page.evaluate(() => {
+				const nav = document.querySelector('nav')!;
+				const results: { label: string; top: number; height: number }[] = [];
+				for (const element of nav.querySelectorAll<HTMLElement>('.brand, .mobile-menu-toggle')) {
+					const rect = element.getBoundingClientRect();
+					results.push({ label: element.className, top: rect.top, height: rect.height });
+				}
+				return results;
+			});
+			expect(boxes.length, theme).toBe(2);
+			for (const box of boxes) {
+				expect(box.top, `${theme}: ${box.label} top`).toBe(Math.round(box.top));
+				expect(box.height, `${theme}: ${box.label} height`).toBe(Math.round(box.height));
+			}
 		}
 	});
 
