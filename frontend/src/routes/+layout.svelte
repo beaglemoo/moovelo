@@ -460,6 +460,16 @@
 		overscroll-behavior: none;
 		background: var(--bg);
 		color: var(--text);
+		/* An installed home-screen app runs in WKWebView, which applies text
+		   autosizing; Safari on the same phone, same page, does not. WKWebView
+		   inflates text per block by a non-integer factor, and a non-integer
+		   glyph scale is what blurry text is - worst in a wide block like the
+		   full-width nav row, barely visible in narrow controls like the map
+		   toolbar pills. That difference (sharp in Safari, hazy in the installed
+		   app) is the reported symptom, and this is the only knob that turns it
+		   off. Both spellings: WebKit still only honours the prefixed one. */
+		-webkit-text-size-adjust: 100%;
+		text-size-adjust: 100%;
 	}
 	/* Unstyled native <select>s (filter dropdowns, the costing popover's bike
 	   type) never had a colour literal to tokenise, so they fell back to the UA
