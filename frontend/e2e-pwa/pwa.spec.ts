@@ -275,11 +275,30 @@ test('the cache never holds /api or cross-origin requests', async ({ page }) => 
 test.describe('mobile PWA', () => {
 	test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
-	test('uses a crisp map-paper header in light and dark themes', async ({ page }) => {
+	test('uses a crisp, theme-appropriate header in light and dark', async ({ page }) => {
 		await mockAuthenticatedPlanner(page);
 		await page.goto('/');
 
-		for (const theme of ['light', 'dark']) {
+		// Per theme: the header's own surface, and the accent picked for
+		// contrast against THAT surface. A cream strip above a dark app was the
+		// reported complaint, so the header follows the theme rather than
+		// staying light in both.
+		const expected = {
+			light: {
+				navBackground: 'rgb(238, 232, 213)',
+				navColor: 'rgb(7, 54, 66)',
+				divider: 'rgb(147, 161, 161)',
+				accent: 'rgb(26, 111, 176)'
+			},
+			dark: {
+				navBackground: 'rgb(7, 54, 66)',
+				navColor: 'rgb(238, 232, 213)',
+				divider: 'rgb(88, 110, 117)',
+				accent: 'rgb(38, 139, 210)'
+			}
+		} as const;
+
+		for (const theme of ['light', 'dark'] as const) {
 			await page.evaluate((value) => localStorage.setItem('moovelo:theme', value), theme);
 			await page.reload();
 
@@ -297,8 +316,11 @@ test.describe('mobile PWA', () => {
 					navFilter: navStyle.filter,
 					navBackdropFilter: navStyle.backdropFilter,
 					navWebkitBackdropFilter: navStyle.getPropertyValue('-webkit-backdrop-filter') || 'none',
+					// The divider is drawn as an inset shadow so it cannot shrink
+					// the content box; a border here would put the header's text
+					// back on a half pixel.
 					navBoxShadow: navStyle.boxShadow,
-					navDivider: `${navStyle.borderBottomWidth} ${navStyle.borderBottomStyle} ${navStyle.borderBottomColor}`,
+					navBorderBottomWidth: navStyle.borderBottomWidth,
 					menuHeight: document.querySelector('.mobile-menu-toggle')!.getBoundingClientRect().height,
 					menuBackground: menuStyle.backgroundColor,
 					menuColor: menuStyle.color,
@@ -307,17 +329,17 @@ test.describe('mobile PWA', () => {
 			});
 			expect(closed, theme).toEqual({
 				navHeight: 44,
-				navBackground: 'rgb(238, 232, 213)',
-				navColor: 'rgb(7, 54, 66)',
+				navBackground: expected[theme].navBackground,
+				navColor: expected[theme].navColor,
 				navFilter: 'none',
 				navBackdropFilter: 'none',
 				navWebkitBackdropFilter: 'none',
-				navBoxShadow: 'none',
-				navDivider: '1px solid rgb(147, 161, 161)',
+				navBoxShadow: `${expected[theme].divider} 0px -1px 0px 0px inset`,
+				navBorderBottomWidth: '0px',
 				menuHeight: 44,
 				menuBackground: 'rgba(0, 0, 0, 0)',
-				menuColor: 'rgb(7, 54, 66)',
-				menuBorder: 'rgb(38, 139, 210)'
+				menuColor: expected[theme].navColor,
+				menuBorder: expected[theme].accent
 			});
 
 			await menuButton.focus();
@@ -328,23 +350,239 @@ test.describe('mobile PWA', () => {
 			expect(focus, theme).toEqual({
 				style: 'solid',
 				width: '3px',
-				color: 'rgb(38, 139, 210)'
+				color: expected[theme].accent
 			});
 
 			await page.keyboard.press('Enter');
 			await expect(menuButton).toHaveAttribute('aria-expanded', 'true');
 			const expanded = await menuButton.evaluate((button) => {
 				const style = getComputedStyle(button);
-				return { background: style.backgroundColor, color: style.color };
+				return {
+					background: style.backgroundColor,
+					color: style.color,
+					// The edge carries the 3:1 boundary against the header, and the
+					// fill does not clear it on the dark surface - so the border
+					// stays the accent rather than matching the fill.
+					border: style.borderColor
+				};
 			});
 			expect(expanded, theme).toEqual({
 				background: 'rgb(26, 111, 176)',
-				color: 'rgb(255, 255, 255)'
+				color: 'rgb(255, 255, 255)',
+				border: expected[theme].accent
 			});
 			const menuBox = await page.locator('.mobile-menu').boundingBox();
 			expect(menuBox).not.toBeNull();
 			expect(menuBox!.y).toBe(44);
 		}
+	});
+
+	test('lays every header text box on a whole pixel', async ({ page }) => {
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+
+		// `align-items: center` positions a child at (contentHeight - childHeight)
+		// / 2. An odd difference leaves it on a half pixel, which a 3x phone
+		// renders as 1.5 device pixels of smear - the header reads as hazy while
+		// the whole-pixel map controls a few pixels below stay sharp. Measured
+		// before this was fixed: the brand at top 12.5, the 44px Menu button at
+		// top -0.5 inside a 43px content box (44px minus its 1px border).
+		for (const theme of ['light', 'dark'] as const) {
+			await page.evaluate((value) => localStorage.setItem('moovelo:theme', value), theme);
+			await page.reload();
+			await expect(page.getByRole('button', { name: 'Menu' })).toBeVisible();
+
+			const boxes = await page.evaluate(() => {
+				const nav = document.querySelector('nav')!;
+				const results: { label: string; top: number; height: number }[] = [];
+				for (const element of nav.querySelectorAll<HTMLElement>('.brand, .mobile-menu-toggle')) {
+					const rect = element.getBoundingClientRect();
+					results.push({ label: element.className, top: rect.top, height: rect.height });
+				}
+				return results;
+			});
+			expect(boxes.length, theme).toBe(2);
+			for (const box of boxes) {
+				expect(box.top, `${theme}: ${box.label} top`).toBe(Math.round(box.top));
+				expect(box.height, `${theme}: ${box.label} height`).toBe(Math.round(box.height));
+			}
+		}
+	});
+
+	// A waiting worker cannot be manufactured inside one Playwright run - it
+	// needs a second deploy - so these drive the app against a stubbed
+	// ServiceWorker API instead. The stub is the real contract: getRegistration,
+	// an `updatefound` event, an installing worker reaching `installed` while a
+	// controller exists, postMessage, and `controllerchange`. WebKit runs the
+	// PWA project with service workers blocked, so a stub is also the only way
+	// this code is reachable there at all.
+	async function stubWaitingWorker(
+		page: Page,
+		mode: 'waiting' | 'installs-later' | 'first-install'
+	) {
+		await page.addInitScript((how) => {
+			const listeners: Record<string, ((event: unknown) => void)[]> = {};
+			const worker = {
+				state: 'installed',
+				postMessage: (data: unknown) => {
+					sessionStorage.setItem('__skipWaiting', JSON.stringify(data));
+					// A real worker answers by taking control.
+					for (const fn of listeners['controllerchange'] ?? []) fn(new Event('controllerchange'));
+				},
+				addEventListener: () => {}
+			};
+			const installing = {
+				state: 'installing',
+				addEventListener: (type: string, fn: () => void) => {
+					if (type === 'statechange') {
+						(window as unknown as { __fireInstalled?: () => void }).__fireInstalled = () => {
+							installing.state = 'installed';
+							fn();
+						};
+					}
+				}
+			};
+			const registration = {
+				waiting: how === 'waiting' ? worker : null,
+				installing: how === 'waiting' ? null : installing,
+				update: async () => {},
+				addEventListener: (type: string, fn: () => void) => {
+					if (type === 'updatefound') {
+						(window as unknown as { __fireUpdateFound?: () => void }).__fireUpdateFound = fn;
+					}
+				}
+			};
+			Object.defineProperty(navigator, 'serviceWorker', {
+				configurable: true,
+				value: {
+					// No controller means nothing is serving this page yet: the
+					// worker installing now is the FIRST one, not an update.
+					controller: how === 'first-install' ? null : {},
+					ready: Promise.resolve(registration),
+					register: async () => registration,
+					getRegistration: async () => registration,
+					addEventListener: (type: string, fn: (event: unknown) => void) => {
+						(listeners[type] ??= []).push(fn);
+					}
+				}
+			});
+			// The tap must reload onto the new worker, not merely message it - so
+			// let the real reload happen and count it. `window.location` is
+			// [Unforgeable]: redefining it throws, and stubbing reload that way
+			// silently did nothing while the page reloaded for real, taking the
+			// evidence with it.
+			sessionStorage.setItem('__loads', String(Number(sessionStorage.getItem('__loads') ?? 0) + 1));
+		}, mode);
+	}
+
+	test('never lets the web view rescale its own text', async ({ page }) => {
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+		// An installed home-screen app runs in WKWebView, which autosizes text
+		// per block by a non-integer factor while Safari on the same phone does
+		// not - which is why the header read as blurry only once installed.
+		// Playwright cannot emulate standalone WKWebView, so this pins the one
+		// declaration that turns it off rather than the rendering it prevents.
+		// Read the served stylesheet, not getComputedStyle: desktop WebKit
+		// reports "" for -webkit-text-size-adjust because the property only
+		// exists on iOS builds, so a computed-value assertion can only ever pass
+		// in Chromium - and Chromium is not the engine this is aimed at.
+		const hrefs = await page.evaluate(() =>
+			[...document.querySelectorAll<HTMLLinkElement>('link[rel=stylesheet]')].map(
+				(link) => link.href
+			)
+		);
+		expect(hrefs.length, 'the built app serves a stylesheet').toBeGreaterThan(0);
+		let declared = 0;
+		for (const href of hrefs) {
+			const css = await (await page.request.get(href)).text();
+			if (/-webkit-text-size-adjust:\s*100%/.test(css)) declared += 1;
+		}
+		expect(declared, 'the built CSS turns text autosizing off').toBeGreaterThan(0);
+	});
+
+	test('offers the waiting build and reloads onto it', async ({ page }) => {
+		await stubWaitingWorker(page, 'waiting');
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+
+		const update = page.getByRole('button', { name: 'Update' });
+		await expect(update, 'a waiting worker is announced').toBeVisible();
+		// It must not overflow the narrowest phone, sharing a 44px row with Menu.
+		await page.setViewportSize({ width: 320, height: 568 });
+		const overflow = await page.evaluate(
+			() => document.documentElement.scrollWidth - document.documentElement.clientWidth
+		);
+		expect(overflow, 'no horizontal overflow at 320px').toBeLessThanOrEqual(0);
+		const box = await update.boundingBox();
+		expect(box!.height, 'a full touch target').toBeGreaterThanOrEqual(44);
+		await expectNoOverlap(update, page.getByRole('button', { name: 'Menu' }), 'update vs menu');
+
+		expect(await page.evaluate(() => sessionStorage.getItem('__loads')), 'one load so far').toBe(
+			'1'
+		);
+		await update.click();
+		await expect
+			.poll(async () => page.evaluate(() => sessionStorage.getItem('__loads')), {
+				message: 'the tap reloads onto the new worker'
+			})
+			.toBe('2');
+		const message = await page.evaluate(() => sessionStorage.getItem('__skipWaiting'));
+		expect(JSON.parse(message ?? '{}').type, 'activates the waiting worker').toBe('SKIP_WAITING');
+	});
+
+	test('stays silent until a new build has finished installing', async ({ page }) => {
+		await stubWaitingWorker(page, 'installs-later');
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+
+		const update = page.getByRole('button', { name: 'Update' });
+		await expect(update, 'nothing waiting yet').toHaveCount(0);
+		// watch() resolves getRegistration() before it subscribes, so firing the
+		// event before that lands does nothing and the test passes vacuously -
+		// `?.()` on an undefined hook is silent.
+		await page.waitForFunction(
+			() =>
+				(window as unknown as { __fireUpdateFound?: () => void }).__fireUpdateFound !== undefined
+		);
+		// An installing worker is not an update until it reaches `installed`;
+		// announcing it early offers a reload onto a build that is not there.
+		await page.evaluate(() =>
+			(window as unknown as { __fireUpdateFound?: () => void }).__fireUpdateFound?.()
+		);
+		await expect(update, 'still only installing').toHaveCount(0);
+		await page.waitForFunction(
+			() => (window as unknown as { __fireInstalled?: () => void }).__fireInstalled !== undefined
+		);
+		await page.evaluate(() =>
+			(window as unknown as { __fireInstalled?: () => void }).__fireInstalled?.()
+		);
+		await expect(update, 'announced once installed').toBeVisible();
+	});
+
+	test('never offers an update on the very first install', async ({ page }) => {
+		await stubWaitingWorker(page, 'first-install');
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+
+		const update = page.getByRole('button', { name: 'Update' });
+		await page.waitForFunction(
+			() =>
+				(window as unknown as { __fireUpdateFound?: () => void }).__fireUpdateFound !== undefined
+		);
+		await page.evaluate(() =>
+			(window as unknown as { __fireUpdateFound?: () => void }).__fireUpdateFound?.()
+		);
+		await page.waitForFunction(
+			() => (window as unknown as { __fireInstalled?: () => void }).__fireInstalled !== undefined
+		);
+		await page.evaluate(() =>
+			(window as unknown as { __fireInstalled?: () => void }).__fireInstalled?.()
+		);
+		// A worker reaching `installed` with no controller is the first install
+		// of all. Offering "Update" there tells a rider on a brand-new install
+		// to reload onto the build they are already running.
+		await expect(update, 'first install is not an update').toHaveCount(0);
 	});
 
 	test('shows, dismisses and persists the planner guide without startup flash', async ({
