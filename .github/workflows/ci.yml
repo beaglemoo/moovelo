@@ -85,7 +85,11 @@ jobs:
       - run: npm run build
       # Service workers do not exist under vite dev. Run the PWA suite against
       # its production preview so mobile-shell and offline regressions gate PRs.
-      - run: npx playwright install --with-deps chromium
+      # WebKit as well as Chromium: the suite's `webkit-ios-layout` project is
+      # the only gate on iPhone layout and touch gestures, and Chromium cannot
+      # stand in for it. Installing one browser made all 28 of those tests fail
+      # on a missing executable - a gate that does not run is not a gate.
+      - run: npx playwright install --with-deps chromium webkit
       - run: npm run e2e:pwa
 
   scripts:
