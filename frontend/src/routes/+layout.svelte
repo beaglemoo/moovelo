@@ -337,6 +337,15 @@
 	   in dark for the same reason: the original dark borders sat near
 	   invisible (~1.3:1) against --surface/--bg. */
 	:global(:root) {
+		/* iOS draws a glass scrim across the top of an INSTALLED web app's
+		   viewport and blurs whatever renders under it. Measured on the
+		   reporter's iPhone with a ruler of text at 16px intervals: offsets 0
+		   and 16 smeared, 32 and everything below sharp. It is absent in a
+		   browser tab, where the browser's own chrome occupies that band, and
+		   absent in landscape, where there is no status bar - hence the scope
+		   below. One variable rather than a second set of numbers: the bar's
+		   height and everything measured from it cannot then disagree. */
+		--top-inset: 0px;
 		/* Render native form controls (inputs, selects, scrollbars) and any
 		   unstyled control in the theme's own palette - the belt-and-braces for
 		   anything the tokens below do not explicitly paint. */
@@ -600,13 +609,18 @@
 	/* The authenticated row can include five destinations, two preferences,
 	   an email and Log out. It only fits honestly on a wide viewport; switching
 	   before tablet width prevents a merely-long email from being clipped. */
+	@media (display-mode: standalone) and (orientation: portrait) {
+		:global(:root) {
+			--top-inset: 32px;
+		}
+	}
 	@media (max-width: 900px) {
 		.desktop-nav {
 			display: none;
 		}
 		nav {
-			height: 44px;
-			padding: 0 0.75rem;
+			height: calc(44px + var(--top-inset));
+			padding: var(--top-inset) 0.75rem 0;
 			background: var(--mobile-nav-bg);
 			color: var(--mobile-nav-text);
 			/* The divider is an inset shadow, not a border. A 1px border would
@@ -657,7 +671,7 @@
 		}
 		.mobile-menu {
 			position: absolute;
-			top: 44px;
+			top: calc(44px + var(--top-inset));
 			left: 0.5rem;
 			right: 0.5rem;
 			display: flex;
@@ -670,8 +684,8 @@
 			background: var(--nav-bg);
 			box-shadow: 0 8px 22px var(--shadow);
 			box-sizing: border-box;
-			max-height: calc(100vh - 44px - 0.5rem);
-			max-height: calc(100dvh - 44px - 0.5rem);
+			max-height: calc(100vh - 44px - var(--top-inset) - 0.5rem);
+			max-height: calc(100dvh - 44px - var(--top-inset) - 0.5rem);
 			overflow-y: auto;
 			overscroll-behavior: contain;
 		}
