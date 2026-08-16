@@ -50,7 +50,31 @@ class Theme {
 		} else {
 			document.documentElement.dataset.theme = this.mode;
 		}
+		applyStatusBarColour();
 	}
+}
+
+/**
+ * iOS paints an installed app's status strip with `theme-color`. Giving it the
+ * BAR's colour made the strip and the bar one continuous block, which read as a
+ * single oversized slab once the bar gained its scrim inset. The page
+ * background instead keeps them visibly separate in either theme.
+ *
+ * A media-scoped <meta> cannot do this: it follows prefers-color-scheme, and a
+ * rider who picks light while the OS is dark would get a dark strip above a
+ * light app. So it is set from the same place that applies the theme, and
+ * mirrored by the pre-hydration guard in app.html for the very first paint.
+ */
+export const STATUS_BAR_COLOUR = { light: '#fdf6e3', dark: '#002b36' } as const;
+
+function applyStatusBarColour(): void {
+	const meta = document.querySelector('meta[name="theme-color"]');
+	if (!meta) return;
+	const dark =
+		document.documentElement.dataset.theme === 'dark' ||
+		(document.documentElement.dataset.theme === undefined &&
+			window.matchMedia('(prefers-color-scheme: dark)').matches);
+	meta.setAttribute('content', dark ? STATUS_BAR_COLOUR.dark : STATUS_BAR_COLOUR.light);
 }
 
 export const theme = new Theme();
