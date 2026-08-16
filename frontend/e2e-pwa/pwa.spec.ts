@@ -381,6 +381,41 @@ test.describe('mobile PWA', () => {
 		}
 	});
 
+	test('insets the bar only for an installed portrait app', async ({ page }) => {
+		await mockAuthenticatedPlanner(page);
+		await page.goto('/');
+
+		// A browser tab has no scrim - the browser's own chrome occupies that
+		// band - so the bar must stay 44px here. Playwright cannot emulate
+		// display-mode: standalone, so the standalone half is asserted against
+		// the served stylesheet: that the inset exists, that it is scoped to
+		// standalone AND portrait (landscape has no status bar and no scrim),
+		// and that the bar and its dropdown both measure from the same variable
+		// rather than carrying separate numbers that could drift apart.
+		const nav = page.locator('nav');
+		expect((await nav.boundingBox())!.height, 'a browser tab is not inset').toBe(44);
+		const inset = await page.evaluate(() =>
+			getComputedStyle(document.documentElement).getPropertyValue('--top-inset').trim()
+		);
+		expect(inset, 'no inset outside an installed app').toBe('0px');
+
+		const hrefs = await page.evaluate(() =>
+			[...document.querySelectorAll<HTMLLinkElement>('link[rel=stylesheet]')].map((l) => l.href)
+		);
+		let css = '';
+		for (const href of hrefs) css += await (await page.request.get(href)).text();
+		expect(css, 'scoped to an installed app in portrait').toMatch(
+			/display-mode:\s*standalone\)\s*and\s*\(orientation:\s*portrait/
+		);
+		expect(css, 'the inset is the measured 32px').toMatch(/--top-inset:\s*32px/);
+		expect(css, 'the bar grows by the inset').toMatch(
+			/height:\s*calc\(44px \+ var\(--top-inset\)\)/
+		);
+		expect(css, 'the dropdown hangs off the same variable').toMatch(
+			/top:\s*calc\(44px \+ var\(--top-inset\)\)/
+		);
+	});
+
 	test('lays every header text box on a whole pixel', async ({ page }) => {
 		await mockAuthenticatedPlanner(page);
 		await page.goto('/');
