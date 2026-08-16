@@ -1403,7 +1403,13 @@
      menus the rider had just opened. -->
 <svelte:window onkeydown={handleKeydown} onresize={() => (menu = null)} />
 
-<div class="map" bind:this={container}></div>
+<!-- `data-map-ready` mirrors the flag every interaction effect in this file
+     already guards on: MapLibre installs its handlers on `load`, so a tap
+     before that is silently ignored. It is published on the container because
+     the e2e suite's only readiness proxy was a fixed 1.5s sleep, which is not
+     a fact about the map - it flaked on a loaded CI runner, where a tap landed
+     before the click handler existed and added no waypoint. -->
+<div class="map" bind:this={container} data-map-ready={mapReady}></div>
 {#if menu}
 	<div
 		bind:this={menuElement}

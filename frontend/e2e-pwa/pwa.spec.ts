@@ -67,8 +67,12 @@ async function mockAuthenticatedPlanner(
 async function waitForMap(page: Page): Promise<Locator> {
 	const canvas = page.locator('.map canvas').first();
 	await expect(canvas).toBeVisible();
-	// The canvas exists before MapLibre fires load and installs interactions.
-	await page.waitForTimeout(1500);
+	// The canvas exists before MapLibre fires load and installs interactions, so
+	// wait for the map to say it is ready rather than for a fixed interval. The
+	// sleep this replaces was long enough on a laptop and not on a loaded CI
+	// runner, where a tap landed before the click handler existed and the test
+	// reported no waypoint - a readiness race dressed as a logic failure.
+	await expect(page.locator('.map[data-map-ready="true"]')).toBeAttached();
 	return canvas;
 }
 
