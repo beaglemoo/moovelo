@@ -505,6 +505,38 @@ test.describe('mobile PWA', () => {
 		expect(declared, 'the built CSS turns text autosizing off').toBeGreaterThan(0);
 	});
 
+	test('reports how the browser is presenting the page', async ({ page }) => {
+		await mockAuthenticatedPlanner(page);
+		await page.route('**/api/settings', (route) =>
+			route.fulfill({
+				json: { weight_kg: 80, flat_speed_kmh: 22, ftp_watts: null, version: '9.9.9' }
+			})
+		);
+		await page.route('**/api/settings/ride-time-suggestion', (route) =>
+			route.fulfill({ json: { suggested_kmh: null, ride_count: 0 } })
+		);
+		await page.goto('/settings');
+		await expect(page.getByText('Moovelo 9.9.9')).toBeVisible();
+
+		// Nothing is measured until asked: this is a support tool for "it looks
+		// blurry, but only in the installed app", which cannot be answered from
+		// a screenshot and has no console to ask on a home-screen app.
+		const diagnostics = page.locator('.diagnostics');
+		await expect(diagnostics).toHaveCount(0);
+		await page.getByRole('button', { name: 'Display info' }).click();
+		const text = (await diagnostics.textContent()) ?? '';
+		// Each fact discriminates a different cause of soft text: a scale other
+		// than 1 or a document wider than the viewport means the page itself is
+		// being resampled, and a device pixel ratio below the screen's means the
+		// web view is rendering at a lower resolution and upscaling.
+		for (const key of ['standalone=', 'dpr=', 'scale=', 'viewport=', 'document=', 'screen=']) {
+			expect(text, `reports ${key}`).toContain(key);
+		}
+		expect(text, 'reports the real viewport width').toContain(
+			`viewport=${page.viewportSize()!.width}x`
+		);
+	});
+
 	test('offers the waiting build and reloads onto it', async ({ page }) => {
 		await stubWaitingWorker(page, 'waiting');
 		await mockAuthenticatedPlanner(page);
