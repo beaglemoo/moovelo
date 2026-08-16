@@ -46,3 +46,7 @@ htmlcov/
 # Claude Code (internal project spec + local settings)
 CLAUDE.md
 .claude/
+
+# Codex reads AGENTS.md, and writes it as a copy of the internal spec above -
+# internal hostnames and IPs included. This repo is public; keep it out.
+AGENTS.md
