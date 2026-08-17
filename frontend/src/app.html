@@ -7,7 +7,11 @@
 		<link rel="icon" href="%sveltekit.assets%/icon.svg" type="image/svg+xml" />
 		<link rel="icon" href="%sveltekit.assets%/favicon-32.png" sizes="32x32" type="image/png" />
 		<link rel="manifest" href="%sveltekit.assets%/manifest.webmanifest" />
-		<meta name="theme-color" content="#073642" />
+		<!-- The status strip on an installed app. Kept at the PAGE background so
+		     it stays visually separate from the top bar; lib/theme.svelte.ts
+		     rewrites it whenever the theme changes, and the guard below sets it
+		     for the first paint. -->
+		<meta name="theme-color" content="#fdf6e3" />
 		<!-- iOS has no install prompt or manifest support; these are the only
 		     way an "Add to Home Screen" install picks up the name and icon. -->
 		<link rel="apple-touch-icon" href="%sveltekit.assets%/apple-touch-icon.png" />
@@ -28,6 +32,11 @@
 					if (mode === 'light' || mode === 'dark') {
 						document.documentElement.dataset.theme = mode;
 					}
+					var dark =
+						mode === 'dark' ||
+						(mode !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+					var meta = document.querySelector('meta[name="theme-color"]');
+					if (meta) meta.setAttribute('content', dark ? '#002b36' : '#fdf6e3');
 				} catch (e) {
 					/* storage unavailable - fall through to prefers-color-scheme */
 				}
