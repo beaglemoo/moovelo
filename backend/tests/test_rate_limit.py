@@ -79,13 +79,13 @@ def test_prunes_and_stays_bounded_under_many_distinct_keys(
 ) -> None:
     set_now(monkeypatch, 0.0)
     for i in range(rate_limit.MAX_TRACKED_KEYS + 500):
-        rate_limit.check_and_record(f"10.0.0.{i % 256}|user{i}@example.com")
+        rate_limit.check_and_record(f"203.0.113.{i % 256}|user{i}@example.com")
     assert len(rate_limit.login._attempts) == rate_limit.MAX_TRACKED_KEYS
 
     # Long after every one of those entries has aged out, a fresh key still
     # gets tracked rather than being permanently crowded out.
     set_now(monkeypatch, rate_limit.WINDOW_S * 10)
-    assert rate_limit.check_and_record("192.168.1.1|new@example.com") is True
+    assert rate_limit.check_and_record("203.0.113.254|new@example.com") is True
 
 
 def _flood(count: int) -> None:

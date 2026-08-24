@@ -127,10 +127,10 @@ async def test_exchange_code_fetches_athlete(wahoo_settings: None) -> None:
     respx.post(f"{WAHOO}/oauth/token").respond(
         json={"access_token": "a", "refresh_token": "r", "expires_in": 7200}
     )
-    respx.get(f"{WAHOO}/v1/user").respond(json={"first": "James", "last": "B"})
+    respx.get(f"{WAHOO}/v1/user").respond(json={"first": "Test", "last": "Rider"})
 
     tokens = await wahoo.exchange_code("code-1")
-    assert tokens["athlete"] == {"first": "James", "last": "B"}
+    assert tokens["athlete"] == {"first": "Test", "last": "Rider"}
 
 
 async def test_endpoints_404_when_unconfigured(client: AsyncClient) -> None:
@@ -170,7 +170,7 @@ async def test_connect_and_push_flow(
     respx.post(f"{WAHOO}/oauth/token").respond(
         json={"access_token": "a", "refresh_token": "r", "expires_in": 7200}
     )
-    respx.get(f"{WAHOO}/v1/user").respond(json={"first": "James", "last": "B"})
+    respx.get(f"{WAHOO}/v1/user").respond(json={"first": "Test", "last": "Rider"})
 
     await register(client)
     connect = await client.get("/api/wahoo/connect")
@@ -182,7 +182,7 @@ async def test_connect_and_push_flow(
 
     status = (await client.get("/api/wahoo/status")).json()
     assert status["connected"] is True
-    assert status["athlete"] == {"name": "James B"}
+    assert status["athlete"] == {"name": "Test Rider"}
 
     created = await client.post(
         "/api/routes",
