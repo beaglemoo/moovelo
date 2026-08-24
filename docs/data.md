@@ -243,7 +243,7 @@ design-decisions note in [architecture.md](architecture.md#design-decisions).
 **On a file-copy deployment** (prod is deployed by rsync, not a checkout),
 `scripts/` is not in the image, so the script must be copied to the host
 alongside the compose file - e.g. `rsync scripts/refresh-data.sh
-host:/opt/bikegps/scripts/` - or it will not exist there to schedule.
+host:/opt/moovelo/scripts/` - or it will not exist there to schedule.
 
 ### Scheduling it (off by default)
 
@@ -253,7 +253,7 @@ running on the host as the user that owns the compose project:
 **cron** - the first of each month at 03:00:
 
 ```cron
-0 3 1 * * cd /opt/bikegps && /opt/bikegps/scripts/refresh-data.sh --profile prod >> /var/log/moovelo-refresh.log 2>&1
+0 3 1 * * cd /opt/moovelo && /opt/moovelo/scripts/refresh-data.sh --profile prod >> /var/log/moovelo-refresh.log 2>&1
 ```
 
 **systemd timer** - `/etc/systemd/system/moovelo-refresh.service`:
@@ -264,8 +264,8 @@ Description=Moovelo OSM data refresh
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/bikegps
-ExecStart=/opt/bikegps/scripts/refresh-data.sh --profile prod
+WorkingDirectory=/opt/moovelo
+ExecStart=/opt/moovelo/scripts/refresh-data.sh --profile prod
 ```
 
 and `/etc/systemd/system/moovelo-refresh.timer`:
